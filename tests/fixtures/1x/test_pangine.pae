@@ -1,0 +1,24 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_pangine.pae
+#  Desc := Simple pangine test script
+#
+###############################################################################
+
+#
+# Just some random statements
+#
+
+['test'] ~= {[sun]->[shines]}*{[sky]->[blue]}
+['test'] ~= {[sun]->[shines]}*{[sky]->[red]}
+
+#
+# Result should evaluate to [success], since [test]*![test] == []
+#
+
+[test]*[success]*![test] # This comment is to test the preprocessor

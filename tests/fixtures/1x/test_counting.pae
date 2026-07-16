@@ -1,0 +1,69 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_counting.pae
+#  Desc := Counting test script
+#
+###############################################################################
+
+#
+# Tag each number as such
+#
+
+['test'] ~= {[0]->[is_number]}
+['test'] ~= {[1]->[is_number]}
+['test'] ~= {[2]->[is_number]}
+['test'] ~= {[3]->[is_number]}
+['test'] ~= {[4]->[is_number]}
+['test'] ~= {[5]->[is_number]}
+['test'] ~= {[6]->[is_number]}
+['test'] ~= {[7]->[is_number]}
+['test'] ~= {[8]->[is_number]}
+['test'] ~= {[9]->[is_number]}
+
+#
+# Teach number ordering for forward state
+#
+
+['test'] ~= {{[0]->[follows]}->[9]}*{[state]->[is_forward]}
+['test'] ~= {{[1]->[follows]}->[0]}*{[state]->[is_forward]}
+['test'] ~= {{[2]->[follows]}->[1]}*{[state]->[is_forward]}
+['test'] ~= {{[3]->[follows]}->[2]}*{[state]->[is_forward]}
+['test'] ~= {{[4]->[follows]}->[3]}*{[state]->[is_forward]}
+['test'] ~= {{[5]->[follows]}->[4]}*{[state]->[is_forward]}
+['test'] ~= {{[6]->[follows]}->[5]}*{[state]->[is_forward]}
+['test'] ~= {{[7]->[follows]}->[6]}*{[state]->[is_forward]}
+['test'] ~= {{[8]->[follows]}->[7]}*{[state]->[is_forward]}
+['test'] ~= {{[9]->[follows]}->[8]}*{[state]->[is_forward]}
+
+#
+# Teach number ordering for backward state
+#
+
+['test'] ~= {{[0]->[follows]}->[1]}*{[state]->[is_backward]}
+['test'] ~= {{[1]->[follows]}->[2]}*{[state]->[is_backward]}
+['test'] ~= {{[2]->[follows]}->[3]}*{[state]->[is_backward]}
+['test'] ~= {{[3]->[follows]}->[4]}*{[state]->[is_backward]}
+['test'] ~= {{[4]->[follows]}->[5]}*{[state]->[is_backward]}
+['test'] ~= {{[5]->[follows]}->[6]}*{[state]->[is_backward]}
+['test'] ~= {{[6]->[follows]}->[7]}*{[state]->[is_backward]}
+['test'] ~= {{[7]->[follows]}->[8]}*{[state]->[is_backward]}
+['test'] ~= {{[8]->[follows]}->[9]}*{[state]->[is_backward]}
+['test'] ~= {{[9]->[follows]}->[0]}*{[state]->[is_backward]}
+
+#
+# Test question
+#
+
+#['test'] @ {[state]->[backwards]}*{{[3]->[follows]}->['result']}
+#['test'] = ['result']*![4]*[success]
+
+#
+# Return [success]
+#
+
+[success]

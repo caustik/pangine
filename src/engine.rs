@@ -1,0 +1,2113 @@
+use crate::Relevance;
+use std::cell::Cell;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::io::{self, Write};
+use std::path::Path;
+use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+type ConceptMap = BTreeMap<ConceptId, Relevance>;
+
+static NEXT_PANGINE_ID: AtomicUsize = AtomicUsize::new(0);
+
+pub const GLOBAL_PERCEPT_NAME: &str = "*";
+
+const DEBUG_CONSOLE_HELP: &str = "\
+Commands:
+  help, h        Show this help
+  quit, q        Exit
+  @<expression>  Print the result with percepts evaluated
+
+Concept syntax:
+  []                         Null / no concept
+  [name]                     Named concept
+  ['name']                   Percept reference
+  [?name]                    Question-namespaced concept, not a binding
+  (expression)               Grouping
+  [A][B]                     Union
+  [A]*[B]                    Flattening merge
+  [A]/[B]                    Merge with inverted [B]
+  ![A]                       Inversion
+  [A]->[B]                   Correlation
+  ?[A]:[B]                   Dependency
+  <50%x2[A], [B]>            Relevance
+
+Percept operations:
+  ['name'] = expression      Assign
+  ['name'] += expression     Union addition
+  ['name'] -= expression     Union subtraction
+  ['name'] *= expression     Flattening merge
+  ['name'] /= expression     Inverse merge
+  ['name'] ~= expression     Experience
+  ['name'] @ expression      Question / output binding
+  $['name']                  Evaluate
+  $['*']                     Snapshot all live ordinary concepts
+
+Experience:
+  ['memory'] ~= {[cat]->[purrs]}
+  Learns an experience by accumulating its complete form plus recursively
+  expanded correlation/dependency endpoints and union terms. Repetition
+  accumulates relevance.
+
+Scripts:
+  expression; expression    Multiple statements
+  // line comment            C++-style comment
+  /* block comment */        C-style comment
+
+Decision:
+  ^['choice'] evaluates the percept and returns the entry with the greatest
+  positive probability * strength.
+
+  ['choice'] = <x2[tea], x3[coffee]>
+  ^['choice']             returns [coffee]
+
+  Ties currently use allocation order. If no entry has positive weight, the
+  complete evaluated value is returned.
+";
+
+pub type ParseResult<T> = Result<T, ParseError>;
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ParseError {
+    InvalidSyntax,
+    Io(io::Error),
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSyntax => formatter.write_str("invalid Pangine syntax"),
+            Self::Io(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidSyntax => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+impl From<io::Error> for ParseError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+#[derive(Clone)]
+pub struct ConceptId(Rc<Concept>);
+
+impl ConceptId {
+    fn new(pangine_id: usize, index: usize, kind: ConceptKind, subconcepts: ConceptMap) -> Self {
+        Self(Rc::new(Concept {
+            pangine_id,
+            index,
+            kind,
+            subconcepts,
+        }))
+    }
+
+    fn key(&self) -> (usize, usize) {
+        (self.0.pangine_id, self.0.index)
+    }
+
+    pub fn index(&self) -> usize {
+        self.0.index
+    }
+}
+
+impl std::fmt::Debug for ConceptId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ConceptId")
+            .field(&self.0.index)
+            .finish()
+    }
+}
+
+impl PartialEq for ConceptId {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for ConceptId {}
+
+impl PartialOrd for ConceptId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ConceptId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+
+impl Hash for ConceptId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key().hash(state);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConceptKind {
+    Named(String),
+    Percept { name: String },
+    Anonymous,
+    Correlation { a: ConceptId, b: ConceptId },
+    Dependency { a: ConceptId, b: ConceptId },
+}
+
+struct Concept {
+    pangine_id: usize,
+    index: usize,
+    kind: ConceptKind,
+    subconcepts: ConceptMap,
+}
+
+pub struct Pangine {
+    id: usize,
+    next_concept_id: Cell<usize>,
+    names: BTreeMap<String, Weak<Concept>>,
+    percepts: BTreeMap<String, ConceptId>,
+    percept_values: BTreeMap<usize, ConceptId>,
+    anon: Vec<Weak<Concept>>,
+}
+
+impl Default for Pangine {
+    fn default() -> Self {
+        let id = NEXT_PANGINE_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let global_percept = ConceptId::new(
+            id,
+            0,
+            ConceptKind::Percept {
+                name: GLOBAL_PERCEPT_NAME.to_owned(),
+            },
+            ConceptMap::new(),
+        );
+
+        Self {
+            id,
+            next_concept_id: Cell::new(1),
+            names: BTreeMap::new(),
+            percepts: BTreeMap::from([(GLOBAL_PERCEPT_NAME.to_owned(), global_percept)]),
+            percept_values: BTreeMap::new(),
+            anon: Vec::new(),
+        }
+    }
+}
+
+impl Pangine {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn concept_count(&self) -> usize {
+        self.live_ordinary_concepts().count()
+    }
+
+    pub fn global_percept(&self) -> ConceptId {
+        self.percepts[GLOBAL_PERCEPT_NAME].clone()
+    }
+
+    pub fn reference_concept(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
+        self.reference_concept_with_params(script, &[])
+    }
+
+    pub fn reference_concept_with_params(
+        &mut self,
+        script: &str,
+        params: &[ConceptId],
+    ) -> ParseResult<Option<ConceptId>> {
+        if params.iter().any(|concept| !self.owns(concept)) {
+            return Err(ParseError::InvalidSyntax);
+        }
+
+        let result = self.parse_statement_text_with_params(script, params);
+        self.prune_indexes();
+        result
+    }
+
+    pub fn parse_text(&mut self, text: &str) -> Option<ConceptId> {
+        let mut map = ConceptMap::new();
+
+        for name in text
+            .split(|c| !is_name_char(c, false))
+            .filter(|name| !name.is_empty())
+        {
+            if let Some(concept) = self.reference_named(name) {
+                self.add_relevance(&mut map, concept, false, Relevance::DEFAULT);
+            }
+        }
+
+        self.reference_map(&map)
+    }
+
+    pub fn parse_script_text(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
+        let result = self.parse_script_text_impl(script, None);
+        self.prune_indexes();
+        result
+    }
+
+    pub fn parse_script_text_with_details<W: Write>(
+        &mut self,
+        script: &str,
+        details: &mut W,
+    ) -> ParseResult<Option<ConceptId>> {
+        let result = self.parse_script_text_impl(script, Some(details));
+        self.prune_indexes();
+        result
+    }
+
+    pub fn parse_script_file(&mut self, path: impl AsRef<Path>) -> ParseResult<Option<ConceptId>> {
+        let script = fs::read_to_string(path)?;
+        self.parse_script_text(&script)
+    }
+
+    pub fn parse_script_file_with_details<W: Write>(
+        &mut self,
+        path: impl AsRef<Path>,
+        details: &mut W,
+    ) -> ParseResult<Option<ConceptId>> {
+        let script = fs::read_to_string(path)?;
+        self.parse_script_text_with_details(&script, details)
+    }
+
+    pub fn parse_script_file_to_details_file(
+        &mut self,
+        path: impl AsRef<Path>,
+        details_path: impl AsRef<Path>,
+    ) -> ParseResult<Option<ConceptId>> {
+        let mut details = fs::File::create(details_path)?;
+        self.parse_script_file_with_details(path, &mut details)
+    }
+
+    fn parse_script_text_impl(
+        &mut self,
+        script: &str,
+        mut details: Option<&mut dyn Write>,
+    ) -> ParseResult<Option<ConceptId>> {
+        let mut result = None;
+        let statements = split_script_statements(script);
+
+        for statement in statements.items {
+            if !statement_has_tokens(statement) {
+                continue;
+            }
+
+            if let Some(details) = details.as_mut() {
+                writeln!(&mut **details, "ps> {statement}")?;
+            }
+
+            let concept = match self.parse_statement_text(statement) {
+                Ok(concept) => concept,
+                Err(error) => {
+                    if let Some(details) = details.as_mut() {
+                        writeln!(&mut **details, "ps!   {error}")?;
+                    }
+                    return Err(error);
+                }
+            };
+
+            if let Some(details) = details.as_mut() {
+                let formatted = concept.as_ref().map_or_else(
+                    || "[]".to_owned(),
+                    |concept| self.format_concept(concept, false),
+                );
+                writeln!(&mut **details, "ps=   {formatted}")?;
+            }
+
+            result = if statements.has_semicolons {
+                concept
+            } else {
+                concept.or(result)
+            };
+        }
+
+        Ok(result)
+    }
+
+    pub fn reference_percept(&mut self, name: &str) -> ConceptId {
+        if let Some(concept) = self.percepts.get(name) {
+            return concept.clone();
+        }
+
+        let concept = self.alloc(
+            ConceptKind::Percept {
+                name: name.to_owned(),
+            },
+            ConceptMap::new(),
+        );
+        self.percepts.insert(name.to_owned(), concept.clone());
+        concept
+    }
+
+    pub fn perform_addition(
+        &mut self,
+        percept: &ConceptId,
+        addition: Option<&ConceptId>,
+    ) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, addition) {
+            return None;
+        }
+
+        self.perform_union_update(percept, addition.cloned(), false)
+            .and_then(|(value, _)| value)
+    }
+
+    pub fn perform_subtraction(
+        &mut self,
+        percept: &ConceptId,
+        subtraction: Option<&ConceptId>,
+    ) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, subtraction) {
+            return None;
+        }
+
+        self.perform_union_update(percept, subtraction.cloned(), true)
+            .and_then(|(value, _)| value)
+    }
+
+    pub fn perform_merge(
+        &mut self,
+        percept: &ConceptId,
+        merge: Option<&ConceptId>,
+    ) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, merge) {
+            return None;
+        }
+
+        self.perform_merge_update(percept, merge.cloned(), false)
+    }
+
+    pub fn perform_inverse_merge(
+        &mut self,
+        percept: &ConceptId,
+        merge: Option<&ConceptId>,
+    ) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, merge) {
+            return None;
+        }
+
+        self.perform_merge_update(percept, merge.cloned(), true)
+    }
+
+    pub fn perform_experience(
+        &mut self,
+        percept: &ConceptId,
+        experience: Option<&ConceptId>,
+    ) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, experience) {
+            return None;
+        }
+
+        let mut map = self.percept_value_map(percept)?;
+
+        if let Some(experience) = experience {
+            self.add_relevance_rec(&mut map, experience.clone(), false, Relevance::DEFAULT);
+        }
+
+        self.reference_map(&map)
+    }
+
+    pub fn concept_kind<'a>(&self, concept: &'a ConceptId) -> Option<&'a ConceptKind> {
+        self.owns(concept).then_some(&concept.0.kind)
+    }
+
+    pub fn get_name<'a>(&self, concept: &'a ConceptId) -> Option<&'a str> {
+        if !self.owns(concept) {
+            return None;
+        }
+
+        match &concept.0.kind {
+            ConceptKind::Named(name) => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn get_value(&self, concept: &ConceptId) -> Option<ConceptId> {
+        if !self.is_percept(concept) {
+            return None;
+        }
+
+        if self.is_global_percept(concept) {
+            return self.global_value();
+        }
+
+        self.percept_values.get(&concept.index()).cloned()
+    }
+
+    pub fn set_percept_value(&mut self, percept: &ConceptId, value: Option<ConceptId>) -> bool {
+        if !self.is_mutable_percept(percept)
+            || value.as_ref().is_some_and(|concept| !self.owns(concept))
+        {
+            return false;
+        }
+
+        match value {
+            Some(value) => self.percept_values.insert(percept.index(), value),
+            None => self.percept_values.remove(&percept.index()),
+        };
+        true
+    }
+
+    pub fn get_correlation_a(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.correlation(concept).map(|(a, _)| a.clone())
+    }
+
+    pub fn get_correlation_b(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.correlation(concept).map(|(_, b)| b.clone())
+    }
+
+    pub fn get_dependency_a(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.dependency(concept).map(|(a, _)| a.clone())
+    }
+
+    pub fn get_dependency_b(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.dependency(concept).map(|(_, b)| b.clone())
+    }
+
+    pub fn get_percept(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.is_percept(concept).then(|| concept.clone())
+    }
+
+    pub fn get_percept_a(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.get_correlation_a(concept)
+            .filter(|concept| self.is_percept(concept))
+    }
+
+    pub fn get_percept_b(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.get_correlation_b(concept)
+            .filter(|concept| self.is_percept(concept))
+    }
+
+    pub fn get_relevance_map(&self, concept: &ConceptId) -> Vec<(Relevance, ConceptId)> {
+        let mut map = self.relevance_entries(concept).unwrap_or_default();
+
+        map.sort_by(|(left_rel, left_concept), (right_rel, right_concept)| {
+            compare_relevance_desc(*left_rel, *right_rel)
+                .then_with(|| left_concept.cmp(right_concept))
+        });
+        map
+    }
+
+    pub fn debug_console_lines(&self, concept: Option<&ConceptId>, evaluate: bool) -> Vec<String> {
+        // Historical anchor:
+        // 1.x/pangine/src/pangine/common/pae_pangine.cpp:1311
+        let Some(entries) = concept.and_then(|concept| self.relevance_entries(concept)) else {
+            return vec!["  []".to_owned()];
+        };
+
+        entries
+            .into_iter()
+            .map(|(relevance, concept)| {
+                self.format_debug_console_line(relevance, &concept, evaluate)
+            })
+            .collect()
+    }
+
+    pub fn format_concept(&self, concept: &ConceptId, evaluate: bool) -> String {
+        if !self.owns(concept) {
+            return "[]".to_owned();
+        }
+
+        let mut visited = BTreeSet::new();
+        self.format_inner(concept, evaluate, &mut visited)
+    }
+
+    pub fn recurse(&self, concept: &ConceptId, evaluate: bool) -> String {
+        self.format_concept(concept, evaluate)
+    }
+
+    pub fn debug_console(&mut self) -> io::Result<()> {
+        let stdin = io::stdin();
+        let mut input = String::new();
+
+        loop {
+            print!("command> ");
+            io::stdout().flush()?;
+
+            input.clear();
+            if stdin.read_line(&mut input)? == 0 {
+                break;
+            }
+
+            let command = input.trim_end_matches(['\r', '\n']);
+            let (evaluate, script) = command
+                .strip_prefix('@')
+                .map_or((false, command), |script| (true, script));
+
+            if script.starts_with('q') {
+                break;
+            }
+
+            if let Some(help) = debug_console_help(script) {
+                print!("{help}");
+                continue;
+            }
+
+            match self.reference_concept(script) {
+                Ok(concept) => {
+                    for line in self.debug_console_lines(concept.as_ref(), evaluate) {
+                        println!("{line}");
+                    }
+                }
+                Err(error) => println!("  {error}"),
+            }
+        }
+
+        Ok(())
+    }
+
+    // 3.x semantics are right-associative and bind below union and merge:
+    // 3.x/pangine/include/pangine/pae_concept_parser.h:69,84,102
+    fn parse_expression(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        let concept = self.parse_merge_expression(parser)?;
+
+        parser.skip_ws();
+        if !parser.consume_str("->") {
+            return Ok(concept);
+        }
+
+        let right = self.parse_expression(parser)?;
+        match (concept, right) {
+            (Some(left), Some(right)) => Ok(Some(self.reference_correlation(left, right))),
+            _ => Err(ParseError::InvalidSyntax),
+        }
+    }
+
+    fn parse_merge_expression(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        let mut concept = self.parse_union(parser)?;
+
+        loop {
+            parser.skip_ws();
+            let inversion = if parser.consume('*') {
+                false
+            } else if parser.consume('/') {
+                true
+            } else {
+                return Ok(concept);
+            };
+
+            if concept.is_none() {
+                return Err(ParseError::InvalidSyntax);
+            }
+
+            parser.skip_ws();
+            let rhs_start = parser.pos;
+            let rhs = self.parse_union(parser)?;
+            if rhs.is_none() && parser.pos == rhs_start {
+                return Err(ParseError::InvalidSyntax);
+            }
+            if rhs.is_none() {
+                return Ok(None);
+            }
+            concept = self.reference_merge_with_inversion(concept, rhs, inversion);
+        }
+    }
+
+    fn parse_statements(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        let mut result = None;
+
+        loop {
+            parser.skip_ws();
+            if parser.peek().is_none() {
+                return Ok(result);
+            }
+
+            result = self.parse_expression(parser)?;
+            parser.skip_ws();
+            if !parser.consume(';') {
+                return Ok(result);
+            }
+        }
+    }
+
+    fn parse_statement_text(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
+        self.parse_statement_text_with_params(script, &[])
+    }
+
+    fn parse_statement_text_with_params(
+        &mut self,
+        script: &str,
+        params: &[ConceptId],
+    ) -> ParseResult<Option<ConceptId>> {
+        let mut parser = Parser::new(script, params);
+        let concept = self.parse_statements(&mut parser)?;
+        parser.skip_ws();
+        parser
+            .peek()
+            .is_none()
+            .then_some(concept)
+            .ok_or(ParseError::InvalidSyntax)
+    }
+
+    fn parse_union(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        let mut concepts = Vec::new();
+
+        if let Some(concept) = self.parse_union_operand(parser)? {
+            concepts.push(concept);
+        }
+
+        loop {
+            parser.skip_ws();
+            if !parser.peek().is_some_and(starts_union_operand) {
+                break;
+            }
+
+            if let Some(concept) = self.parse_union_operand(parser)? {
+                concepts.push(concept);
+            }
+        }
+
+        Ok(self.reference_union(&concepts))
+    }
+
+    fn parse_union_operand(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        parser.skip_ws();
+
+        match parser.peek() {
+            Some('(') => {
+                parser.next();
+                let concept = self.parse_expression(parser)?;
+                parser.expect(')')?;
+                Ok(concept)
+            }
+            Some('[') => self.parse_bracket(parser),
+            Some('{') => self.parse_correlation(parser),
+            Some('<') => self.parse_relevance(parser),
+            Some('$') => {
+                parser.next();
+                let evaluated = self
+                    .parse_union_operand(parser)?
+                    .ok_or(ParseError::InvalidSyntax)?;
+                Ok(self.get_value(&evaluated))
+            }
+            Some('^') => {
+                parser.next();
+                let decision = self
+                    .parse_union_operand(parser)?
+                    .ok_or(ParseError::InvalidSyntax)?;
+                Ok(self.make_decision(&decision))
+            }
+            Some('?') => self.parse_dependency(parser),
+            Some('!') => {
+                parser.next();
+                parser.skip_ws();
+                let concept_start = parser.pos;
+                let concept = self.parse_union_operand(parser)?;
+                if concept.is_none() && parser.pos == concept_start {
+                    return Err(ParseError::InvalidSyntax);
+                }
+                Ok(self.reference_inversion(concept))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn parse_correlation(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        parser.next();
+        let left = self
+            .parse_merge_expression(parser)?
+            .ok_or(ParseError::InvalidSyntax)?;
+        parser.expect('-')?;
+        parser.expect('>')?;
+        let right = self
+            .parse_merge_expression(parser)?
+            .ok_or(ParseError::InvalidSyntax)?;
+        parser.expect('}')?;
+        Ok(Some(self.reference_correlation(left, right)))
+    }
+
+    fn parse_dependency(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        parser.next();
+        let dependency = self
+            .parse_expression(parser)?
+            .ok_or(ParseError::InvalidSyntax)?;
+        parser.expect(':')?;
+        let consequent = self
+            .parse_expression(parser)?
+            .ok_or(ParseError::InvalidSyntax)?;
+        Ok(Some(self.reference_dependency(dependency, consequent)))
+    }
+
+    fn parse_relevance(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        parser.next();
+        let mut map = ConceptMap::new();
+
+        loop {
+            let probability = parser.parse_probability();
+
+            let mut strength = 1.0;
+            if parser.consume('x') {
+                strength = parser.parse_float();
+            }
+
+            if let Some(term) = self.parse_expression(parser)? {
+                self.add_union_concept(
+                    &mut map,
+                    term,
+                    false,
+                    Relevance::new(probability, strength),
+                );
+            }
+
+            if parser.consume(',') {
+                parser.skip_ws();
+                continue;
+            }
+
+            parser.expect('>')?;
+            break;
+        }
+
+        Ok(self.reference_map(&map))
+    }
+
+    fn parse_bracket(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+        parser.next();
+
+        if parser.consume('\'') {
+            let name = if parser.consume('*') {
+                GLOBAL_PERCEPT_NAME.to_owned()
+            } else {
+                parser.parse_name(true)
+            };
+            let percept = self.reference_percept(&name);
+
+            parser.expect('\'')?;
+            parser.expect(']')?;
+
+            parser.skip_ws();
+            return self.parse_percept_action(parser, percept);
+        }
+
+        if parser.consume('%') {
+            let concept = parser.params.pop_front();
+            parser.expect(']')?;
+            return Ok(concept);
+        }
+
+        let is_question = parser.consume('?');
+        parser.consume('&');
+
+        let mut name = parser.parse_name(true);
+        if is_question {
+            name.insert(0, '?');
+        }
+
+        let concept = self.reference_named(&name);
+        parser.expect(']')?;
+
+        Ok(concept)
+    }
+
+    fn parse_percept_action(
+        &mut self,
+        parser: &mut Parser,
+        percept: ConceptId,
+    ) -> ParseResult<Option<ConceptId>> {
+        enum Action {
+            Assign,
+            Add,
+            Subtract,
+            Merge,
+            InverseMerge,
+            Experience,
+            Question,
+        }
+
+        let action = if parser.consume_str("+=") {
+            Action::Add
+        } else if parser.consume_str("-=") {
+            Action::Subtract
+        } else if parser.consume_str("*=") {
+            Action::Merge
+        } else if parser.consume_str("/=") {
+            Action::InverseMerge
+        } else if parser.consume_str("~=") {
+            Action::Experience
+        } else if parser.consume('=') {
+            Action::Assign
+        } else if parser.consume('@') {
+            Action::Question
+        } else {
+            return Ok(Some(percept));
+        };
+
+        if self.is_global_percept(&percept) && !matches!(action, Action::Question) {
+            return Err(ParseError::InvalidSyntax);
+        }
+
+        parser.skip_ws();
+        let input = self.parse_expression(parser)?;
+        let value = match action {
+            Action::Assign => input,
+            Action::Add => {
+                let Some((value, stored)) = self.perform_union_update(&percept, input, false)
+                else {
+                    return Ok(None);
+                };
+                self.set_percept_value(&percept, stored);
+                return Ok(value);
+            }
+            Action::Subtract => {
+                let Some((value, stored)) = self.perform_union_update(&percept, input, true) else {
+                    return Ok(None);
+                };
+                self.set_percept_value(&percept, stored);
+                return Ok(value);
+            }
+            Action::Merge => self.perform_merge(&percept, input.as_ref()),
+            Action::InverseMerge => self.perform_inverse_merge(&percept, input.as_ref()),
+            Action::Experience => self.perform_experience(&percept, input.as_ref()),
+            Action::Question => return Ok(self.answer_question(&percept, input)),
+        };
+        self.set_percept_value(&percept, value.clone());
+        Ok(value)
+    }
+
+    fn reference_named(&mut self, name: &str) -> Option<ConceptId> {
+        if name.is_empty() {
+            return None;
+        }
+
+        if let Some(concept) = self.names.get(name).and_then(Weak::upgrade) {
+            return Some(ConceptId(concept));
+        }
+
+        let concept = self.alloc(ConceptKind::Named(name.to_owned()), ConceptMap::new());
+        self.names
+            .insert(name.to_owned(), Rc::downgrade(&concept.0));
+        Some(concept)
+    }
+
+    fn reference_inversion(&mut self, concept: Option<ConceptId>) -> Option<ConceptId> {
+        let mut map = ConceptMap::new();
+        self.add_merge_concept(&mut map, concept?, true, Relevance::DEFAULT);
+        self.reference_map(&map)
+    }
+
+    fn reference_merge_with_inversion(
+        &mut self,
+        left: Option<ConceptId>,
+        right: Option<ConceptId>,
+        right_inversion: bool,
+    ) -> Option<ConceptId> {
+        let mut map = ConceptMap::new();
+
+        if let Some(left) = left {
+            self.add_merge_concept(&mut map, left, false, Relevance::DEFAULT);
+        }
+        if let Some(right) = right {
+            self.add_merge_concept(&mut map, right, right_inversion, Relevance::DEFAULT);
+        }
+
+        self.reference_map(&map)
+    }
+
+    fn reference_union(&mut self, concepts: &[ConceptId]) -> Option<ConceptId> {
+        let mut map = ConceptMap::new();
+
+        for concept in concepts.iter().cloned() {
+            self.add_union_concept(&mut map, concept, false, Relevance::DEFAULT);
+        }
+
+        self.reference_map(&map)
+    }
+
+    fn reference_map(&mut self, map: &ConceptMap) -> Option<ConceptId> {
+        self.prune_indexes();
+
+        if map.is_empty() {
+            return None;
+        }
+
+        // 3.x returns a sole default-relevance concept directly before interning:
+        // 3.x/pangine/src/libpangine/common/pae_pangine.cpp:314-328
+        if map.len() == 1 {
+            let (concept, relevance) = map.iter().next().unwrap();
+            if *relevance == Relevance::DEFAULT {
+                return Some(concept.clone());
+            }
+        }
+
+        let candidates = self
+            .anon
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(ConceptId)
+            .chain(self.percepts.values().cloned())
+            .chain(self.names.values().filter_map(Weak::upgrade).map(ConceptId))
+            .collect::<Vec<_>>();
+
+        if let Some(concept) = candidates
+            .into_iter()
+            .find(|concept| Self::compare_subconcepts(concept, map, true))
+        {
+            return Some(concept);
+        }
+
+        let concept = self.alloc(ConceptKind::Anonymous, map.clone());
+        self.anon.push(Rc::downgrade(&concept.0));
+        Some(concept)
+    }
+
+    fn reference_correlation(&mut self, a: ConceptId, b: ConceptId) -> ConceptId {
+        self.reference_pair(ConceptKind::Correlation { a, b })
+    }
+
+    fn reference_dependency(&mut self, a: ConceptId, b: ConceptId) -> ConceptId {
+        self.reference_pair(ConceptKind::Dependency { a, b })
+    }
+
+    fn reference_pair(&mut self, kind: ConceptKind) -> ConceptId {
+        self.prune_indexes();
+
+        for concept in self.anon.iter().filter_map(Weak::upgrade) {
+            if concept.kind == kind {
+                return ConceptId(concept);
+            }
+        }
+
+        let concept = self.alloc(kind, ConceptMap::new());
+        self.anon.push(Rc::downgrade(&concept.0));
+        concept
+    }
+
+    fn alloc(&self, kind: ConceptKind, subconcepts: ConceptMap) -> ConceptId {
+        let index = self.next_concept_id.get();
+        self.next_concept_id.set(index + 1);
+        ConceptId::new(self.id, index, kind, subconcepts)
+    }
+
+    fn owns(&self, concept: &ConceptId) -> bool {
+        concept.0.pangine_id == self.id
+    }
+
+    fn is_percept(&self, concept: &ConceptId) -> bool {
+        self.owns(concept) && matches!(concept.0.kind, ConceptKind::Percept { .. })
+    }
+
+    fn is_global_percept(&self, concept: &ConceptId) -> bool {
+        self.is_percept(concept)
+            && matches!(
+                &concept.0.kind,
+                ConceptKind::Percept { name } if name == GLOBAL_PERCEPT_NAME
+            )
+    }
+
+    fn is_mutable_percept(&self, concept: &ConceptId) -> bool {
+        self.is_percept(concept) && !self.is_global_percept(concept)
+    }
+
+    fn accepts_percept_input(&self, percept: &ConceptId, input: Option<&ConceptId>) -> bool {
+        self.is_mutable_percept(percept) && input.is_none_or(|concept| self.owns(concept))
+    }
+
+    fn live_ordinary_concepts(&self) -> impl Iterator<Item = ConceptId> + '_ {
+        self.names
+            .values()
+            .chain(&self.anon)
+            .filter_map(Weak::upgrade)
+            .map(ConceptId)
+    }
+
+    fn global_value(&self) -> Option<ConceptId> {
+        let map = self
+            .live_ordinary_concepts()
+            .map(|concept| (concept, Relevance::DEFAULT))
+            .collect::<ConceptMap>();
+
+        match map.len() {
+            0 => None,
+            1 => map.into_keys().next(),
+            _ => Some(self.alloc(ConceptKind::Anonymous, map)),
+        }
+    }
+
+    fn prune_indexes(&mut self) {
+        self.names.retain(|_, concept| concept.strong_count() > 0);
+        self.anon.retain(|concept| concept.strong_count() > 0);
+    }
+
+    fn compare_subconcepts(concept: &ConceptId, map: &ConceptMap, compare_relevance: bool) -> bool {
+        if map.is_empty() {
+            return false;
+        }
+
+        if map.len() == 1 && map.get(concept) == Some(&Relevance::DEFAULT) {
+            return true;
+        }
+
+        let subconcepts = &concept.0.subconcepts;
+        if !compare_relevance {
+            return map.len() == subconcepts.len()
+                && map.keys().all(|concept| subconcepts.contains_key(concept));
+        }
+
+        map == subconcepts
+    }
+
+    fn percept_value_map(&mut self, percept: &ConceptId) -> Option<ConceptMap> {
+        if !self.is_percept(percept) {
+            return None;
+        }
+
+        let mut map = ConceptMap::new();
+        if let Some(current) = self.get_value(percept) {
+            self.add_flat_concept(&mut map, current);
+        }
+        Some(map)
+    }
+
+    fn perform_union_update(
+        &mut self,
+        percept: &ConceptId,
+        concept: Option<ConceptId>,
+        inversion: bool,
+    ) -> Option<(Option<ConceptId>, Option<ConceptId>)> {
+        let mut map = self.percept_union_value_map(percept)?;
+
+        if let Some(concept) = concept {
+            self.add_union_concept(&mut map, concept, inversion, Relevance::DEFAULT);
+        }
+
+        let value = self.reference_map(&map);
+        let stored = self.percept_union_stored_value(&map, value.clone());
+        Some((value, stored))
+    }
+
+    fn perform_merge_update(
+        &mut self,
+        percept: &ConceptId,
+        concept: Option<ConceptId>,
+        inversion: bool,
+    ) -> Option<ConceptId> {
+        let mut map = self.percept_value_map(percept)?;
+
+        if let Some(concept) = concept {
+            self.add_merge_concept(&mut map, concept, inversion, Relevance::DEFAULT);
+        }
+
+        self.reference_map(&map)
+    }
+
+    fn percept_union_value_map(&mut self, percept: &ConceptId) -> Option<ConceptMap> {
+        if !self.is_percept(percept) {
+            return None;
+        }
+
+        let Some(current) = self.get_value(percept) else {
+            return Some(ConceptMap::new());
+        };
+
+        let map = current.0.subconcepts.clone();
+        if !map.is_empty() {
+            return Some(map);
+        }
+
+        let mut map = ConceptMap::new();
+        self.add_union_concept(&mut map, current, false, Relevance::DEFAULT);
+        Some(map)
+    }
+
+    fn percept_union_stored_value(
+        &mut self,
+        map: &ConceptMap,
+        value: Option<ConceptId>,
+    ) -> Option<ConceptId> {
+        if map.len() == 1 {
+            let (concept, &relevance) = map.iter().next().unwrap();
+            if relevance == Relevance::DEFAULT && !concept.0.subconcepts.is_empty() {
+                let stored = self.alloc(ConceptKind::Anonymous, map.clone());
+                self.anon.push(Rc::downgrade(&stored.0));
+                return Some(stored);
+            }
+        }
+
+        value
+    }
+
+    fn add_flat_concept(&mut self, map: &mut ConceptMap, concept: ConceptId) {
+        self.add_merge_concept(map, concept, false, Relevance::DEFAULT);
+    }
+
+    fn answer_question(
+        &mut self,
+        percept: &ConceptId,
+        question: Option<ConceptId>,
+    ) -> Option<ConceptId> {
+        let value = self.get_value(percept)?;
+        let question = question?;
+        let target_map = value.0.subconcepts.clone();
+        let mut question_map = question.0.subconcepts.clone();
+        let mut result_map = ConceptMap::new();
+        let mut concept_map = ConceptMap::new();
+        let mut percept_map = ConceptMap::new();
+        let mut correl_map = ConceptMap::new();
+
+        if question_map.is_empty() {
+            self.add_relevance(&mut question_map, question, false, Relevance::DEFAULT);
+        }
+
+        for (concept, relevance) in question_map {
+            if self.is_percept(&concept) {
+                self.add_relevance(&mut percept_map, concept, false, relevance);
+            } else if self.get_percept_a(&concept).is_some()
+                || self.get_percept_b(&concept).is_some()
+            {
+                self.add_relevance(&mut correl_map, concept, false, relevance);
+            } else {
+                self.add_relevance(&mut concept_map, concept, false, relevance);
+            }
+        }
+
+        for (concept, relevance) in target_map {
+            let mut multiplier = 0.0;
+            let mut remainder_map = ConceptMap::new();
+            let subconcepts = concept.0.subconcepts.clone();
+
+            if subconcepts.is_empty() {
+                self.get_remainder_concept(
+                    concept,
+                    Relevance::DEFAULT,
+                    &concept_map,
+                    &correl_map,
+                    &mut remainder_map,
+                    &mut multiplier,
+                );
+            } else {
+                self.get_remainder_map(
+                    &subconcepts,
+                    &concept_map,
+                    &correl_map,
+                    &mut remainder_map,
+                    &mut multiplier,
+                );
+            }
+
+            multiplier *= relevance.weight();
+            self.add_relevance_map(
+                &mut result_map,
+                remainder_map,
+                Relevance::new(1.0, multiplier),
+            );
+        }
+
+        let result = self.reference_map(&result_map);
+        let mut final_result = None;
+
+        for percept in percept_map.keys().cloned().collect::<Vec<_>>() {
+            if self.set_percept_value(&percept, result.clone()) {
+                final_result.clone_from(&result);
+            }
+        }
+
+        for correlation in correl_map.keys().cloned().collect::<Vec<_>>() {
+            if let Some(percept) = self.get_percept_a(&correlation) {
+                if self.set_percept_value(&percept, result.clone()) {
+                    final_result.clone_from(&result);
+                }
+            }
+
+            if let Some(percept) = self.get_percept_b(&correlation) {
+                if self.set_percept_value(&percept, result.clone()) {
+                    final_result.clone_from(&result);
+                }
+            }
+        }
+
+        final_result
+    }
+
+    fn get_remainder_map(
+        &mut self,
+        left: &ConceptMap,
+        right: &ConceptMap,
+        correl_map: &ConceptMap,
+        remainder_map: &mut ConceptMap,
+        multiplier: &mut f32,
+    ) -> bool {
+        for (concept, &relevance) in left {
+            if !self.get_remainder_concept(
+                concept.clone(),
+                relevance,
+                right,
+                correl_map,
+                remainder_map,
+                multiplier,
+            ) {
+                *multiplier = 0.0;
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn get_remainder_concept(
+        &mut self,
+        concept: ConceptId,
+        relevance: Relevance,
+        right: &ConceptMap,
+        correl_map: &ConceptMap,
+        remainder_map: &mut ConceptMap,
+        multiplier: &mut f32,
+    ) -> bool {
+        if let Some(match_relevance) = right.get(&concept) {
+            *multiplier = match_relevance.weight() / relevance.weight();
+            return true;
+        }
+
+        let remainder = if correl_map.is_empty() {
+            Some(concept)
+        } else {
+            let concept_a = self.get_correlation_a(&concept);
+            let concept_b = self.get_correlation_b(&concept);
+            let Some(correlation) = correl_map.keys().find(|correlation| {
+                self.get_correlation_a(correlation) == concept_a
+                    || self.get_correlation_b(correlation) == concept_b
+            }) else {
+                return false;
+            };
+
+            *multiplier = 1.0;
+            if self.get_correlation_a(correlation) == concept_a {
+                concept_b
+            } else {
+                concept_a
+            }
+        };
+
+        if let Some(remainder) = remainder {
+            self.add_relevance(remainder_map, remainder, false, relevance);
+        }
+
+        true
+    }
+
+    fn add_merge_concept(
+        &mut self,
+        map: &mut ConceptMap,
+        concept: ConceptId,
+        inversion: bool,
+        relevance: Relevance,
+    ) {
+        let subconcepts = concept.0.subconcepts.clone();
+        if !self.is_percept(&concept) && !subconcepts.is_empty() {
+            for (child, child_relevance) in subconcepts {
+                self.add_union_concept(
+                    map,
+                    child,
+                    inversion,
+                    multiply_relevance(relevance, child_relevance),
+                );
+            }
+        } else {
+            self.add_union_concept(map, concept, inversion, relevance);
+        }
+    }
+
+    fn add_union_concept(
+        &mut self,
+        map: &mut ConceptMap,
+        concept: ConceptId,
+        inversion: bool,
+        relevance: Relevance,
+    ) {
+        let subconcepts = concept.0.subconcepts.clone();
+        if !self.is_percept(&concept) && subconcepts.len() == 1 {
+            let (child, child_relevance) = subconcepts.into_iter().next().unwrap();
+            self.add_union_concept(
+                map,
+                child,
+                inversion,
+                multiply_relevance(relevance, child_relevance),
+            );
+        } else {
+            self.add_relevance(map, concept, inversion, relevance);
+        }
+    }
+
+    fn add_relevance_map(
+        &mut self,
+        target: &mut ConceptMap,
+        source: ConceptMap,
+        relevance: Relevance,
+    ) {
+        for (concept, source_relevance) in source {
+            let mut current = relevance;
+            current.probability = source_relevance.probability;
+            current.strength *= source_relevance.strength;
+            self.add_relevance(target, concept, false, current);
+        }
+    }
+
+    fn add_relevance(
+        &mut self,
+        map: &mut ConceptMap,
+        concept: ConceptId,
+        inversion: bool,
+        mut relevance: Relevance,
+    ) {
+        if inversion {
+            relevance.strength = -relevance.strength;
+        }
+
+        let concept_subconcepts = concept.0.subconcepts.clone();
+        let found = map.keys().cloned().find_map(|candidate| {
+            if candidate == concept {
+                Some((candidate, false))
+            } else if Self::compare_subconcepts(&candidate, &concept_subconcepts, false) {
+                Some((candidate, true))
+            } else {
+                None
+            }
+        });
+
+        match found {
+            None => {
+                if !relevance.is_empty() {
+                    map.insert(concept, relevance);
+                }
+            }
+            Some((existing, true)) => {
+                let existing_relevance = map[&existing];
+                let mut new_map = existing.0.subconcepts.clone();
+
+                for value in new_map.values_mut() {
+                    value.strength *= existing_relevance.strength;
+                }
+
+                map.remove(&existing);
+                self.add_relevance_map(&mut new_map, concept_subconcepts, Relevance::DEFAULT);
+
+                if let Some(result) = self.reference_map(&new_map) {
+                    self.add_relevance(map, result, inversion, relevance);
+                }
+            }
+            Some((existing, false)) => {
+                if let Some(current) = map.get_mut(&existing) {
+                    current.add(relevance);
+                    if current.is_empty() {
+                        map.remove(&existing);
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_relevance_rec(
+        &mut self,
+        map: &mut ConceptMap,
+        concept: ConceptId,
+        inversion: bool,
+        relevance: Relevance,
+    ) {
+        let subconcepts = concept.0.subconcepts.clone();
+        let relations = [
+            self.get_correlation_a(&concept),
+            self.get_correlation_b(&concept),
+            self.get_dependency_a(&concept),
+            self.get_dependency_b(&concept),
+        ];
+
+        if subconcepts.len() != 1 {
+            self.add_relevance(map, concept, inversion, relevance);
+        }
+
+        for child in relations.into_iter().flatten() {
+            self.add_relevance_rec(map, child, inversion, relevance);
+        }
+
+        for (child, child_relevance) in subconcepts {
+            self.add_relevance_rec(map, child, inversion, child_relevance);
+        }
+    }
+
+    fn make_decision(&self, concept: &ConceptId) -> Option<ConceptId> {
+        let mut concept = self.get_value(concept)?;
+        let subconcepts = concept.0.subconcepts.clone();
+
+        if subconcepts.is_empty() {
+            return Some(concept);
+        }
+
+        let mut greatest = 0.0;
+        for (candidate, relevance) in subconcepts {
+            let current = relevance.weight();
+            if current > greatest {
+                greatest = current;
+                concept = candidate;
+            }
+        }
+
+        Some(concept)
+    }
+
+    fn correlation<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
+        if !self.owns(concept) {
+            return None;
+        }
+
+        match &concept.0.kind {
+            ConceptKind::Correlation { a, b } => Some((a, b)),
+            _ => None,
+        }
+    }
+
+    fn dependency<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
+        if !self.owns(concept) {
+            return None;
+        }
+
+        match &concept.0.kind {
+            ConceptKind::Dependency { a, b } => Some((a, b)),
+            _ => None,
+        }
+    }
+
+    fn relevance_entries(&self, concept: &ConceptId) -> Option<Vec<(Relevance, ConceptId)>> {
+        if !self.owns(concept) {
+            return None;
+        }
+
+        Some(if concept.0.subconcepts.is_empty() {
+            vec![(Relevance::DEFAULT, concept.clone())]
+        } else {
+            concept
+                .0
+                .subconcepts
+                .iter()
+                .map(|(concept, &relevance)| (relevance, concept.clone()))
+                .collect()
+        })
+    }
+
+    fn format_inner(
+        &self,
+        concept: &ConceptId,
+        evaluate: bool,
+        visited: &mut BTreeSet<ConceptId>,
+    ) -> String {
+        if !visited.insert(concept.clone()) {
+            return match &concept.0.kind {
+                ConceptKind::Named(name) => format!("[{name}]"),
+                ConceptKind::Percept { name } if !evaluate => format!("['{name}']"),
+                _ => format!("[#{}]", concept.index()),
+            };
+        }
+
+        match &concept.0.kind {
+            ConceptKind::Named(name) => format!("[{name}]"),
+            ConceptKind::Percept { name } => {
+                if evaluate {
+                    self.get_value(concept).map_or_else(
+                        || "[]".to_owned(),
+                        |value| self.format_inner(&value, evaluate, visited),
+                    )
+                } else {
+                    format!("['{name}']")
+                }
+            }
+            ConceptKind::Correlation { a, b } => {
+                let a = self.format_semantic_operand(a, evaluate, visited);
+                let b = self.format_semantic_operand(b, evaluate, visited);
+                format!("{{{a}->{b}}}")
+            }
+            ConceptKind::Dependency { a, b } => {
+                let a_paren = self.needs_dependency_parens(a);
+                // Historical 1.x used dependency A to decide parentheses on both sides:
+                // 1.x/pangine/src/pangine/common/pae_concept.cpp:157
+                let b_paren = self.needs_dependency_parens(a);
+                let a = self.format_inner(a, evaluate, visited);
+                let b = self.format_inner(b, evaluate, visited);
+                format!(
+                    "?{}{}{}:{}{}{}",
+                    if a_paren { "(" } else { "" },
+                    a,
+                    if a_paren { ")" } else { "" },
+                    if b_paren { "(" } else { "" },
+                    b,
+                    if b_paren { ")" } else { "" }
+                )
+            }
+            ConceptKind::Anonymous => {
+                self.format_subconcepts(&concept.0.subconcepts, evaluate, visited, true)
+            }
+        }
+    }
+
+    fn needs_dependency_parens(&self, concept: &ConceptId) -> bool {
+        self.get_dependency_a(concept).is_some() || concept.0.subconcepts.len() > 1
+    }
+
+    fn format_semantic_operand(
+        &self,
+        concept: &ConceptId,
+        evaluate: bool,
+        visited: &mut BTreeSet<ConceptId>,
+    ) -> String {
+        if matches!(concept.0.kind, ConceptKind::Anonymous) {
+            let map = &concept.0.subconcepts;
+            if Self::can_format_as_implicit_union(map) {
+                return self.format_subconcepts(map, evaluate, visited, false);
+            }
+        }
+
+        self.format_inner(concept, evaluate, visited)
+    }
+
+    fn can_format_as_implicit_union(map: &ConceptMap) -> bool {
+        map.len() > 1
+            && map.values().all(|relevance| {
+                relevance.probability == 1.0
+                    && (relevance.strength == 1.0 || relevance.strength == -1.0)
+            })
+    }
+
+    fn canonical_entries(&self, map: &ConceptMap) -> Vec<(ConceptId, Relevance)> {
+        let mut entries: Vec<_> = map
+            .iter()
+            .map(|(concept, &relevance)| (concept.clone(), relevance))
+            .collect();
+
+        entries.sort_by(
+            |(left_concept, left_relevance), (right_concept, right_relevance)| {
+                compare_canonical_relevance_desc(*left_relevance, *right_relevance)
+                    .then_with(|| self.compare_concepts(left_concept, right_concept))
+            },
+        );
+        entries
+    }
+
+    // 3.x orders concepts by percept/name, union shape, relevance, and semantic
+    // components rather than allocation order:
+    // 3.x/pangine/src/libpangine/common/pae_concept.cpp:15
+    fn compare_concepts(&self, left: &ConceptId, right: &ConceptId) -> Ordering {
+        if left == right {
+            return Ordering::Equal;
+        }
+
+        let left_kind = &left.0.kind;
+        let right_kind = &right.0.kind;
+        let left_is_percept = matches!(left_kind, ConceptKind::Percept { .. });
+        let right_is_percept = matches!(right_kind, ConceptKind::Percept { .. });
+
+        if left_is_percept != right_is_percept {
+            return right_is_percept.cmp(&left_is_percept);
+        }
+
+        let left_name = match left_kind {
+            ConceptKind::Named(name) | ConceptKind::Percept { name } => Some(name),
+            _ => None,
+        };
+        let right_name = match right_kind {
+            ConceptKind::Named(name) | ConceptKind::Percept { name } => Some(name),
+            _ => None,
+        };
+
+        if let (Some(left_name), Some(right_name)) = (left_name, right_name) {
+            let order = left_name.cmp(right_name);
+            if order != Ordering::Equal {
+                return order;
+            }
+        }
+
+        let left_subconcepts = &left.0.subconcepts;
+        let right_subconcepts = &right.0.subconcepts;
+        let order = left_subconcepts.len().cmp(&right_subconcepts.len());
+        if order != Ordering::Equal {
+            return order;
+        }
+
+        for ((left_concept, left_relevance), (right_concept, right_relevance)) in self
+            .canonical_entries(left_subconcepts)
+            .into_iter()
+            .zip(self.canonical_entries(right_subconcepts))
+        {
+            let order = compare_canonical_relevance_desc(left_relevance, right_relevance);
+            if order != Ordering::Equal {
+                return order;
+            }
+
+            let order = self.compare_concepts(&left_concept, &right_concept);
+            if order != Ordering::Equal {
+                return order;
+            }
+        }
+
+        let left_correlation = self.correlation(left);
+        let right_correlation = self.correlation(right);
+        if left_correlation.is_some() != right_correlation.is_some() {
+            return left_correlation.is_some().cmp(&right_correlation.is_some());
+        }
+        if let (Some((left_a, left_b)), Some((right_a, right_b))) =
+            (left_correlation, right_correlation)
+        {
+            let order = self
+                .compare_concepts(left_a, right_a)
+                .then_with(|| self.compare_concepts(left_b, right_b));
+            if order != Ordering::Equal {
+                return order;
+            }
+        }
+
+        let left_dependency = self.dependency(left);
+        let right_dependency = self.dependency(right);
+        if left_dependency.is_some() != right_dependency.is_some() {
+            return left_dependency.is_some().cmp(&right_dependency.is_some());
+        }
+        if let (Some((left_a, left_b)), Some((right_a, right_b))) =
+            (left_dependency, right_dependency)
+        {
+            let order = self
+                .compare_concepts(left_a, right_a)
+                .then_with(|| self.compare_concepts(left_b, right_b));
+            if order != Ordering::Equal {
+                return order;
+            }
+        }
+
+        left.cmp(right)
+    }
+
+    fn format_subconcepts(
+        &self,
+        map: &ConceptMap,
+        evaluate: bool,
+        visited: &mut BTreeSet<ConceptId>,
+        wrap_implicit_union: bool,
+    ) -> String {
+        let use_implicit_union = Self::can_format_as_implicit_union(map);
+        let use_relevance = !use_implicit_union
+            && (map.len() > 1
+                || map.values().any(|relevance| {
+                    relevance.probability != 1.0
+                        || (relevance.strength != 1.0 && relevance.strength != -1.0)
+                }));
+        let mut out = String::new();
+
+        for (index, (concept, relevance)) in self.canonical_entries(map).into_iter().enumerate() {
+            if use_implicit_union {
+                if wrap_implicit_union && index == 0 {
+                    out.push('(');
+                }
+            } else if use_relevance {
+                if index == 0 {
+                    out.push('<');
+                } else {
+                    out.push_str(", ");
+                }
+
+                if relevance.probability != 1.0 {
+                    out.push_str(&format_relevance_probability(relevance));
+                }
+            }
+
+            out.push_str(&format_relevance_strength(relevance));
+            out.push_str(&self.format_inner(&concept, evaluate, visited));
+        }
+
+        if use_implicit_union && wrap_implicit_union {
+            out.push(')');
+        } else if use_relevance {
+            out.push('>');
+        }
+
+        out
+    }
+
+    fn format_debug_console_line(
+        &self,
+        relevance: Relevance,
+        concept: &ConceptId,
+        evaluate: bool,
+    ) -> String {
+        let mut out = String::from("  ");
+        let add_separator = relevance.probability != 1.0
+            || (relevance.strength != 1.0 && relevance.strength != -1.0);
+
+        if relevance.strength == -1.0 {
+            out.push('!');
+        }
+
+        if relevance.probability != 1.0 {
+            out.push_str(&format_relevance_probability(relevance));
+        }
+
+        if relevance.strength != 1.0 && relevance.strength != -1.0 {
+            out.push_str(&format_relevance_strength(relevance));
+        }
+
+        if add_separator {
+            out.push(' ');
+        }
+
+        out.push_str(&self.format_concept(concept, evaluate));
+        out
+    }
+}
+
+struct Parser {
+    chars: Vec<char>,
+    pos: usize,
+    params: VecDeque<ConceptId>,
+}
+
+impl Parser {
+    fn new(script: &str, params: &[ConceptId]) -> Self {
+        Self {
+            chars: script.chars().collect(),
+            pos: 0,
+            params: params.iter().cloned().collect(),
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        self.chars.get(self.pos + 1).copied()
+    }
+
+    fn next(&mut self) -> Option<char> {
+        let current = self.peek()?;
+        self.pos += 1;
+        Some(current)
+    }
+
+    fn consume(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn consume_str(&mut self, expected: &str) -> bool {
+        let len = expected.chars().count();
+        if expected
+            .chars()
+            .enumerate()
+            .all(|(i, ch)| self.chars.get(self.pos + i) == Some(&ch))
+        {
+            self.pos += len;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect(&mut self, expected: char) -> ParseResult<()> {
+        self.consume(expected)
+            .then_some(())
+            .ok_or(ParseError::InvalidSyntax)
+    }
+
+    fn skip_ws(&mut self) {
+        loop {
+            while self.peek().is_some_and(char::is_whitespace) {
+                self.pos += 1;
+            }
+
+            match (self.peek(), self.peek_next()) {
+                (Some('#'), _) | (Some('/'), Some('/')) => self.skip_line_comment(),
+                (Some('/'), Some('*')) => {
+                    if !self.skip_block_comment() {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+    }
+
+    fn skip_line_comment(&mut self) {
+        while self.peek().is_some_and(|c| c != '\n' && c != '\r') {
+            self.pos += 1;
+        }
+    }
+
+    fn skip_block_comment(&mut self) -> bool {
+        let start = self.pos;
+        self.pos += 2;
+
+        while self.peek().is_some() {
+            if self.peek() == Some('*') && self.peek_next() == Some('/') {
+                self.pos += 2;
+                return true;
+            }
+            self.pos += 1;
+        }
+
+        self.pos = start;
+        false
+    }
+
+    fn parse_name(&mut self, allow_space: bool) -> String {
+        let start = self.pos;
+        while self.peek().is_some_and(|c| is_name_char(c, allow_space)) {
+            self.pos += 1;
+        }
+        self.chars[start..self.pos].iter().collect()
+    }
+
+    fn parse_probability(&mut self) -> f32 {
+        let start = self.pos;
+        if let Some(value) = self.parse_number() {
+            if self.consume('%') {
+                return value / 100.0;
+            }
+        }
+
+        self.pos = start;
+        1.0
+    }
+
+    fn parse_float(&mut self) -> f32 {
+        self.parse_number().unwrap_or(0.0)
+    }
+
+    fn parse_number(&mut self) -> Option<f32> {
+        let start = self.pos;
+
+        if self.peek() == Some('-') {
+            self.pos += 1;
+        }
+
+        let mut has_digit = false;
+        while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+            has_digit = true;
+            self.pos += 1;
+        }
+
+        if self.peek() == Some('.') {
+            self.pos += 1;
+            while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                has_digit = true;
+                self.pos += 1;
+            }
+        }
+
+        if !has_digit {
+            self.pos = start;
+            return None;
+        }
+
+        let Ok(value) = self.chars[start..self.pos]
+            .iter()
+            .collect::<String>()
+            .parse()
+        else {
+            self.pos = start;
+            return None;
+        };
+
+        Some(value)
+    }
+}
+
+fn is_name_char(c: char, allow_space: bool) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '-' || (allow_space && c == ' ')
+}
+
+fn starts_union_operand(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | '<' | '$' | '^' | '?' | '!')
+}
+
+fn debug_console_help(command: &str) -> Option<&'static str> {
+    matches!(command, "h" | "help").then_some(DEBUG_CONSOLE_HELP)
+}
+
+fn statement_has_tokens(statement: &str) -> bool {
+    let mut parser = Parser::new(statement, &[]);
+    parser.skip_ws();
+    parser.peek().is_some()
+}
+
+struct ScriptStatements<'a> {
+    items: Vec<&'a str>,
+    has_semicolons: bool,
+}
+
+fn split_script_statements(script: &str) -> ScriptStatements<'_> {
+    let mut statements = Vec::new();
+    let mut stack = Vec::new();
+    let mut start = 0;
+    let mut has_semicolons = false;
+    let mut in_block_comment = false;
+    let mut in_line_comment = false;
+    let mut chars = script.char_indices().peekable();
+
+    while let Some((index, ch)) = chars.next() {
+        if in_block_comment {
+            if ch == '*' && chars.peek().is_some_and(|(_, next)| *next == '/') {
+                chars.next();
+                in_block_comment = false;
+            }
+            continue;
+        }
+
+        if in_line_comment {
+            if ch == '\n' || ch == '\r' {
+                in_line_comment = false;
+                if stack.is_empty() {
+                    statements.push(&script[start..index]);
+                    start = index + ch.len_utf8();
+                }
+            }
+            continue;
+        }
+
+        match ch {
+            '#' => in_line_comment = true,
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
+                chars.next();
+                in_line_comment = true;
+            }
+            '/' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+                chars.next();
+                in_block_comment = true;
+            }
+            ';' if stack.is_empty() => {
+                has_semicolons = true;
+                statements.push(&script[start..index]);
+                start = index + ch.len_utf8();
+            }
+            '\n' | '\r' if stack.is_empty() => {
+                statements.push(&script[start..index]);
+                start = index + ch.len_utf8();
+            }
+            '(' => stack.push(')'),
+            '[' => stack.push(']'),
+            '{' => stack.push('}'),
+            '<' => stack.push('>'),
+            ')' | ']' | '}' | '>' if stack.last() == Some(&ch) => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    statements.push(&script[start..]);
+    ScriptStatements {
+        items: statements,
+        has_semicolons,
+    }
+}
+
+fn multiply_relevance(left: Relevance, right: Relevance) -> Relevance {
+    Relevance::new(
+        left.probability * right.probability,
+        left.strength * right.strength,
+    )
+}
+
+fn compare_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
+    right
+        .probability
+        .partial_cmp(&left.probability)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| {
+            right
+                .strength
+                .partial_cmp(&left.strength)
+                .unwrap_or(Ordering::Equal)
+        })
+}
+
+fn compare_canonical_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
+    // Preserve the public 1.x/2.x relevance-map ordering above while using
+    // 3.x-style magnitude ordering for canonical text output.
+    right
+        .probability
+        .partial_cmp(&left.probability)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| {
+            right
+                .strength
+                .abs()
+                .partial_cmp(&left.strength.abs())
+                .unwrap_or(Ordering::Equal)
+        })
+        .then_with(|| {
+            right
+                .strength
+                .partial_cmp(&left.strength)
+                .unwrap_or(Ordering::Equal)
+        })
+}
+
+fn format_relevance_strength(relevance: Relevance) -> String {
+    match relevance.strength {
+        1.0 => String::new(),
+        -1.0 => "!".to_owned(),
+        strength => format!("x{}", format_float(strength)),
+    }
+}
+
+fn format_relevance_probability(relevance: Relevance) -> String {
+    format!("{}%", format_float(relevance.probability * 100.0))
+}
+
+fn format_float(value: f32) -> String {
+    let out = value.to_string();
+    out.strip_suffix(".0").unwrap_or(&out).to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_console_help_covers_current_language_surface() {
+        let help = debug_console_help("help").unwrap();
+        assert_eq!(debug_console_help("h"), Some(help));
+        assert_eq!(debug_console_help("[help]"), None);
+        assert!(help.contains("help, h"));
+        assert!(help.contains("[]                         Null"));
+        assert!(help.contains("[A]/[B]"));
+        assert!(help.contains("?[A]:[B]"));
+        assert!(help.contains("['name'] += expression"));
+        assert!(help.contains("['name'] -= expression"));
+        assert!(help.contains("['name'] *= expression"));
+        assert!(help.contains("['name'] /= expression"));
+        assert!(help.contains("['name'] ~= expression     Experience"));
+        assert!(help.contains("['name'] @ expression      Question / output binding"));
+        assert!(help.contains("Learns an experience"));
+        assert!(help.contains("expression; expression"));
+        assert!(help.contains("^['choice']"));
+        assert!(help.contains("probability * strength"));
+        assert!(help.contains("allocation order"));
+    }
+
+    #[test]
+    fn dropping_pangine_releases_percept_value_graphs() {
+        let weak_value = {
+            let mut pangine = Pangine::new();
+            let percept = pangine.reference_percept("memory");
+            let value = pangine.reference_concept("['memory'][A]").unwrap().unwrap();
+            let weak_value = Rc::downgrade(&value.0);
+
+            assert!(pangine.set_percept_value(&percept, Some(value.clone())));
+            drop(value);
+            assert!(weak_value.upgrade().is_some());
+            weak_value
+        };
+
+        assert!(weak_value.upgrade().is_none());
+    }
+}

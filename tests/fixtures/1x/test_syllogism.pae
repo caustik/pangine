@@ -1,0 +1,17 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_syllogism.pae
+#  Desc := Syllogism test script
+#
+###############################################################################
+
+#
+# Return [success]
+#
+
+[success]

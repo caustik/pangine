@@ -1,0 +1,81 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_experience.pae
+#  Desc := Experience test script
+#
+###############################################################################
+
+#
+# Test Union Experience - Simple
+#
+
+['test'] ~= [A]
+['test'] ~= [A]*[B]
+['test'] ~= [A]*[B]*[C]
+
+['test'] ~= ![A]
+['test'] ~= ![A]*![B]
+['test'] ~= ![A]*![B]*![C]
+
+#
+# Test Union Experience - Relevance #1
+#
+
+['test'] ~= <50%x2[A]>
+['test'] ~= <50%x2[A]>*<50%x3[B]>
+['test'] ~= <50%x2[A]>*<25%x1[B]>*<10%x99[C]>
+
+['test'] ~= !<50%x2[A]>
+['test'] ~= !<50%x2[A]>*!<50%x3[B]>
+['test'] ~= !<50%x2[A]>*!<25%x1[B]>*!<10%x99[C]>
+
+#
+# Test Union Experience - Relevance #2
+#
+# This was a specific issue with relevance calculations
+#
+
+['test'] ~= <50%[A]>
+['test'] ~= ![A]
+['test'] ~= <75%x2[A]>
+['test'] ~= !<50%[A]>
+['test'] ~= !<50%[A]>
+
+#
+# Test Union Experience - Parenthesis
+#
+
+['test'] ~= [A]*([A]*[B])
+['test'] ~= [A]*([A]*[B]*[C])
+['test'] ~= [A]*([A]*[B]*[C])*[D]
+['test'] ~= [A]*([A]*[B]*[C])*([D]*[E])
+['test'] ~= [A]*([A]*[B]*[C])*([D]*[E]*[F])
+
+['test'] ~= ![A]*!([A]*[B])
+['test'] ~= ![A]*!([A]*[B]*[C])
+['test'] ~= ![A]*!([A]*[B]*[C])*![D]
+['test'] ~= ![A]*!([A]*[B]*[C])*!([D]*[E])
+['test'] ~= ![A]*!([A]*[B]*[C])*!([D]*[E]*[F])
+
+#
+# Test Union Experience - Correlation
+#
+
+['test'] ~= [A]*{[A]->[B]}
+['test'] ~= [A]*{{[A]->[B]}->[C]}
+['test'] ~= [A]*{{[A]->[B]}->[C]}*{{[D]->[E]}->[F]}
+
+['test'] ~= ![A]*!{[A]->[B]}
+['test'] ~= ![A]*!{{[A]->[B]}->[C]}
+['test'] ~= ![A]*!{{[A]->[B]}->[C]}*!{{[D]->[E]}->[F]}
+
+#
+# Since the above tests should balance each other out, only [success] should remain
+#
+
+['test'] ~= [success]

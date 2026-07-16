@@ -1,0 +1,181 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_question.pae
+#  Desc := Question test script
+#
+###############################################################################
+
+#
+# Initialize percepts
+#
+
+['result'] = ['current'] = []
+
+#
+# Test null Question
+#
+
+['test'] = []
+['test'] ~= [A]*[B]*[C]
+
+['current'] = (['test'] @ [A]*[B])
+
+['result'] ~= $['current']
+
+#
+# Test |Simple| Question
+#
+
+['test'] = []
+['test'] ~= [A]
+
+['test'] @ ['current']
+
+['result'] ~= $['current']
+
+#
+# Test |Correlation| Questions
+#
+
+['test'] = []
+['test'] ~= {[A]->[B]}
+
+['test'] @ {['1']->[B]}
+['test'] @ {[A]->['2']}
+['test'] @ {[B]->['3']}
+['test'] @ {['4']->[A]}
+
+['current'] *= $['1']*$['2']*$['3']
+['current'] *= ![A]*![B]
+
+['result'] ~= $['current']
+
+#
+# Test Single Union Questions
+#
+
+['test'] = []
+['test'] ~= [A]*[B]*[C]
+
+['test'] @ [D]*['1']*[B]*[C]
+['test'] @ [E]*[A]*['2']*[C]
+['test'] @ [F]*[A]*[B]*['3']
+
+['current'] ~= $['1']*$['2']*$['3']
+
+['result'] ~= $['test']*!$['current']
+
+#
+# Test Multiple Union Question
+#
+
+['test'] = []
+['test'] ~= [A]*[B]
+['test'] ~= [A]*[B]
+['test'] ~= [A]*[B]
+['test'] ~= [A]*[C]
+
+['test'] @ [A]*['current']
+
+['current'] ~= ![C]
+['current'] ~= !<x3[B]>
+
+['result'] ~= $['current']
+
+#
+# Test Union Question - Strength Multiplier
+#
+
+['test'] = []
+['test'] ~= [A]*[B]
+['test'] ~= [A]*[C]
+['test'] @ [A]*[A]*['current']
+
+['current'] ~= !<x2[B]>
+['current'] ~= !<x2[C]>
+
+['result'] ~= $['current']
+
+#
+# Test Union Question - Simple with Relevance
+#
+
+['test'] = []
+['test'] ~= <50%x2[A]>
+['test'] ~= <50%x2[A]>*<50%x3[B]>
+['test'] ~= <50%x2[A]>*<25%x1[B]>*[expected]
+['test'] @ <50%x2[A]>*<25%x1[B]>*['current']
+
+['current'] ~= ![expected]
+
+['result'] ~= $['current']
+
+#
+# Test Union Question - Multiple Concept Match
+#
+
+['test'] = []
+['test'] ~= [anytime]*[cat_eats]*[dog_eats]
+['test'] ~= [anytime]*[cat_eats]*[dog_sleeps]
+['test'] ~= [anytime]*[cat_eats]*[dog_sleeps]
+['test'] ~= [anytime]*[cat_eats]*[dog_sleeps]
+['test'] ~= [anytime]*[cat_sleeps]*[dog_eats]
+['test'] @ [anytime]*[cat_eats]*['current']
+
+['current'] *= !<x3[dog_sleeps]>
+['current'] *= !<x2[dog_eats]>
+['current'] *= ![cat_sleeps]
+
+['result'] ~= $['current']
+
+#
+# Test Union Question - Multiple Correlation Concept Match
+#
+
+['test'] = []
+['test'] ~= {[time]->[is_morning]}*{[cat]->[eats]}
+['test'] ~= {[time]->[is_morning]}*{[cat]->[eats]}
+['test'] ~= {[time]->[is_night]}*{[cat]->[sleeps]}
+['test'] @ {[time]->[is_morning]}*['current']
+
+['current'] *= !<x2{[cat]->[eats]}>
+
+['result'] ~= $['current']
+
+#
+# Test Correlation Question - Simple Union
+#
+
+['test'] = []
+['test'] ~= {[time]->[night]}*{[cat]->[sleeps]}
+['test'] ~= {[time]->[night]}*{[cat]->[sleeps]}
+['test'] ~= {[time]->[day]}*{[cat]->[plays]}
+['test'] @ {[time]->[night]}*{[cat]->['current']}
+
+['current'] *= ![plays]
+['current'] *= !<x4[sleeps]>
+
+['result'] ~= $['current']
+
+#
+# Test Correlation Question - Simple Union, Question has no Union Concepts
+#
+
+['test'] = []
+['test'] ~= [A]*{[B]->[C]}
+['test'] @ {[B]->['current']}
+
+['current'] *= ![C]
+
+['result'] ~= $['current']
+
+#
+# Finalize result
+#
+
+['result'] ~= [success]

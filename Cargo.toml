@@ -1,0 +1,16 @@
+[package]
+name = "pangine"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aaron Robinson"]
+description = "A deterministic compositional grammar and semantic state engine"
+readme = "README.md"
+repository = "https://github.com/caustik/pangine"
+homepage = "https://pangine.com"
+license = "PolyForm-Noncommercial-1.0.0"
+keywords = ["grammar", "semantics", "knowledge-representation", "ai"]
+categories = ["data-structures", "parser-implementations"]
+publish = false
+
+[lib]
+path = "src/lib.rs"

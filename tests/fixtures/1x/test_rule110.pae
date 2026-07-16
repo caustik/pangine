@@ -1,0 +1,30 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_rule110.pae
+#  Desc := Rule110 test script [see http://en.wikipedia.org/wiki/Rule_110]
+#
+###############################################################################
+
+#
+# State Transitions
+#
+
+['rule110'] ~= {{{[pattern]->[111]}->[next_is]}->[0]}
+['rule110'] ~= {{{[pattern]->[110]}->[next_is]}->[1]}
+['rule110'] ~= {{{[pattern]->[101]}->[next_is]}->[1]}
+['rule110'] ~= {{{[pattern]->[100]}->[next_is]}->[0]}
+['rule110'] ~= {{{[pattern]->[011]}->[next_is]}->[1]}
+['rule110'] ~= {{{[pattern]->[010]}->[next_is]}->[1]}
+['rule110'] ~= {{{[pattern]->[001]}->[next_is]}->[1]}
+['rule110'] ~= {{{[pattern]->[000]}->[next_is]}->[0]}
+
+#
+# Result
+#
+
+['test'] ~= [success]

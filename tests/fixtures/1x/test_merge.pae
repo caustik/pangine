@@ -1,0 +1,44 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_merge.pae
+#  Desc := Merge test script
+#
+###############################################################################
+
+#
+# Test Union Merge
+#
+
+['test'] *=  [A]
+['test'] *= ![A]
+
+['test'] *=  [A]*[B]
+['test'] *= ![A]*![B]
+
+['test'] *=   [A]*[B]
+['test'] *= !([A]*[B])
+
+['test'] *= !{[A]->[B]}
+['test'] *=  {[A]->[B]}
+['test'] *=  {[A]->[B]}
+['test'] *= !{[A]->[B]}
+
+['test'] *= !{[A]->[B]} *  {[C]->[D]}
+['test'] *=  {[A]->[B]} * !{[C]->[D]}
+['test'] *=  {[A]->[B]} *  {[C]->[D]}
+['test'] *= !{[A]->[B]}
+['test'] *= !{[C]->[D]}
+
+['test'] *=  <50%[A], 50%[B]>
+['test'] *= !<50%[A], 50%[B]>
+
+['test'] *= (['test'] *= [A])*[B]
+['test'] *= ![B]
+['test'] *= ![A]*![A]
+
+['test'] ~= [success]

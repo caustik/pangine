@@ -1,0 +1,36 @@
+###############################################################################
+#
+#  pangine Project
+#
+#  Copyright (c) 2007-2008, Aaron "Caustik" Robinson
+#  Licensed under the repository's PolyForm Noncommercial License 1.0.0.
+#
+#  File := test_decision.pae
+#  Desc := Decision test script
+#
+###############################################################################
+
+#
+# Initialize percepts
+#
+
+['result'] = ['current'] = []
+
+#
+# Test Decision
+#
+
+['test'] = []
+['test'] ~= {[sky]->[blue]}*{[time]->[day]}*{[weather]->[nice]}
+['test'] ~= {[sky]->[black]}*{[time]->[night]}
+['test'] ~= {[sky]->[grey]}*{[time]->[day]}*{[weather]->[bad]}
+['test'] @ {[sky]->['current']}*{[time]->[day]}*{[weather]->[nice]}
+
+['result'] = ^['current']
+['result'] *= ![blue]
+
+#
+# Finalize result
+#
+
+['result'] ~= [success]
