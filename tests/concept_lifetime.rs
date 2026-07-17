@@ -127,6 +127,34 @@ fn global_percept_snapshots_every_live_ordinary_concept() {
 }
 
 #[test]
+fn global_snapshot_expands_shared_concepts_instead_of_unlabeled_references() {
+    let mut pangine = Pangine::new();
+    pangine
+        .reference_concept("['memory'] ~= {[C]->[A]}*{[B]->[D]}")
+        .unwrap()
+        .unwrap();
+    let snapshot = pangine.reference_concept("$['*']").unwrap().unwrap();
+    let lines = pangine.debug_console_lines(Some(&snapshot), false);
+
+    assert!(lines.iter().all(|line| !line.contains("[#")));
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("  ([A][B][C][D]{[B]->[D]}{[C]->[A]}({[B]->[D]}{[C]->[A]}))")
+    );
+}
+
+#[test]
+fn evaluated_formatting_stops_a_percept_cycle_at_its_named_reference() {
+    let mut pangine = Pangine::new();
+    let cycle = pangine
+        .reference_concept("['cycle'] = ['cycle']")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(pangine.format_concept(&cycle, true), "['cycle']");
+}
+
+#[test]
 fn global_percept_excludes_named_percept_roots() {
     let mut pangine = Pangine::new();
     let global = pangine.global_percept();

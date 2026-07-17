@@ -613,8 +613,8 @@ impl Pangine {
             return "[]".to_owned();
         }
 
-        let mut visited = BTreeSet::new();
-        self.format_inner(concept, evaluate, &mut visited)
+        let mut active = BTreeSet::new();
+        self.format_inner(concept, evaluate, &mut active)
     }
 
     pub fn recurse(&self, concept: &ConceptId, evaluate: bool) -> String {
@@ -1850,31 +1850,31 @@ impl Pangine {
         &self,
         concept: &ConceptId,
         evaluate: bool,
-        visited: &mut BTreeSet<ConceptId>,
+        active: &mut BTreeSet<ConceptId>,
     ) -> String {
-        if !visited.insert(concept.clone()) {
+        if !active.insert(concept.clone()) {
             return match &concept.0.kind {
                 ConceptKind::Named(name) => format!("[{name}]"),
-                ConceptKind::Percept { name } if !evaluate => format!("['{name}']"),
+                ConceptKind::Percept { name } => format!("['{name}']"),
                 _ => format!("[#{}]", concept.index()),
             };
         }
 
-        match &concept.0.kind {
+        let formatted = match &concept.0.kind {
             ConceptKind::Named(name) => format!("[{name}]"),
             ConceptKind::Percept { name } => {
                 if evaluate {
                     self.get_value(concept).map_or_else(
                         || "[]".to_owned(),
-                        |value| self.format_inner(&value, evaluate, visited),
+                        |value| self.format_inner(&value, evaluate, active),
                     )
                 } else {
                     format!("['{name}']")
                 }
             }
             ConceptKind::Correlation { a, b } => {
-                let a = self.format_semantic_operand(a, evaluate, visited);
-                let b = self.format_semantic_operand(b, evaluate, visited);
+                let a = self.format_semantic_operand(a, evaluate, active);
+                let b = self.format_semantic_operand(b, evaluate, active);
                 format!("{{{a}->{b}}}")
             }
             ConceptKind::Dependency { a, b } => {
@@ -1882,8 +1882,8 @@ impl Pangine {
                 // Historical 1.x used dependency A to decide parentheses on both sides:
                 // 1.x/pangine/src/pangine/common/pae_concept.cpp:157
                 let b_paren = self.needs_dependency_parens(a);
-                let a = self.format_inner(a, evaluate, visited);
-                let b = self.format_inner(b, evaluate, visited);
+                let a = self.format_inner(a, evaluate, active);
+                let b = self.format_inner(b, evaluate, active);
                 format!(
                     "?{}{}{}:{}{}{}",
                     if a_paren { "(" } else { "" },
@@ -1895,9 +1895,12 @@ impl Pangine {
                 )
             }
             ConceptKind::Anonymous => {
-                self.format_subconcepts(&concept.0.subconcepts, evaluate, visited, true)
+                self.format_subconcepts(&concept.0.subconcepts, evaluate, active, true)
             }
-        }
+        };
+
+        active.remove(concept);
+        formatted
     }
 
     fn needs_dependency_parens(&self, concept: &ConceptId) -> bool {
@@ -1908,16 +1911,16 @@ impl Pangine {
         &self,
         concept: &ConceptId,
         evaluate: bool,
-        visited: &mut BTreeSet<ConceptId>,
+        active: &mut BTreeSet<ConceptId>,
     ) -> String {
         if matches!(concept.0.kind, ConceptKind::Anonymous) {
             let map = &concept.0.subconcepts;
             if Self::can_format_as_implicit_union(map) {
-                return self.format_subconcepts(map, evaluate, visited, false);
+                return self.format_subconcepts(map, evaluate, active, false);
             }
         }
 
-        self.format_inner(concept, evaluate, visited)
+        self.format_inner(concept, evaluate, active)
     }
 
     fn can_format_as_implicit_union(map: &ConceptMap) -> bool {
@@ -2038,7 +2041,7 @@ impl Pangine {
         &self,
         map: &ConceptMap,
         evaluate: bool,
-        visited: &mut BTreeSet<ConceptId>,
+        active: &mut BTreeSet<ConceptId>,
         wrap_implicit_union: bool,
     ) -> String {
         let use_implicit_union = Self::can_format_as_implicit_union(map);
@@ -2068,7 +2071,7 @@ impl Pangine {
             }
 
             out.push_str(&format_relevance_strength(relevance));
-            out.push_str(&self.format_inner(&concept, evaluate, visited));
+            out.push_str(&self.format_inner(&concept, evaluate, active));
         }
 
         if use_implicit_union && wrap_implicit_union {
