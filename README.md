@@ -1,10 +1,60 @@
 # Pangine
 
-Pangine is a deterministic compositional grammar and semantic state engine written in Rust. It parses compact symbolic expressions, interns them into canonical concept graphs, and stores structured state in named percepts without imposing a fixed ontology or model-specific interpretation.
+Pangine is an experimental semantic state and reasoning engine written in Rust.
+
+I originally came up with Pangine by writing down pieces of information in a semantic shape, asking questions about them, and then reasoning backward from what the grammar should imply. Pangine explores whether experience, retained state, and questions can all use that same small grammar.
+
+Concepts have canonical forms and can be composed without giving their names a built-in ontology. Experiencing a concept recursively exposes everything it contains, at every level. A question uses literal matches and implied wildcard possibilities to produce weighted answers. The hope is that several partial matches can converge on an answer even when no literal fact was stored.
+
+The larger question is whether this can become an inference system in its own right. Pangine's weighted possibilities could be sampled directly, used to guide an LLM, or combined with other systems. It may end up supplementing current LLM technology, or it may develop into an alternative approach to inference. It is too early to know.
+
+Pangine does not assume that a language model has to perform the inference. If an LLM is involved, it could translate information into and out of Pangine while Pangine retains inspectable state and performs its own reasoning.
 
 Created by [Aaron (`caustik`)](https://github.com/caustik) and released by APU Software, LLC.
 
-Pangine is experimental. The parser, canonical representation, state ownership, relevance operations, console, and compatibility tests are implemented. Pangine is not an LLM and does not currently include model inference, persistence, retrieval infrastructure, or Python bindings.
+## The core idea
+
+A Pangine expression describes a semantic shape. Named concepts can be composed into unions, directed correlations, dependencies, and deeper structures. Applications decide what those concepts mean.
+
+```text
+{[cat]->[purrs]}
+{{[cat]->[purrs]}->{[sound]->[soft]}}
+```
+
+A named percept holds state. Assignment stores a value, experience accumulates what has been observed, a question binds output percepts, and evaluation materializes their current values.
+
+```text
+['memory'] ~= {[cat]->[purrs]}
+['memory'] @ {['animal']->[purrs]}
+$['animal']
+```
+
+The first statement experiences a correlation. The second asks which experienced concepts can occupy the left side of that shape. The third evaluates the resulting ranked candidates.
+
+Every concept inside an experience is also experienced. Nothing privileges the root or any other level. In theory, this implies every recursive combination of literal and wildcard structure. In practice, that closure is too large to store, so questions fold the compatible projections together when they are needed. These abstraction levels are somewhat like hidden features in a neural network, except they come from the grammar and remain possible to inspect.
+
+The hard part is relevance. Direct evidence, many independent hints at different levels of abstraction, and a generic wildcard possibility should not all have the same weight. The current projection weights are deterministic, but they are not calibrated probabilities and they are not the final answer.
+
+## Scaling direction
+
+When I first thought about scaling Pangine, the model was closer to map/reduce than GPU acceleration. Canonical form gives concepts a stable identity, but no concept needs a permanent machine owner. Distributed entities could each hold a roughly even subset of relevance. A percept operation could unfold across those entities, perform the local work, and then reduce the partial candidate weights.
+
+Changing how relevance is divided should not change the answer. If an entity goes down, Pangine should keep working with less relevance instead of breaking the model. With enough entities and reasonably balanced relevance, that failure becomes a relatively small change in the available evidence. Rare or important evidence may still need replication.
+
+The recursive closure still has to remain implied. Sending every wildcard permutation over the network would replace a storage problem with a messaging problem. Distributed execution is only a design direction today. GPU acceleration could still be useful inside any of the workers.
+
+## Current status
+
+The current Rust implementation includes:
+
+- Parsing and canonical formatting of the grammar
+- Weakly interned, canonical concept graphs
+- Engine-owned percept state and relevance operations
+- Recursive experience accumulation
+- Lazy recursive wildcard projection and ranked question bindings
+- An interactive console, a Rust example, and compatibility tests
+
+The relevance model, decision and sampling semantics, persistence, model integration, and language bindings are still open work. Pangine does not currently include an LLM, vector database, llama.cpp integration, or Python package.
 
 ## Quick start
 
@@ -44,7 +94,7 @@ command> [cat]->[purrs]
   {[cat]->[purrs]}
 ```
 
-## Language surface
+## Language at a glance
 
 | Form | Meaning |
 | --- | --- |
@@ -71,7 +121,9 @@ Statements may be separated with semicolons. C-style block comments and C++-styl
 
 Parsing distinguishes a valid null result from malformed input and I/O failure. Parsing is deliberately non-transactional: successful percept mutations before a later error remain applied.
 
-Experience stores exact recursively unrolled structure and accumulated relevance. Questions lazily fold the implied recursive wildcard projections into distinct ranked output bindings and cheaply return their unresolved question shape; no combinatorial wildcard closure is materialized. Because `@` binds more tightly than `$`, `$['memory'] @ expression` recursively resolves that returned shape only when an evaluated result is explicitly requested.
+Experience stores exact recursively unrolled structure and accumulated relevance. Questions lazily fold the implied recursive wildcard projections into distinct ranked output bindings, so the combinatorial closure does not have to be stored. Because `@` binds more tightly than `$`, `$['memory'] @ expression` resolves the returned question shape only when an evaluated snapshot is explicitly requested.
+
+The crate has no third-party runtime dependencies and forbids unsafe Rust.
 
 ## Project layout
 
@@ -82,7 +134,9 @@ tests/               Behavioral, compatibility, and lifetime tests
 tests/fixtures/      Grammar scripts used by the compatibility suite
 ```
 
-The crate has no third-party runtime dependencies and forbids unsafe Rust.
+## Contributing
+
+Reproducible bug reports and focused design discussion are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the current contribution policy.
 
 ## Licensing
 

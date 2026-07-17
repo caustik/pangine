@@ -51,6 +51,35 @@ fn question_keeps_correlation_output_bindings_distinct() {
 }
 
 #[test]
+fn question_preserves_outer_correlation_context_across_unordered_children() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {([C]*[A])->([B]*[D])}");
+    let answer = must_ref(&mut pangine, "$['memory'] @ {(['X']*[A])->([B]*['Y'])}");
+    assert_eq!(
+        answer,
+        must_ref(
+            &mut pangine,
+            "{[A]<x16[C], x8[A], [B], [D]>->[B]<x16[D], x8[B], [A], [C]>}",
+        )
+    );
+
+    let x = must_ref(&mut pangine, "$['X']");
+    let x_candidates = named_relevance(&pangine, &x);
+    assert_eq!(candidate_weight(&x_candidates, "C"), 16.0);
+    assert_eq!(candidate_weight(&x_candidates, "A"), 8.0);
+    assert_eq!(candidate_weight(&x_candidates, "B"), 1.0);
+    assert_eq!(candidate_weight(&x_candidates, "D"), 1.0);
+
+    let y = must_ref(&mut pangine, "$['Y']");
+    let y_candidates = named_relevance(&pangine, &y);
+    assert_eq!(candidate_weight(&y_candidates, "D"), 16.0);
+    assert_eq!(candidate_weight(&y_candidates, "B"), 8.0);
+    assert_eq!(candidate_weight(&y_candidates, "A"), 1.0);
+    assert_eq!(candidate_weight(&y_candidates, "C"), 1.0);
+}
+
+#[test]
 fn evaluation_recursively_resolves_percepts_inside_a_shape() {
     let mut pangine = Pangine::new();
 

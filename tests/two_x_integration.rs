@@ -24,6 +24,10 @@ fn implicit_union_syntax_and_star_merge_are_distinct_operations() {
         must_ref(&mut pangine, "[A][A]"),
         must_ref(&mut pangine, "[A]")
     );
+    assert_eq!(
+        must_ref(&mut pangine, "[A][A]"),
+        must_ref(&mut pangine, "<x2[A]>")
+    );
     assert_ne!(
         must_ref(&mut pangine, "[A][B][A][B]"),
         must_ref(&mut pangine, "[A][B]")
