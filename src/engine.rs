@@ -15,12 +15,17 @@ type ProjectionBindingWeights = BTreeMap<ConceptId, BTreeMap<ConceptId, f64>>;
 type ProjectionCache = BTreeMap<(usize, usize), ProjectionSummary>;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum ProjectionKind {
+enum RelationKind {
+    Dependency,
+    Correlation,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ConceptShape {
     Named,
     Percept,
-    Anonymous,
-    Correlation,
-    Dependency,
+    Unordered,
+    Relation(RelationKind),
 }
 
 #[derive(Clone)]
@@ -34,10 +39,7 @@ struct ProjectionSummary {
 
 impl ProjectionSummary {
     fn wildcard() -> Self {
-        Self {
-            total: 1.0,
-            bindings: ProjectionBindingWeights::new(),
-        }
+        Self { total: 1.0, bindings: ProjectionBindingWeights::new() }
     }
 
     fn variable(percept: ConceptId, candidate: ConceptId) -> Self {
@@ -45,52 +47,26 @@ impl ProjectionSummary {
             // Wildcarding this node leaves the output unbound; preserving it
             // binds the exact experienced subtree.
             total: 2.0,
-            bindings: ProjectionBindingWeights::from([(
-                percept,
-                BTreeMap::from([(candidate, 1.0)]),
-            )]),
+            bindings: ProjectionBindingWeights::from([(percept, BTreeMap::from([(candidate, 1.0)]))]),
         }
     }
 
     fn multiply(&self, other: &Self) -> Self {
-        let mut bindings = ProjectionBindingWeights::new();
-
-        for (percept, candidates) in &self.bindings {
-            for (candidate, weight) in candidates {
-                *bindings
-                    .entry(percept.clone())
-                    .or_default()
-                    .entry(candidate.clone())
-                    .or_default() += weight * other.total;
-            }
-        }
-
-        for (percept, candidates) in &other.bindings {
-            for (candidate, weight) in candidates {
-                *bindings
-                    .entry(percept.clone())
-                    .or_default()
-                    .entry(candidate.clone())
-                    .or_default() += weight * self.total;
-            }
-        }
-
-        Self {
-            total: self.total * other.total,
-            bindings,
-        }
+        let mut product = Self { total: self.total * other.total, bindings: ProjectionBindingWeights::new() };
+        product.accumulate_bindings(self, other.total);
+        product.accumulate_bindings(other, self.total);
+        product
     }
 
     fn add(&mut self, other: Self) {
         self.total += other.total;
-        for (percept, candidates) in other.bindings {
+        self.accumulate_bindings(&other, 1.0);
+    }
+
+    fn accumulate_bindings(&mut self, other: &Self, scale: f64) {
+        for (percept, candidates) in &other.bindings {
             for (candidate, weight) in candidates {
-                *self
-                    .bindings
-                    .entry(percept.clone())
-                    .or_default()
-                    .entry(candidate)
-                    .or_default() += weight;
+                *self.bindings.entry(percept.clone()).or_default().entry(candidate.clone()).or_default() += weight * scale;
             }
         }
     }
@@ -107,6 +83,7 @@ impl ProjectionSummary {
 
 static NEXT_PANGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// The reserved name of the global percept.
 pub const GLOBAL_PERCEPT_NAME: &str = "*";
 
 const DEBUG_CONSOLE_HELP: &str = "\
@@ -161,12 +138,16 @@ Decision:
   complete evaluated value is returned.
 ";
 
+/// The result of parsing or executing Pangine syntax.
 pub type ParseResult<T> = Result<T, ParseError>;
 
+/// An error produced while parsing a script or reading a script file.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ParseError {
+    /// The input does not conform to Pangine syntax.
     InvalidSyntax,
+    /// A script or details file could not be read or written.
     Io(io::Error),
 }
 
@@ -194,23 +175,20 @@ impl From<io::Error> for ParseError {
     }
 }
 
+/// An engine-scoped handle to an interned concept.
 #[derive(Clone)]
 pub struct ConceptId(Rc<Concept>);
 
 impl ConceptId {
     fn new(pangine_id: usize, index: usize, kind: ConceptKind, subconcepts: ConceptMap) -> Self {
-        Self(Rc::new(Concept {
-            pangine_id,
-            index,
-            kind,
-            subconcepts,
-        }))
+        Self(Rc::new(Concept { pangine_id, index, kind, subconcepts }))
     }
 
     fn key(&self) -> (usize, usize) {
         (self.0.pangine_id, self.0.index)
     }
 
+    /// Returns the concept's allocation index within its owning engine.
     pub fn index(&self) -> usize {
         self.0.index
     }
@@ -218,10 +196,7 @@ impl ConceptId {
 
 impl std::fmt::Debug for ConceptId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_tuple("ConceptId")
-            .field(&self.0.index)
-            .finish()
+        formatter.debug_tuple("ConceptId").field(&self.0.index).finish()
     }
 }
 
@@ -251,13 +226,32 @@ impl Hash for ConceptId {
     }
 }
 
+/// The structural kind of an interned concept.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConceptKind {
+    /// A named concept.
     Named(String),
-    Percept { name: String },
+    /// A mutable percept reference.
+    Percept {
+        /// The percept name.
+        name: String,
+    },
+    /// An anonymous unordered concept.
     Anonymous,
-    Correlation { a: ConceptId, b: ConceptId },
-    Dependency { a: ConceptId, b: ConceptId },
+    /// A directed correlation from `a` to `b`.
+    Correlation {
+        /// The source concept.
+        a: ConceptId,
+        /// The target concept.
+        b: ConceptId,
+    },
+    /// A dependency whose question shape is `a` and answer shape is `b`.
+    Dependency {
+        /// The question concept.
+        a: ConceptId,
+        /// The answer concept.
+        b: ConceptId,
+    },
 }
 
 struct Concept {
@@ -267,6 +261,36 @@ struct Concept {
     subconcepts: ConceptMap,
 }
 
+impl Concept {
+    fn shape(&self) -> ConceptShape {
+        match &self.kind {
+            ConceptKind::Named(_) => ConceptShape::Named,
+            ConceptKind::Percept { .. } => ConceptShape::Percept,
+            ConceptKind::Anonymous => ConceptShape::Unordered,
+            ConceptKind::Correlation { .. } => ConceptShape::Relation(RelationKind::Correlation),
+            ConceptKind::Dependency { .. } => ConceptShape::Relation(RelationKind::Dependency),
+        }
+    }
+
+    fn relation(&self) -> Option<(RelationKind, &ConceptId, &ConceptId)> {
+        match &self.kind {
+            ConceptKind::Correlation { a, b } => Some((RelationKind::Correlation, a, b)),
+            ConceptKind::Dependency { a, b } => Some((RelationKind::Dependency, a, b)),
+            _ => None,
+        }
+    }
+
+    fn children(&self) -> impl Iterator<Item = (&ConceptId, Relevance)> {
+        let relation = match self.relation() {
+            Some((_, a, b)) => [Some(a), Some(b)],
+            None => [None, None],
+        };
+
+        relation.into_iter().flatten().map(|child| (child, Relevance::DEFAULT)).chain(self.subconcepts.iter().map(|(child, &relevance)| (child, relevance)))
+    }
+}
+
+/// A deterministic concept engine with isolated identity and percept state.
 pub struct Pangine {
     id: usize,
     next_concept_id: Cell<usize>,
@@ -279,14 +303,7 @@ pub struct Pangine {
 impl Default for Pangine {
     fn default() -> Self {
         let id = NEXT_PANGINE_ID.fetch_add(1, AtomicOrdering::Relaxed);
-        let global_percept = ConceptId::new(
-            id,
-            0,
-            ConceptKind::Percept {
-                name: GLOBAL_PERCEPT_NAME.to_owned(),
-            },
-            ConceptMap::new(),
-        );
+        let global_percept = ConceptId::new(id, 0, ConceptKind::Percept { name: GLOBAL_PERCEPT_NAME.to_owned() }, ConceptMap::new());
 
         Self {
             id,
@@ -299,28 +316,30 @@ impl Default for Pangine {
     }
 }
 
+// Construction and script entry points.
 impl Pangine {
+    /// Creates an empty engine containing only the global percept.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns the number of live ordinary concepts currently interned by this engine.
     pub fn concept_count(&self) -> usize {
         self.live_ordinary_concepts().count()
     }
 
+    /// Returns the global percept handle.
     pub fn global_percept(&self) -> ConceptId {
         self.percepts[GLOBAL_PERCEPT_NAME].clone()
     }
 
+    /// Parses and executes a Pangine statement or expression.
     pub fn reference_concept(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
         self.reference_concept_with_params(script, &[])
     }
 
-    pub fn reference_concept_with_params(
-        &mut self,
-        script: &str,
-        params: &[ConceptId],
-    ) -> ParseResult<Option<ConceptId>> {
+    /// Parses and executes Pangine syntax with positional concept parameters.
+    pub fn reference_concept_with_params(&mut self, script: &str, params: &[ConceptId]) -> ParseResult<Option<ConceptId>> {
         if params.iter().any(|concept| !self.owns(concept)) {
             return Err(ParseError::InvalidSyntax);
         }
@@ -330,13 +349,11 @@ impl Pangine {
         result
     }
 
+    /// Converts the names in plain text into an unordered concept.
     pub fn parse_text(&mut self, text: &str) -> Option<ConceptId> {
         let mut map = ConceptMap::new();
 
-        for name in text
-            .split(|c| !is_name_char(c, false))
-            .filter(|name| !name.is_empty())
-        {
+        for name in text.split(|c| !is_name_char(c, false)).filter(|name| !name.is_empty()) {
             if let Some(concept) = self.reference_named(name) {
                 self.add_relevance(&mut map, concept, false, Relevance::DEFAULT);
             }
@@ -345,50 +362,39 @@ impl Pangine {
         self.reference_map(&map)
     }
 
+    /// Parses and executes every statement in a script string.
     pub fn parse_script_text(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
         let result = self.parse_script_text_impl(script, None);
         self.prune_indexes();
         result
     }
 
-    pub fn parse_script_text_with_details<W: Write>(
-        &mut self,
-        script: &str,
-        details: &mut W,
-    ) -> ParseResult<Option<ConceptId>> {
+    /// Parses a script string while writing each statement and result to `details`.
+    pub fn parse_script_text_with_details<W: Write>(&mut self, script: &str, details: &mut W) -> ParseResult<Option<ConceptId>> {
         let result = self.parse_script_text_impl(script, Some(details));
         self.prune_indexes();
         result
     }
 
+    /// Reads, parses, and executes a UTF-8 script file.
     pub fn parse_script_file(&mut self, path: impl AsRef<Path>) -> ParseResult<Option<ConceptId>> {
         let script = fs::read_to_string(path)?;
         self.parse_script_text(&script)
     }
 
-    pub fn parse_script_file_with_details<W: Write>(
-        &mut self,
-        path: impl AsRef<Path>,
-        details: &mut W,
-    ) -> ParseResult<Option<ConceptId>> {
+    /// Parses a script file while writing each statement and result to `details`.
+    pub fn parse_script_file_with_details<W: Write>(&mut self, path: impl AsRef<Path>, details: &mut W) -> ParseResult<Option<ConceptId>> {
         let script = fs::read_to_string(path)?;
         self.parse_script_text_with_details(&script, details)
     }
 
-    pub fn parse_script_file_to_details_file(
-        &mut self,
-        path: impl AsRef<Path>,
-        details_path: impl AsRef<Path>,
-    ) -> ParseResult<Option<ConceptId>> {
+    /// Parses a script file and writes execution details to another file.
+    pub fn parse_script_file_to_details_file(&mut self, path: impl AsRef<Path>, details_path: impl AsRef<Path>) -> ParseResult<Option<ConceptId>> {
         let mut details = fs::File::create(details_path)?;
         self.parse_script_file_with_details(path, &mut details)
     }
 
-    fn parse_script_text_impl(
-        &mut self,
-        script: &str,
-        mut details: Option<&mut dyn Write>,
-    ) -> ParseResult<Option<ConceptId>> {
+    fn parse_script_text_impl(&mut self, script: &str, mut details: Option<&mut dyn Write>) -> ParseResult<Option<ConceptId>> {
         let mut result = None;
         let statements = split_script_statements(script);
 
@@ -412,69 +418,50 @@ impl Pangine {
             };
 
             if let Some(details) = details.as_mut() {
-                let formatted = concept.as_ref().map_or_else(
-                    || "[]".to_owned(),
-                    |concept| self.format_concept(concept, false),
-                );
+                let formatted = concept.as_ref().map_or_else(|| "[]".to_owned(), |concept| self.format_concept(concept, false));
                 writeln!(&mut **details, "ps=   {formatted}")?;
             }
 
-            result = if statements.has_semicolons {
-                concept
-            } else {
-                concept.or(result)
-            };
+            result = if statements.has_semicolons { concept } else { concept.or(result) };
         }
 
         Ok(result)
     }
+}
 
+// Concept identity, state, and public mutation.
+impl Pangine {
+    /// Returns the stable percept handle for `name`, creating it if necessary.
     pub fn reference_percept(&mut self, name: &str) -> ConceptId {
         if let Some(concept) = self.percepts.get(name) {
             return concept.clone();
         }
 
-        let concept = self.alloc(
-            ConceptKind::Percept {
-                name: name.to_owned(),
-            },
-            ConceptMap::new(),
-        );
+        let concept = self.alloc(ConceptKind::Percept { name: name.to_owned() }, ConceptMap::new());
         self.percepts.insert(name.to_owned(), concept.clone());
         concept
     }
 
-    pub fn perform_addition(
-        &mut self,
-        percept: &ConceptId,
-        addition: Option<&ConceptId>,
-    ) -> Option<ConceptId> {
+    /// Adds `addition` to a mutable percept and returns its updated value.
+    pub fn perform_addition(&mut self, percept: &ConceptId, addition: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, addition) {
             return None;
         }
 
-        self.perform_union_update(percept, addition.cloned(), false)
-            .and_then(|(value, _)| value)
+        self.perform_union_update(percept, addition.cloned(), false).and_then(|(value, _)| value)
     }
 
-    pub fn perform_subtraction(
-        &mut self,
-        percept: &ConceptId,
-        subtraction: Option<&ConceptId>,
-    ) -> Option<ConceptId> {
+    /// Subtracts `subtraction` from a mutable percept and returns its updated value.
+    pub fn perform_subtraction(&mut self, percept: &ConceptId, subtraction: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, subtraction) {
             return None;
         }
 
-        self.perform_union_update(percept, subtraction.cloned(), true)
-            .and_then(|(value, _)| value)
+        self.perform_union_update(percept, subtraction.cloned(), true).and_then(|(value, _)| value)
     }
 
-    pub fn perform_merge(
-        &mut self,
-        percept: &ConceptId,
-        merge: Option<&ConceptId>,
-    ) -> Option<ConceptId> {
+    /// Flattens `merge` into a mutable percept and returns its updated value.
+    pub fn perform_merge(&mut self, percept: &ConceptId, merge: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, merge) {
             return None;
         }
@@ -482,11 +469,8 @@ impl Pangine {
         self.perform_merge_update(percept, merge.cloned(), false)
     }
 
-    pub fn perform_inverse_merge(
-        &mut self,
-        percept: &ConceptId,
-        merge: Option<&ConceptId>,
-    ) -> Option<ConceptId> {
+    /// Flattens the inverse of `merge` into a mutable percept and returns its updated value.
+    pub fn perform_inverse_merge(&mut self, percept: &ConceptId, merge: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, merge) {
             return None;
         }
@@ -494,11 +478,8 @@ impl Pangine {
         self.perform_merge_update(percept, merge.cloned(), true)
     }
 
-    pub fn perform_experience(
-        &mut self,
-        percept: &ConceptId,
-        experience: Option<&ConceptId>,
-    ) -> Option<ConceptId> {
+    /// Accumulates an experience in a mutable percept and returns the resulting concept.
+    pub fn perform_experience(&mut self, percept: &ConceptId, experience: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, experience) {
             return None;
         }
@@ -512,10 +493,12 @@ impl Pangine {
         self.reference_map(&map)
     }
 
+    /// Returns a concept's kind when it belongs to this engine.
     pub fn concept_kind<'a>(&self, concept: &'a ConceptId) -> Option<&'a ConceptKind> {
         self.owns(concept).then_some(&concept.0.kind)
     }
 
+    /// Returns the name of an owned named concept.
     pub fn get_name<'a>(&self, concept: &'a ConceptId) -> Option<&'a str> {
         if !self.owns(concept) {
             return None;
@@ -527,6 +510,7 @@ impl Pangine {
         }
     }
 
+    /// Returns the current value of an owned percept.
     pub fn get_value(&self, concept: &ConceptId) -> Option<ConceptId> {
         if !self.is_percept(concept) {
             return None;
@@ -539,10 +523,9 @@ impl Pangine {
         self.percept_values.get(&concept.index()).cloned()
     }
 
+    /// Replaces a mutable percept's value, returning whether the input was valid.
     pub fn set_percept_value(&mut self, percept: &ConceptId, value: Option<ConceptId>) -> bool {
-        if !self.is_mutable_percept(percept)
-            || value.as_ref().is_some_and(|concept| !self.owns(concept))
-        {
+        if !self.is_mutable_percept(percept) || value.as_ref().is_some_and(|concept| !self.owns(concept)) {
             return false;
         }
 
@@ -553,46 +536,55 @@ impl Pangine {
         true
     }
 
+    /// Returns the source of an owned correlation.
     pub fn get_correlation_a(&self, concept: &ConceptId) -> Option<ConceptId> {
         self.correlation(concept).map(|(a, _)| a.clone())
     }
 
+    /// Returns the target of an owned correlation.
     pub fn get_correlation_b(&self, concept: &ConceptId) -> Option<ConceptId> {
         self.correlation(concept).map(|(_, b)| b.clone())
     }
 
+    /// Returns the question side of an owned dependency.
     pub fn get_dependency_a(&self, concept: &ConceptId) -> Option<ConceptId> {
         self.dependency(concept).map(|(a, _)| a.clone())
     }
 
+    /// Returns the answer side of an owned dependency.
     pub fn get_dependency_b(&self, concept: &ConceptId) -> Option<ConceptId> {
         self.dependency(concept).map(|(_, b)| b.clone())
     }
 
+    /// Returns `concept` when it is an owned percept.
     pub fn get_percept(&self, concept: &ConceptId) -> Option<ConceptId> {
         self.is_percept(concept).then(|| concept.clone())
     }
 
+    /// Returns a correlation's source when it is a percept.
     pub fn get_percept_a(&self, concept: &ConceptId) -> Option<ConceptId> {
-        self.get_correlation_a(concept)
-            .filter(|concept| self.is_percept(concept))
+        self.get_correlation_a(concept).filter(|concept| self.is_percept(concept))
     }
 
+    /// Returns a correlation's target when it is a percept.
     pub fn get_percept_b(&self, concept: &ConceptId) -> Option<ConceptId> {
-        self.get_correlation_b(concept)
-            .filter(|concept| self.is_percept(concept))
+        self.get_correlation_b(concept).filter(|concept| self.is_percept(concept))
     }
 
+    /// Returns relevance entries ordered by descending weight and concept identity.
     pub fn get_relevance_map(&self, concept: &ConceptId) -> Vec<(Relevance, ConceptId)> {
         let mut map = self.relevance_entries(concept).unwrap_or_default();
 
         map.sort_by(|(left_rel, left_concept), (right_rel, right_concept)| {
-            compare_relevance_desc(*left_rel, *right_rel)
-                .then_with(|| left_concept.cmp(right_concept))
+            compare_relevance_desc(*left_rel, *right_rel).then_with(|| left_concept.cmp(right_concept))
         });
         map
     }
+}
 
+// Canonical presentation and the interactive console.
+impl Pangine {
+    /// Formats relevance entries as individual debug-console lines.
     pub fn debug_console_lines(&self, concept: Option<&ConceptId>, evaluate: bool) -> Vec<String> {
         // Historical anchor:
         // 1.x/pangine/src/pangine/common/pae_pangine.cpp:1311
@@ -600,14 +592,10 @@ impl Pangine {
             return vec!["  []".to_owned()];
         };
 
-        entries
-            .into_iter()
-            .map(|(relevance, concept)| {
-                self.format_debug_console_line(relevance, &concept, evaluate)
-            })
-            .collect()
+        entries.into_iter().map(|(relevance, concept)| self.format_debug_console_line(relevance, &concept, evaluate)).collect()
     }
 
+    /// Formats an owned concept as canonical Pangine syntax.
     pub fn format_concept(&self, concept: &ConceptId, evaluate: bool) -> String {
         if !self.owns(concept) {
             return "[]".to_owned();
@@ -617,10 +605,12 @@ impl Pangine {
         self.format_inner(concept, evaluate, &mut active)
     }
 
+    /// Formats a concept, optionally evaluating percept references recursively.
     pub fn recurse(&self, concept: &ConceptId, evaluate: bool) -> String {
         self.format_concept(concept, evaluate)
     }
 
+    /// Runs the interactive Pangine console on standard input and output.
     pub fn debug_console(&mut self) -> io::Result<()> {
         let stdin = io::stdin();
         let mut input = String::new();
@@ -635,9 +625,7 @@ impl Pangine {
             }
 
             let command = input.trim_end_matches(['\r', '\n']);
-            let (evaluate, script) = command
-                .strip_prefix('@')
-                .map_or((false, command), |script| (true, script));
+            let (evaluate, script) = command.strip_prefix('@').map_or((false, command), |script| (true, script));
 
             if script.starts_with('q') {
                 break;
@@ -660,7 +648,10 @@ impl Pangine {
 
         Ok(())
     }
+}
 
+// Recursive-descent parser implementation.
+impl Pangine {
     // 3.x semantics are right-associative and bind below union and merge:
     // 3.x/pangine/include/pangine/pae_concept_parser.h:69,84,102
     fn parse_expression(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
@@ -729,19 +720,11 @@ impl Pangine {
         self.parse_statement_text_with_params(script, &[])
     }
 
-    fn parse_statement_text_with_params(
-        &mut self,
-        script: &str,
-        params: &[ConceptId],
-    ) -> ParseResult<Option<ConceptId>> {
+    fn parse_statement_text_with_params(&mut self, script: &str, params: &[ConceptId]) -> ParseResult<Option<ConceptId>> {
         let mut parser = Parser::new(script, params);
         let concept = self.parse_statements(&mut parser)?;
         parser.skip_ws();
-        parser
-            .peek()
-            .is_none()
-            .then_some(concept)
-            .ok_or(ParseError::InvalidSyntax)
+        parser.peek().is_none().then_some(concept).ok_or(ParseError::InvalidSyntax)
     }
 
     fn parse_union(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
@@ -780,16 +763,12 @@ impl Pangine {
             Some('<') => self.parse_relevance(parser),
             Some('$') => {
                 parser.next();
-                let evaluated = self
-                    .parse_union_operand(parser)?
-                    .ok_or(ParseError::InvalidSyntax)?;
+                let evaluated = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
                 Ok(self.evaluate_concept(&evaluated))
             }
             Some('^') => {
                 parser.next();
-                let decision = self
-                    .parse_union_operand(parser)?
-                    .ok_or(ParseError::InvalidSyntax)?;
+                let decision = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
                 Ok(self.make_decision(&decision))
             }
             Some('?') => self.parse_dependency(parser),
@@ -809,27 +788,19 @@ impl Pangine {
 
     fn parse_correlation(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.next();
-        let left = self
-            .parse_merge_expression(parser)?
-            .ok_or(ParseError::InvalidSyntax)?;
+        let left = self.parse_merge_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
         parser.expect('-')?;
         parser.expect('>')?;
-        let right = self
-            .parse_merge_expression(parser)?
-            .ok_or(ParseError::InvalidSyntax)?;
+        let right = self.parse_merge_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
         parser.expect('}')?;
         Ok(Some(self.reference_correlation(left, right)))
     }
 
     fn parse_dependency(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.next();
-        let dependency = self
-            .parse_expression(parser)?
-            .ok_or(ParseError::InvalidSyntax)?;
+        let dependency = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
         parser.expect(':')?;
-        let consequent = self
-            .parse_expression(parser)?
-            .ok_or(ParseError::InvalidSyntax)?;
+        let consequent = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
         Ok(Some(self.reference_dependency(dependency, consequent)))
     }
 
@@ -846,12 +817,7 @@ impl Pangine {
             }
 
             if let Some(term) = self.parse_expression(parser)? {
-                self.add_union_concept(
-                    &mut map,
-                    term,
-                    false,
-                    Relevance::new(probability, strength),
-                );
+                self.add_union_concept(&mut map, term, false, Relevance::new(probability, strength));
             }
 
             if parser.consume(',') {
@@ -870,11 +836,7 @@ impl Pangine {
         parser.next();
 
         if parser.consume('\'') {
-            let name = if parser.consume('*') {
-                GLOBAL_PERCEPT_NAME.to_owned()
-            } else {
-                parser.parse_name(true)
-            };
+            let name = if parser.consume('*') { GLOBAL_PERCEPT_NAME.to_owned() } else { parser.parse_name(true) };
             let percept = self.reference_percept(&name);
 
             parser.expect('\'')?;
@@ -904,11 +866,7 @@ impl Pangine {
         Ok(concept)
     }
 
-    fn parse_percept_action(
-        &mut self,
-        parser: &mut Parser,
-        percept: ConceptId,
-    ) -> ParseResult<Option<ConceptId>> {
+    fn parse_percept_action(&mut self, parser: &mut Parser, percept: ConceptId) -> ParseResult<Option<ConceptId>> {
         enum Action {
             Assign,
             Add,
@@ -946,8 +904,7 @@ impl Pangine {
         let value = match action {
             Action::Assign => input,
             Action::Add => {
-                let Some((value, stored)) = self.perform_union_update(&percept, input, false)
-                else {
+                let Some((value, stored)) = self.perform_union_update(&percept, input, false) else {
                     return Ok(None);
                 };
                 self.set_percept_value(&percept, stored);
@@ -968,7 +925,10 @@ impl Pangine {
         self.set_percept_value(&percept, value.clone());
         Ok(value)
     }
+}
 
+// Concept interning and engine ownership.
+impl Pangine {
     fn reference_named(&mut self, name: &str) -> Option<ConceptId> {
         if name.is_empty() {
             return None;
@@ -979,8 +939,7 @@ impl Pangine {
         }
 
         let concept = self.alloc(ConceptKind::Named(name.to_owned()), ConceptMap::new());
-        self.names
-            .insert(name.to_owned(), Rc::downgrade(&concept.0));
+        self.names.insert(name.to_owned(), Rc::downgrade(&concept.0));
         Some(concept)
     }
 
@@ -990,12 +949,7 @@ impl Pangine {
         self.reference_map(&map)
     }
 
-    fn reference_merge_with_inversion(
-        &mut self,
-        left: Option<ConceptId>,
-        right: Option<ConceptId>,
-        right_inversion: bool,
-    ) -> Option<ConceptId> {
+    fn reference_merge_with_inversion(&mut self, left: Option<ConceptId>, right: Option<ConceptId>, right_inversion: bool) -> Option<ConceptId> {
         let mut map = ConceptMap::new();
 
         if let Some(left) = left {
@@ -1018,6 +972,11 @@ impl Pangine {
         self.reference_map(&map)
     }
 
+    fn sole_default_concept(map: &ConceptMap) -> Option<&ConceptId> {
+        let (concept, relevance) = map.first_key_value()?;
+        (map.len() == 1 && *relevance == Relevance::DEFAULT).then_some(concept)
+    }
+
     fn reference_map(&mut self, map: &ConceptMap) -> Option<ConceptId> {
         self.prune_indexes();
 
@@ -1027,26 +986,18 @@ impl Pangine {
 
         // 3.x returns a sole default-relevance concept directly before interning:
         // 3.x/pangine/src/libpangine/common/pae_pangine.cpp:314-328
-        if map.len() == 1 {
-            let (concept, relevance) = map.iter().next().unwrap();
-            if *relevance == Relevance::DEFAULT {
-                return Some(concept.clone());
-            }
+        if let Some(concept) = Self::sole_default_concept(map) {
+            return Some(concept.clone());
         }
 
-        let candidates = self
+        let existing = self
             .anon
             .iter()
             .filter_map(Weak::upgrade)
             .map(ConceptId)
-            .chain(self.percepts.values().cloned())
-            .chain(self.names.values().filter_map(Weak::upgrade).map(ConceptId))
-            .collect::<Vec<_>>();
-
-        if let Some(concept) = candidates
-            .into_iter()
-            .find(|concept| Self::compare_subconcepts(concept, map, true))
-        {
+            .filter(|concept| matches!(concept.0.kind, ConceptKind::Anonymous))
+            .find(|concept| Self::compare_subconcepts(concept, map, true));
+        if let Some(concept) = existing {
             return Some(concept);
         }
 
@@ -1061,6 +1012,13 @@ impl Pangine {
 
     fn reference_dependency(&mut self, a: ConceptId, b: ConceptId) -> ConceptId {
         self.reference_pair(ConceptKind::Dependency { a, b })
+    }
+
+    fn reference_relation(&mut self, kind: RelationKind, a: ConceptId, b: ConceptId) -> ConceptId {
+        match kind {
+            RelationKind::Dependency => self.reference_dependency(a, b),
+            RelationKind::Correlation => self.reference_correlation(a, b),
+        }
     }
 
     fn reference_pair(&mut self, kind: ConceptKind) -> ConceptId {
@@ -1108,18 +1066,11 @@ impl Pangine {
     }
 
     fn live_ordinary_concepts(&self) -> impl Iterator<Item = ConceptId> + '_ {
-        self.names
-            .values()
-            .chain(&self.anon)
-            .filter_map(Weak::upgrade)
-            .map(ConceptId)
+        self.names.values().chain(&self.anon).filter_map(Weak::upgrade).map(ConceptId)
     }
 
     fn global_value(&self) -> Option<ConceptId> {
-        let map = self
-            .live_ordinary_concepts()
-            .map(|concept| (concept, Relevance::DEFAULT))
-            .collect::<ConceptMap>();
+        let map = self.live_ordinary_concepts().map(|concept| (concept, Relevance::DEFAULT)).collect::<ConceptMap>();
 
         self.reference_transient_map(map)
     }
@@ -1129,11 +1080,8 @@ impl Pangine {
             return None;
         }
 
-        if map.len() == 1 {
-            let (concept, relevance) = map.iter().next().unwrap();
-            if *relevance == Relevance::DEFAULT {
-                return Some(concept.clone());
-            }
+        if let Some(concept) = Self::sole_default_concept(&map) {
+            return Some(concept.clone());
         }
 
         Some(self.alloc(ConceptKind::Anonymous, map))
@@ -1149,19 +1097,21 @@ impl Pangine {
             return false;
         }
 
-        if map.len() == 1 && map.get(concept) == Some(&Relevance::DEFAULT) {
+        if Self::sole_default_concept(map) == Some(concept) {
             return true;
         }
 
         let subconcepts = &concept.0.subconcepts;
         if !compare_relevance {
-            return map.len() == subconcepts.len()
-                && map.keys().all(|concept| subconcepts.contains_key(concept));
+            return map.len() == subconcepts.len() && map.keys().all(|concept| subconcepts.contains_key(concept));
         }
 
         map == subconcepts
     }
+}
 
+// Percept updates and recursive evaluation.
+impl Pangine {
     fn percept_value_map(&mut self, percept: &ConceptId) -> Option<ConceptMap> {
         if !self.is_percept(percept) {
             return None;
@@ -1169,17 +1119,12 @@ impl Pangine {
 
         let mut map = ConceptMap::new();
         if let Some(current) = self.get_value(percept) {
-            self.add_flat_concept(&mut map, current);
+            self.add_merge_concept(&mut map, current, false, Relevance::DEFAULT);
         }
         Some(map)
     }
 
-    fn perform_union_update(
-        &mut self,
-        percept: &ConceptId,
-        concept: Option<ConceptId>,
-        inversion: bool,
-    ) -> Option<(Option<ConceptId>, Option<ConceptId>)> {
+    fn perform_union_update(&mut self, percept: &ConceptId, concept: Option<ConceptId>, inversion: bool) -> Option<(Option<ConceptId>, Option<ConceptId>)> {
         let mut map = self.percept_union_value_map(percept)?;
 
         if let Some(concept) = concept {
@@ -1191,12 +1136,7 @@ impl Pangine {
         Some((value, stored))
     }
 
-    fn perform_merge_update(
-        &mut self,
-        percept: &ConceptId,
-        concept: Option<ConceptId>,
-        inversion: bool,
-    ) -> Option<ConceptId> {
+    fn perform_merge_update(&mut self, percept: &ConceptId, concept: Option<ConceptId>, inversion: bool) -> Option<ConceptId> {
         let mut map = self.percept_value_map(percept)?;
 
         if let Some(concept) = concept {
@@ -1225,14 +1165,9 @@ impl Pangine {
         Some(map)
     }
 
-    fn percept_union_stored_value(
-        &mut self,
-        map: &ConceptMap,
-        value: Option<ConceptId>,
-    ) -> Option<ConceptId> {
-        if map.len() == 1 {
-            let (concept, &relevance) = map.iter().next().unwrap();
-            if relevance == Relevance::DEFAULT && !concept.0.subconcepts.is_empty() {
+    fn percept_union_stored_value(&mut self, map: &ConceptMap, value: Option<ConceptId>) -> Option<ConceptId> {
+        if let Some(concept) = Self::sole_default_concept(map) {
+            if !concept.0.subconcepts.is_empty() {
                 let stored = self.alloc(ConceptKind::Anonymous, map.clone());
                 self.anon.push(Rc::downgrade(&stored.0));
                 return Some(stored);
@@ -1242,15 +1177,7 @@ impl Pangine {
         value
     }
 
-    fn add_flat_concept(&mut self, map: &mut ConceptMap, concept: ConceptId) {
-        self.add_merge_concept(map, concept, false, Relevance::DEFAULT);
-    }
-
-    fn answer_question(
-        &mut self,
-        percept: &ConceptId,
-        question: Option<ConceptId>,
-    ) -> Option<ConceptId> {
+    fn answer_question(&mut self, percept: &ConceptId, question: Option<ConceptId>) -> Option<ConceptId> {
         let question = question?;
         let Some(value) = self.get_value(percept) else {
             return Some(question);
@@ -1273,11 +1200,7 @@ impl Pangine {
         self.evaluate_concept_inner(concept, &mut BTreeSet::new())
     }
 
-    fn evaluate_concept_inner(
-        &mut self,
-        concept: &ConceptId,
-        visited_percepts: &mut BTreeSet<ConceptId>,
-    ) -> Option<ConceptId> {
+    fn evaluate_concept_inner(&mut self, concept: &ConceptId, visited_percepts: &mut BTreeSet<ConceptId>) -> Option<ConceptId> {
         match &concept.0.kind {
             ConceptKind::Named(_) => Some(concept.clone()),
             ConceptKind::Percept { .. } => {
@@ -1299,24 +1222,17 @@ impl Pangine {
                 let evaluated = self.evaluate_subconcepts(concept, visited_percepts);
                 self.reference_map(&evaluated)
             }
-            ConceptKind::Correlation { a, b } => {
-                let a = self.evaluate_concept_inner(a, visited_percepts)?;
-                let b = self.evaluate_concept_inner(b, visited_percepts)?;
-                Some(self.reference_correlation(a, b))
-            }
-            ConceptKind::Dependency { a, b } => {
-                let a = self.evaluate_concept_inner(a, visited_percepts)?;
-                let b = self.evaluate_concept_inner(b, visited_percepts)?;
-                Some(self.reference_dependency(a, b))
+            ConceptKind::Correlation { .. } | ConceptKind::Dependency { .. } => {
+                let (kind, a, b) = concept.0.relation().unwrap();
+                let (a, b) = (a.clone(), b.clone());
+                let a = self.evaluate_concept_inner(&a, visited_percepts)?;
+                let b = self.evaluate_concept_inner(&b, visited_percepts)?;
+                Some(self.reference_relation(kind, a, b))
             }
         }
     }
 
-    fn evaluate_transient_concept(
-        &mut self,
-        concept: &ConceptId,
-        visited_percepts: &mut BTreeSet<ConceptId>,
-    ) -> Option<ConceptId> {
+    fn evaluate_transient_concept(&mut self, concept: &ConceptId, visited_percepts: &mut BTreeSet<ConceptId>) -> Option<ConceptId> {
         if matches!(concept.0.kind, ConceptKind::Anonymous) {
             let evaluated = self.evaluate_subconcepts(concept, visited_percepts);
             self.reference_transient_map(evaluated)
@@ -1325,11 +1241,7 @@ impl Pangine {
         }
     }
 
-    fn evaluate_subconcepts(
-        &mut self,
-        concept: &ConceptId,
-        visited_percepts: &mut BTreeSet<ConceptId>,
-    ) -> ConceptMap {
+    fn evaluate_subconcepts(&mut self, concept: &ConceptId, visited_percepts: &mut BTreeSet<ConceptId>) -> ConceptMap {
         let mut evaluated = ConceptMap::new();
         for (child, relevance) in concept.0.subconcepts.clone() {
             if let Some(child) = self.evaluate_concept_inner(&child, visited_percepts) {
@@ -1338,80 +1250,44 @@ impl Pangine {
         }
         evaluated
     }
+}
 
-    fn get_projection_results(
-        &mut self,
-        question: &ConceptId,
-        experiences: &ConceptMap,
-    ) -> BTreeMap<ConceptId, Option<ConceptId>> {
+// Experience/question projection.
+impl Pangine {
+    fn get_projection_results(&mut self, question: &ConceptId, experiences: &ConceptMap) -> BTreeMap<ConceptId, Option<ConceptId>> {
         let mut questions = ConceptMap::new();
         let mut contains_percept_cache = BTreeMap::new();
-        self.collect_question_patterns(
-            question,
-            Relevance::DEFAULT,
-            true,
-            &mut questions,
-            &mut contains_percept_cache,
-        );
+        self.collect_question_patterns(question, Relevance::DEFAULT, true, &mut questions, &mut contains_percept_cache);
 
         let mut output_percepts = BTreeSet::new();
         self.collect_output_percepts(question, &mut output_percepts);
-        let mut bindings = output_percepts
-            .into_iter()
-            .map(|percept| (percept, ConceptMap::new()))
-            .collect::<BindingMap>();
+        let mut bindings = output_percepts.into_iter().map(|percept| (percept, ConceptMap::new())).collect::<BindingMap>();
         let mut cache = ProjectionCache::new();
-        let mut experience_index = BTreeMap::<ProjectionKind, Vec<_>>::new();
+        let mut experience_index = BTreeMap::<ConceptShape, Vec<_>>::new();
         for experience in experiences {
-            experience_index
-                .entry(Self::projection_kind(experience.0))
-                .or_default()
-                .push(experience);
+            let (concept, _) = experience;
+            experience_index.entry(concept.0.shape()).or_default().push(experience);
         }
 
         for (question, &question_relevance) in &questions {
             let matching_experiences = if self.is_percept(question) {
                 experiences.iter().collect::<Vec<_>>()
             } else {
-                experience_index
-                    .get(&Self::projection_kind(question))
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .collect::<Vec<_>>()
+                experience_index.get(&question.0.shape()).into_iter().flatten().copied().collect::<Vec<_>>()
             };
 
             for (experience, &experience_relevance) in matching_experiences {
                 let summary = self.projection_summary(experience, question, &mut cache);
                 for (percept, candidates) in summary.bindings {
                     for (candidate, weight) in candidates {
-                        let relevance =
-                            projection_relevance(experience_relevance, question_relevance, weight);
-                        self.add_relevance(
-                            bindings.entry(percept.clone()).or_default(),
-                            candidate,
-                            false,
-                            relevance,
-                        );
+                        let relevance = projection_relevance(experience_relevance, question_relevance, weight);
+                        self.add_relevance(bindings.entry(percept.clone()).or_default(), candidate, false, relevance);
                     }
                 }
             }
         }
 
-        bindings
-            .into_iter()
-            .map(|(percept, candidates)| (percept, self.reference_map(&candidates)))
-            .collect()
-    }
-
-    fn projection_kind(concept: &ConceptId) -> ProjectionKind {
-        match &concept.0.kind {
-            ConceptKind::Named(_) => ProjectionKind::Named,
-            ConceptKind::Percept { .. } => ProjectionKind::Percept,
-            ConceptKind::Anonymous => ProjectionKind::Anonymous,
-            ConceptKind::Correlation { .. } => ProjectionKind::Correlation,
-            ConceptKind::Dependency { .. } => ProjectionKind::Dependency,
-        }
+        bindings.into_iter().map(|(percept, candidates)| (percept, self.reference_map(&candidates))).collect()
     }
 
     fn collect_output_percepts(&self, concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {
@@ -1420,16 +1296,8 @@ impl Pangine {
             return;
         }
 
-        match &concept.0.kind {
-            ConceptKind::Correlation { a, b } | ConceptKind::Dependency { a, b } => {
-                self.collect_output_percepts(a, percepts);
-                self.collect_output_percepts(b, percepts);
-            }
-            _ => {
-                for child in concept.0.subconcepts.keys() {
-                    self.collect_output_percepts(child, percepts);
-                }
-            }
+        for (child, _) in concept.0.children() {
+            self.collect_output_percepts(child, percepts);
         }
     }
 
@@ -1446,37 +1314,11 @@ impl Pangine {
         }
 
         if is_root || !self.is_percept(question) {
-            patterns
-                .entry(question.clone())
-                .and_modify(|current| current.add(relevance))
-                .or_insert(relevance);
+            patterns.entry(question.clone()).and_modify(|current| current.add(relevance)).or_insert(relevance);
         }
 
-        let relations = match &question.0.kind {
-            ConceptKind::Correlation { a, b } | ConceptKind::Dependency { a, b } => {
-                [Some(a), Some(b)]
-            }
-            _ => [None, None],
-        };
-
-        for child in relations.into_iter().flatten() {
-            self.collect_question_patterns(
-                child,
-                relevance,
-                false,
-                patterns,
-                contains_percept_cache,
-            );
-        }
-
-        for (child, &child_relevance) in &question.0.subconcepts {
-            self.collect_question_patterns(
-                child,
-                multiply_relevance(relevance, child_relevance),
-                false,
-                patterns,
-                contains_percept_cache,
-            );
+        for (child, child_relevance) in question.0.children() {
+            self.collect_question_patterns(child, multiply_relevance(relevance, child_relevance), false, patterns, contains_percept_cache);
         }
     }
 
@@ -1485,27 +1327,12 @@ impl Pangine {
             return *contains;
         }
 
-        let contains = self.is_percept(concept)
-            || match &concept.0.kind {
-                ConceptKind::Correlation { a, b } | ConceptKind::Dependency { a, b } => {
-                    self.contains_percept(a, cache) || self.contains_percept(b, cache)
-                }
-                _ => concept
-                    .0
-                    .subconcepts
-                    .keys()
-                    .any(|child| self.contains_percept(child, cache)),
-            };
+        let contains = self.is_percept(concept) || concept.0.children().any(|(child, _)| self.contains_percept(child, cache));
         cache.insert(concept.index(), contains);
         contains
     }
 
-    fn projection_summary(
-        &self,
-        experience: &ConceptId,
-        question: &ConceptId,
-        cache: &mut ProjectionCache,
-    ) -> ProjectionSummary {
+    fn projection_summary(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> ProjectionSummary {
         let key = (experience.index(), question.index());
         if let Some(summary) = cache.get(&key) {
             return summary.clone();
@@ -1518,38 +1345,22 @@ impl Pangine {
         }
 
         let mut summary = ProjectionSummary::wildcard();
-        let preserved = match (&experience.0.kind, &question.0.kind) {
-            (ConceptKind::Named(experience), ConceptKind::Named(question)) => {
-                (experience == question).then(ProjectionSummary::wildcard)
-            }
-            (
-                ConceptKind::Correlation {
-                    a: experience_a,
-                    b: experience_b,
-                },
-                ConceptKind::Correlation {
-                    a: question_a,
-                    b: question_b,
-                },
-            )
-            | (
-                ConceptKind::Dependency {
-                    a: experience_a,
-                    b: experience_b,
-                },
-                ConceptKind::Dependency {
-                    a: question_a,
-                    b: question_b,
-                },
-            ) => {
+        let preserved = if let (ConceptKind::Named(experience_name), ConceptKind::Named(question_name)) = (&experience.0.kind, &question.0.kind) {
+            (experience_name == question_name).then(ProjectionSummary::wildcard)
+        } else if let (Some((experience_kind, experience_a, experience_b)), Some((question_kind, question_a, question_b))) =
+            (experience.0.relation(), question.0.relation())
+        {
+            if experience_kind != question_kind {
+                None
+            } else {
                 let a = self.projection_summary(experience_a, question_a, cache);
                 let b = self.projection_summary(experience_b, question_b, cache);
                 Some(a.multiply(&b))
             }
-            (ConceptKind::Anonymous, ConceptKind::Anonymous) => {
-                self.unordered_projection_summary(experience, question, cache)
-            }
-            _ => None,
+        } else if experience.0.shape() == ConceptShape::Unordered && question.0.shape() == ConceptShape::Unordered {
+            self.unordered_projection_summary(experience, question, cache)
+        } else {
+            None
         };
 
         if let Some(preserved) = preserved {
@@ -1559,12 +1370,7 @@ impl Pangine {
         summary
     }
 
-    fn unordered_projection_summary(
-        &self,
-        experience: &ConceptId,
-        question: &ConceptId,
-        cache: &mut ProjectionCache,
-    ) -> Option<ProjectionSummary> {
+    fn unordered_projection_summary(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> Option<ProjectionSummary> {
         let experiences = experience.0.subconcepts.iter().collect::<Vec<_>>();
         let questions = question.0.subconcepts.iter().collect::<Vec<_>>();
         if experiences.len() != questions.len() {
@@ -1579,9 +1385,7 @@ impl Pangine {
                     .iter()
                     .map(|(experience, experience_relevance)| {
                         let mut edge = self.projection_summary(experience, question, cache);
-                        edge.scale(
-                            (experience_relevance.weight() * question_relevance.weight()) as f64,
-                        );
+                        edge.scale((experience_relevance.weight() * question_relevance.weight()) as f64);
                         edge
                     })
                     .collect::<Vec<_>>()
@@ -1625,78 +1429,42 @@ impl Pangine {
             }
         }
 
-        let mut summary = ProjectionSummary {
-            total: forward[state_count - 1],
-            bindings: ProjectionBindingWeights::new(),
-        };
+        let mut summary = ProjectionSummary { total: forward[state_count - 1], bindings: ProjectionBindingWeights::new() };
         for (question_index, row) in edges.into_iter().enumerate() {
             for (experience_index, edge) in row.into_iter().enumerate() {
                 let derivative = derivatives[question_index][experience_index];
-                for (percept, candidates) in edge.bindings {
-                    for (candidate, weight) in candidates {
-                        *summary
-                            .bindings
-                            .entry(percept.clone())
-                            .or_default()
-                            .entry(candidate)
-                            .or_default() += derivative * weight;
-                    }
-                }
+                summary.accumulate_bindings(&edge, derivative);
             }
         }
 
         Some(summary)
     }
+}
 
-    fn add_merge_concept(
-        &mut self,
-        map: &mut ConceptMap,
-        concept: ConceptId,
-        inversion: bool,
-        relevance: Relevance,
-    ) {
+// Relevance accumulation and structural access.
+impl Pangine {
+    fn add_merge_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
         let subconcepts = concept.0.subconcepts.clone();
         if !self.is_percept(&concept) && !subconcepts.is_empty() {
             for (child, child_relevance) in subconcepts {
-                self.add_union_concept(
-                    map,
-                    child,
-                    inversion,
-                    multiply_relevance(relevance, child_relevance),
-                );
+                self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance));
             }
         } else {
             self.add_union_concept(map, concept, inversion, relevance);
         }
     }
 
-    fn add_union_concept(
-        &mut self,
-        map: &mut ConceptMap,
-        concept: ConceptId,
-        inversion: bool,
-        relevance: Relevance,
-    ) {
+    fn add_union_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
         let subconcepts = concept.0.subconcepts.clone();
         if !self.is_percept(&concept) && subconcepts.len() == 1 {
             let (child, child_relevance) = subconcepts.into_iter().next().unwrap();
-            self.add_union_concept(
-                map,
-                child,
-                inversion,
-                multiply_relevance(relevance, child_relevance),
-            );
+            self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance));
         } else {
             self.add_relevance(map, concept, inversion, relevance);
         }
     }
 
-    fn add_relevance_map(
-        &mut self,
-        target: &mut ConceptMap,
-        source: ConceptMap,
-        relevance: Relevance,
-    ) {
+    fn add_relevance_map(&mut self, target: &mut ConceptMap, source: ConceptMap, relevance: Relevance) {
         for (concept, source_relevance) in source {
             let mut current = relevance;
             current.probability = source_relevance.probability;
@@ -1705,13 +1473,7 @@ impl Pangine {
         }
     }
 
-    fn add_relevance(
-        &mut self,
-        map: &mut ConceptMap,
-        concept: ConceptId,
-        inversion: bool,
-        mut relevance: Relevance,
-    ) {
+    fn add_relevance(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, mut relevance: Relevance) {
         if inversion {
             relevance.strength = -relevance.strength;
         }
@@ -1759,26 +1521,15 @@ impl Pangine {
         }
     }
 
-    fn add_relevance_rec(
-        &mut self,
-        map: &mut ConceptMap,
-        concept: ConceptId,
-        inversion: bool,
-        relevance: Relevance,
-    ) {
+    fn add_relevance_rec(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
         let subconcepts = concept.0.subconcepts.clone();
-        let relations = [
-            self.get_correlation_a(&concept),
-            self.get_correlation_b(&concept),
-            self.get_dependency_a(&concept),
-            self.get_dependency_b(&concept),
-        ];
+        let relation = concept.0.relation().map(|(_, a, b)| [a.clone(), b.clone()]);
 
         if subconcepts.len() != 1 {
             self.add_relevance(map, concept, inversion, relevance);
         }
 
-        for child in relations.into_iter().flatten() {
+        for child in relation.into_iter().flatten() {
             self.add_relevance_rec(map, child, inversion, relevance);
         }
 
@@ -1808,25 +1559,19 @@ impl Pangine {
     }
 
     fn correlation<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
-        if !self.owns(concept) {
-            return None;
-        }
-
-        match &concept.0.kind {
-            ConceptKind::Correlation { a, b } => Some((a, b)),
-            _ => None,
-        }
+        self.relation(concept, RelationKind::Correlation)
     }
 
     fn dependency<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
+        self.relation(concept, RelationKind::Dependency)
+    }
+
+    fn relation<'a>(&self, concept: &'a ConceptId, expected: RelationKind) -> Option<(&'a ConceptId, &'a ConceptId)> {
         if !self.owns(concept) {
             return None;
         }
 
-        match &concept.0.kind {
-            ConceptKind::Dependency { a, b } => Some((a, b)),
-            _ => None,
-        }
+        concept.0.relation().and_then(|(kind, a, b)| (kind == expected).then_some((a, b)))
     }
 
     fn relevance_entries(&self, concept: &ConceptId) -> Option<Vec<(Relevance, ConceptId)>> {
@@ -1837,21 +1582,14 @@ impl Pangine {
         Some(if concept.0.subconcepts.is_empty() {
             vec![(Relevance::DEFAULT, concept.clone())]
         } else {
-            concept
-                .0
-                .subconcepts
-                .iter()
-                .map(|(concept, &relevance)| (relevance, concept.clone()))
-                .collect()
+            concept.0.subconcepts.iter().map(|(concept, &relevance)| (relevance, concept.clone())).collect()
         })
     }
+}
 
-    fn format_inner(
-        &self,
-        concept: &ConceptId,
-        evaluate: bool,
-        active: &mut BTreeSet<ConceptId>,
-    ) -> String {
+// Canonical and diagnostic formatting.
+impl Pangine {
+    fn format_inner(&self, concept: &ConceptId, evaluate: bool, active: &mut BTreeSet<ConceptId>) -> String {
         if !active.insert(concept.clone()) {
             return match &concept.0.kind {
                 ConceptKind::Named(name) => format!("[{name}]"),
@@ -1864,10 +1602,7 @@ impl Pangine {
             ConceptKind::Named(name) => format!("[{name}]"),
             ConceptKind::Percept { name } => {
                 if evaluate {
-                    self.get_value(concept).map_or_else(
-                        || "[]".to_owned(),
-                        |value| self.format_inner(&value, evaluate, active),
-                    )
+                    self.get_value(concept).map_or_else(|| "[]".to_owned(), |value| self.format_inner(&value, evaluate, active))
                 } else {
                     format!("['{name}']")
                 }
@@ -1894,9 +1629,7 @@ impl Pangine {
                     if b_paren { ")" } else { "" }
                 )
             }
-            ConceptKind::Anonymous => {
-                self.format_subconcepts(&concept.0.subconcepts, evaluate, active, true)
-            }
+            ConceptKind::Anonymous => self.format_subconcepts(&concept.0.subconcepts, evaluate, active, true),
         };
 
         active.remove(concept);
@@ -1904,15 +1637,10 @@ impl Pangine {
     }
 
     fn needs_dependency_parens(&self, concept: &ConceptId) -> bool {
-        self.get_dependency_a(concept).is_some() || concept.0.subconcepts.len() > 1
+        concept.0.shape() == ConceptShape::Relation(RelationKind::Dependency) || concept.0.subconcepts.len() > 1
     }
 
-    fn format_semantic_operand(
-        &self,
-        concept: &ConceptId,
-        evaluate: bool,
-        active: &mut BTreeSet<ConceptId>,
-    ) -> String {
+    fn format_semantic_operand(&self, concept: &ConceptId, evaluate: bool, active: &mut BTreeSet<ConceptId>) -> String {
         if matches!(concept.0.kind, ConceptKind::Anonymous) {
             let map = &concept.0.subconcepts;
             if Self::can_format_as_implicit_union(map) {
@@ -1924,25 +1652,15 @@ impl Pangine {
     }
 
     fn can_format_as_implicit_union(map: &ConceptMap) -> bool {
-        map.len() > 1
-            && map.values().all(|relevance| {
-                relevance.probability == 1.0
-                    && (relevance.strength == 1.0 || relevance.strength == -1.0)
-            })
+        map.len() > 1 && map.values().all(|relevance| relevance.probability == 1.0 && (relevance.strength == 1.0 || relevance.strength == -1.0))
     }
 
     fn canonical_entries(&self, map: &ConceptMap) -> Vec<(ConceptId, Relevance)> {
-        let mut entries: Vec<_> = map
-            .iter()
-            .map(|(concept, &relevance)| (concept.clone(), relevance))
-            .collect();
+        let mut entries: Vec<_> = map.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect();
 
-        entries.sort_by(
-            |(left_concept, left_relevance), (right_concept, right_relevance)| {
-                compare_canonical_relevance_desc(*left_relevance, *right_relevance)
-                    .then_with(|| self.compare_concepts(left_concept, right_concept))
-            },
-        );
+        entries.sort_by(|(left_concept, left_relevance), (right_concept, right_relevance)| {
+            compare_canonical_relevance_desc(*left_relevance, *right_relevance).then_with(|| self.compare_concepts(left_concept, right_concept))
+        });
         entries
     }
 
@@ -1986,10 +1704,8 @@ impl Pangine {
             return order;
         }
 
-        for ((left_concept, left_relevance), (right_concept, right_relevance)) in self
-            .canonical_entries(left_subconcepts)
-            .into_iter()
-            .zip(self.canonical_entries(right_subconcepts))
+        for ((left_concept, left_relevance), (right_concept, right_relevance)) in
+            self.canonical_entries(left_subconcepts).into_iter().zip(self.canonical_entries(right_subconcepts))
         {
             let order = compare_canonical_relevance_desc(left_relevance, right_relevance);
             if order != Ordering::Equal {
@@ -2002,55 +1718,26 @@ impl Pangine {
             }
         }
 
-        let left_correlation = self.correlation(left);
-        let right_correlation = self.correlation(right);
-        if left_correlation.is_some() != right_correlation.is_some() {
-            return left_correlation.is_some().cmp(&right_correlation.is_some());
-        }
-        if let (Some((left_a, left_b)), Some((right_a, right_b))) =
-            (left_correlation, right_correlation)
-        {
-            let order = self
-                .compare_concepts(left_a, right_a)
-                .then_with(|| self.compare_concepts(left_b, right_b));
-            if order != Ordering::Equal {
-                return order;
+        match (left.0.relation(), right.0.relation()) {
+            (Some((left_kind, left_a, left_b)), Some((right_kind, right_a, right_b))) => {
+                let order =
+                    left_kind.cmp(&right_kind).then_with(|| self.compare_concepts(left_a, right_a)).then_with(|| self.compare_concepts(left_b, right_b));
+                if order != Ordering::Equal {
+                    return order;
+                }
             }
-        }
-
-        let left_dependency = self.dependency(left);
-        let right_dependency = self.dependency(right);
-        if left_dependency.is_some() != right_dependency.is_some() {
-            return left_dependency.is_some().cmp(&right_dependency.is_some());
-        }
-        if let (Some((left_a, left_b)), Some((right_a, right_b))) =
-            (left_dependency, right_dependency)
-        {
-            let order = self
-                .compare_concepts(left_a, right_a)
-                .then_with(|| self.compare_concepts(left_b, right_b));
-            if order != Ordering::Equal {
-                return order;
-            }
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (None, None) => {}
         }
 
         left.cmp(right)
     }
 
-    fn format_subconcepts(
-        &self,
-        map: &ConceptMap,
-        evaluate: bool,
-        active: &mut BTreeSet<ConceptId>,
-        wrap_implicit_union: bool,
-    ) -> String {
+    fn format_subconcepts(&self, map: &ConceptMap, evaluate: bool, active: &mut BTreeSet<ConceptId>, wrap_implicit_union: bool) -> String {
         let use_implicit_union = Self::can_format_as_implicit_union(map);
         let use_relevance = !use_implicit_union
-            && (map.len() > 1
-                || map.values().any(|relevance| {
-                    relevance.probability != 1.0
-                        || (relevance.strength != 1.0 && relevance.strength != -1.0)
-                }));
+            && (map.len() > 1 || map.values().any(|relevance| relevance.probability != 1.0 || (relevance.strength != 1.0 && relevance.strength != -1.0)));
         let mut out = String::new();
 
         for (index, (concept, relevance)) in self.canonical_entries(map).into_iter().enumerate() {
@@ -2071,7 +1758,14 @@ impl Pangine {
             }
 
             out.push_str(&format_relevance_strength(relevance));
+            let wrap_dependency = use_implicit_union && concept.0.shape() == ConceptShape::Relation(RelationKind::Dependency);
+            if wrap_dependency {
+                out.push('(');
+            }
             out.push_str(&self.format_inner(&concept, evaluate, active));
+            if wrap_dependency {
+                out.push(')');
+            }
         }
 
         if use_implicit_union && wrap_implicit_union {
@@ -2083,15 +1777,9 @@ impl Pangine {
         out
     }
 
-    fn format_debug_console_line(
-        &self,
-        relevance: Relevance,
-        concept: &ConceptId,
-        evaluate: bool,
-    ) -> String {
+    fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId, evaluate: bool) -> String {
         let mut out = String::from("  ");
-        let add_separator = relevance.probability != 1.0
-            || (relevance.strength != 1.0 && relevance.strength != -1.0);
+        let add_separator = relevance.probability != 1.0 || (relevance.strength != 1.0 && relevance.strength != -1.0);
 
         if relevance.strength == -1.0 {
             out.push('!');
@@ -2122,11 +1810,7 @@ struct Parser {
 
 impl Parser {
     fn new(script: &str, params: &[ConceptId]) -> Self {
-        Self {
-            chars: script.chars().collect(),
-            pos: 0,
-            params: params.iter().cloned().collect(),
-        }
+        Self { chars: script.chars().collect(), pos: 0, params: params.iter().cloned().collect() }
     }
 
     fn peek(&self) -> Option<char> {
@@ -2154,11 +1838,7 @@ impl Parser {
 
     fn consume_str(&mut self, expected: &str) -> bool {
         let len = expected.chars().count();
-        if expected
-            .chars()
-            .enumerate()
-            .all(|(i, ch)| self.chars.get(self.pos + i) == Some(&ch))
-        {
+        if expected.chars().enumerate().all(|(i, ch)| self.chars.get(self.pos + i) == Some(&ch)) {
             self.pos += len;
             true
         } else {
@@ -2167,9 +1847,7 @@ impl Parser {
     }
 
     fn expect(&mut self, expected: char) -> ParseResult<()> {
-        self.consume(expected)
-            .then_some(())
-            .ok_or(ParseError::InvalidSyntax)
+        self.consume(expected).then_some(()).ok_or(ParseError::InvalidSyntax)
     }
 
     fn skip_ws(&mut self) {
@@ -2262,11 +1940,7 @@ impl Parser {
             return None;
         }
 
-        let Ok(value) = self.chars[start..self.pos]
-            .iter()
-            .collect::<String>()
-            .parse()
-        else {
+        let Ok(value) = self.chars[start..self.pos].iter().collect::<String>().parse() else {
             self.pos = start;
             return None;
         };
@@ -2358,24 +2032,15 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
     }
 
     statements.push(&script[start..]);
-    ScriptStatements {
-        items: statements,
-        has_semicolons,
-    }
+    ScriptStatements { items: statements, has_semicolons }
 }
 
 fn multiply_relevance(left: Relevance, right: Relevance) -> Relevance {
-    Relevance::new(
-        left.probability * right.probability,
-        left.strength * right.strength,
-    )
+    Relevance::new(left.probability * right.probability, left.strength * right.strength)
 }
 
 fn projection_relevance(experience: Relevance, question: Relevance, score: f64) -> Relevance {
-    Relevance::new(
-        experience.probability * question.probability,
-        experience.strength * question.strength * score as f32,
-    )
+    Relevance::new(experience.probability * question.probability, experience.strength * question.strength * score as f32)
 }
 
 fn compare_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
@@ -2383,12 +2048,7 @@ fn compare_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
         .probability
         .partial_cmp(&left.probability)
         .unwrap_or(Ordering::Equal)
-        .then_with(|| {
-            right
-                .strength
-                .partial_cmp(&left.strength)
-                .unwrap_or(Ordering::Equal)
-        })
+        .then_with(|| right.strength.partial_cmp(&left.strength).unwrap_or(Ordering::Equal))
 }
 
 fn compare_canonical_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
@@ -2398,19 +2058,8 @@ fn compare_canonical_relevance_desc(left: Relevance, right: Relevance) -> Orderi
         .probability
         .partial_cmp(&left.probability)
         .unwrap_or(Ordering::Equal)
-        .then_with(|| {
-            right
-                .strength
-                .abs()
-                .partial_cmp(&left.strength.abs())
-                .unwrap_or(Ordering::Equal)
-        })
-        .then_with(|| {
-            right
-                .strength
-                .partial_cmp(&left.strength)
-                .unwrap_or(Ordering::Equal)
-        })
+        .then_with(|| right.strength.abs().partial_cmp(&left.strength.abs()).unwrap_or(Ordering::Equal))
+        .then_with(|| right.strength.partial_cmp(&left.strength).unwrap_or(Ordering::Equal))
 }
 
 fn format_relevance_strength(relevance: Relevance) -> String {
@@ -2449,9 +2098,7 @@ mod tests {
         assert!(help.contains("['name'] /= expression"));
         assert!(help.contains("['name'] ~= expression     Experience"));
         assert!(help.contains("['name'] @ expression      Bind outputs; return the question shape"));
-        assert!(help.contains(
-            "$operand                   Recursively evaluate every percept in the operand"
-        ));
+        assert!(help.contains("$operand                   Recursively evaluate every percept in the operand"));
         assert!(help.contains("Stores exact recursive structure"));
         assert!(help.contains("wildcard projections lazily"));
         assert!(help.contains("expression; expression"));

@@ -36,10 +36,7 @@ fn references_namespaces_params_and_parentheses() {
 
     let test1 = must_ref(&mut pangine, "[test1]");
     let test2 = must_ref(&mut pangine, "[test2]");
-    let with_params = pangine
-        .reference_concept_with_params("{[test3]->[%]}*[%]", &[test1, test2])
-        .unwrap()
-        .unwrap();
+    let with_params = pangine.reference_concept_with_params("{[test3]->[%]}*[%]", &[test1, test2]).unwrap().unwrap();
     let without_params = must_ref(&mut pangine, "{[test3]->[test1]}*[test2]");
     assert_eq!(with_params, without_params);
 
@@ -57,10 +54,7 @@ fn references_namespaces_params_and_parentheses() {
     assert_eq!(question, question_again);
     assert_ne!(question, question_long);
     assert_ne!(question_long, question_dash);
-    assert!(matches!(
-        pangine.reference_concept("[??BAD_NAME]"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(pangine.reference_concept("[??BAD_NAME]"), Err(ParseError::InvalidSyntax)));
     assert_ne!(concept_a, percept_a);
     assert_ne!(concept_a, must_ref(&mut pangine, "[?A]"));
 
@@ -79,10 +73,7 @@ fn public_api_surface_matches_1x_boundaries() {
     let mut pangine = Pangine::new();
 
     let percept = pangine.reference_percept("direct");
-    assert_eq!(
-        pangine.reference_concept("['direct']").unwrap(),
-        Some(percept.clone())
-    );
+    assert_eq!(pangine.reference_concept("['direct']").unwrap(), Some(percept.clone()));
     assert_eq!(pangine.get_percept(&percept), Some(percept.clone()));
     assert_eq!(pangine.get_value(&percept), None);
 
@@ -102,10 +93,7 @@ fn public_api_surface_matches_1x_boundaries() {
     let memory = pangine.reference_percept("memory");
     let experience = must_ref(&mut pangine, "{[A]->[B]}");
     let experienced = pangine.perform_experience(&memory, Some(&experience));
-    assert_eq!(
-        experienced,
-        Some(must_ref(&mut pangine, "<100%{[A]->[B]}, 100%[A], 100%[B]>"))
-    );
+    assert_eq!(experienced, Some(must_ref(&mut pangine, "<100%{[A]->[B]}, 100%[A], 100%[B]>")));
     assert_eq!(pangine.get_value(&memory), None);
 
     let left = pangine.reference_percept("left");
@@ -129,51 +117,30 @@ fn correlations_dependencies_and_relevance_are_canonical() {
 
     let nested = must_ref(&mut pangine, "{{[A]->['B']}->{[?]->[D]}}");
     let question_to_d = must_ref(&mut pangine, "{[?]->[D]}");
-    assert_eq!(
-        pangine.get_correlation_a(&nested),
-        Some(correlation.clone())
-    );
+    assert_eq!(pangine.get_correlation_a(&nested), Some(correlation.clone()));
     assert_eq!(pangine.get_correlation_b(&nested), Some(question_to_d));
-    assert!(pangine
-        .reference_concept("{{[A]->[B]}->[C]}")
-        .unwrap()
-        .is_some());
-    assert!(pangine
-        .reference_concept("{[C]->{[A]->[B]}}")
-        .unwrap()
-        .is_some());
+    assert!(pangine.reference_concept("{{[A]->[B]}->[C]}").unwrap().is_some());
+    assert!(pangine.reference_concept("{[C]->{[A]->[B]}}").unwrap().is_some());
 
     let dependency = must_ref(&mut pangine, "?[A]:[B]");
     let b = must_ref(&mut pangine, "[B]");
     assert_eq!(pangine.get_dependency_a(&dependency), Some(a));
     assert_eq!(pangine.get_dependency_b(&dependency), Some(b));
     let nested_dependency = must_ref(&mut pangine, "?(?[A]:[B]):(?[C]:[D])");
-    assert_eq!(
-        pangine.get_dependency_a(&nested_dependency),
-        Some(dependency)
-    );
+    assert_eq!(pangine.get_dependency_a(&nested_dependency), Some(dependency));
 
     let relevance1 = must_ref(&mut pangine, "<50%[A], 50%[B]>");
     let relevance2 = must_ref(&mut pangine, "<25%[A], 25%[B]>");
     let relevance3 = must_ref(&mut pangine, "<25%[A], 50%[B], 50%[B]>");
     let relevance4 = must_ref(&mut pangine, "<25%[A], 25%[B], 75%[B]>");
-    let relevance5 = must_ref(
-        &mut pangine,
-        "<25%[A]*[B], 25%[B]*[A], 10%{[C]->[D]}, 10%{[C]->[D]}>",
-    );
-    let relevance6 = must_ref(
-        &mut pangine,
-        "<15%[B]*[A], 35%[B]*[A], 5%{[C]->[D]}, 15%{[C]->[D]}>",
-    );
+    let relevance5 = must_ref(&mut pangine, "<25%[A]*[B], 25%[B]*[A], 10%{[C]->[D]}, 10%{[C]->[D]}>");
+    let relevance6 = must_ref(&mut pangine, "<15%[B]*[A], 35%[B]*[A], 5%{[C]->[D]}, 15%{[C]->[D]}>");
 
     assert_ne!(relevance1, relevance2);
     assert_ne!(relevance2, relevance3);
     assert_eq!(relevance3, relevance4);
     assert_eq!(relevance5, relevance6);
-    assert!(pangine
-        .reference_concept("{<25%[A], 25%[B]>->[C]}")
-        .unwrap()
-        .is_some());
+    assert!(pangine.reference_concept("{<25%[A], 25%[B]>->[C]}").unwrap().is_some());
 }
 
 // Parity anchors:
@@ -189,83 +156,36 @@ fn union_inversion_normalization_and_null_removal_match_1x() {
     assert_ne!(a, b);
     assert_ne!(union_ab, b);
     assert_eq!(union_ab, must_ref(&mut pangine, "[B]*[A]"));
-    assert_eq!(
-        must_ref(&mut pangine, "([B]*[A])*([C]*[D])"),
-        must_ref(&mut pangine, "([D]*[C])*([A]*[B])")
-    );
+    assert_eq!(must_ref(&mut pangine, "([B]*[A])*([C]*[D])"), must_ref(&mut pangine, "([D]*[C])*([A]*[B])"));
     assert_eq!(
         must_ref(&mut pangine, "([D]*[C])*(([A]*[B])*[E]*[F]*([A]*[B]))"),
-        must_ref(
-            &mut pangine,
-            "<100%x2[A], 100%x2[B], 100%[C], 100%[D], 100%[E], 100%[F]>"
-        )
+        must_ref(&mut pangine, "<100%x2[A], 100%x2[B], 100%[C], 100%[D], 100%[E], 100%[F]>")
     );
 
     let inverted_a = must_ref(&mut pangine, "![A]");
     assert_ne!(a, inverted_a);
     assert_eq!(a, must_ref(&mut pangine, "!![A]"));
     assert_eq!(a, must_ref(&mut pangine, "!(!([A]))"));
-    assert_eq!(
-        must_ref(&mut pangine, "!([A]*[B])"),
-        must_ref(&mut pangine, "!(!!([B]*[A]))")
-    );
+    assert_eq!(must_ref(&mut pangine, "!([A]*[B])"), must_ref(&mut pangine, "!(!!([B]*[A]))"));
     assert_ne!(must_ref(&mut pangine, "!([A]*[B])"), union_ab);
 
     assert_eq!(must_ref(&mut pangine, "<x-1[A]>"), inverted_a);
-    assert_eq!(
-        must_ref(&mut pangine, "<x-1[A], x-1[B]>"),
-        must_ref(&mut pangine, "!([A]*[B])")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "<x-2[A], x-2[B]>*([A]*[B])"),
-        must_ref(&mut pangine, "!([A]*[B])")
-    );
-    assert_eq!(
-        pangine
-            .reference_concept("<x-2([A]*[B])>*<x2([A]*[B])>")
-            .unwrap(),
-        None
-    );
+    assert_eq!(must_ref(&mut pangine, "<x-1[A], x-1[B]>"), must_ref(&mut pangine, "!([A]*[B])"));
+    assert_eq!(must_ref(&mut pangine, "<x-2[A], x-2[B]>*([A]*[B])"), must_ref(&mut pangine, "!([A]*[B])"));
+    assert_eq!(pangine.reference_concept("<x-2([A]*[B])>*<x2([A]*[B])>").unwrap(), None);
 
-    assert_eq!(
-        must_ref(&mut pangine, "!([A])*!([B])"),
-        must_ref(&mut pangine, "![A]*(![B])")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "![A]*(![B])"),
-        must_ref(&mut pangine, "![A]*![B]")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "![A]*![B]"),
-        must_ref(&mut pangine, "(![A])*(![B])")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "?![A]*[B]:[C]"),
-        must_ref(&mut pangine, "?(![A]*[B]):[C]")
-    );
+    assert_eq!(must_ref(&mut pangine, "!([A])*!([B])"), must_ref(&mut pangine, "![A]*(![B])"));
+    assert_eq!(must_ref(&mut pangine, "![A]*(![B])"), must_ref(&mut pangine, "![A]*![B]"));
+    assert_eq!(must_ref(&mut pangine, "![A]*![B]"), must_ref(&mut pangine, "(![A])*(![B])"));
+    assert_eq!(must_ref(&mut pangine, "?![A]*[B]:[C]"), must_ref(&mut pangine, "?(![A]*[B]):[C]"));
 
-    assert_eq!(
-        must_ref(&mut pangine, "!([A]*[B])*!([C]*[D])"),
-        must_ref(&mut pangine, "(![A]*![B]*![C]*![D])")
-    );
-    assert_eq!(
-        pangine.reference_concept("!([A]*[B])*([A]*[B])").unwrap(),
-        None
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "([A]*[B]*[C])*!([A]*[B])"),
-        must_ref(&mut pangine, "[C]")
-    );
+    assert_eq!(must_ref(&mut pangine, "!([A]*[B])*!([C]*[D])"), must_ref(&mut pangine, "(![A]*![B]*![C]*![D])"));
+    assert_eq!(pangine.reference_concept("!([A]*[B])*([A]*[B])").unwrap(), None);
+    assert_eq!(must_ref(&mut pangine, "([A]*[B]*[C])*!([A]*[B])"), must_ref(&mut pangine, "[C]"));
 
     assert_eq!(pangine.reference_concept("[A]*![A]").unwrap(), None);
-    assert_eq!(
-        pangine.reference_concept("([A]*[B])*!([A]*[B])").unwrap(),
-        None
-    );
-    assert!(matches!(
-        pangine.reference_concept("([A]*![B})*(![A]*[B])"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert_eq!(pangine.reference_concept("([A]*[B])*!([A]*[B])").unwrap(), None);
+    assert!(matches!(pangine.reference_concept("([A]*![B})*(![A]*[B])"), Err(ParseError::InvalidSyntax)));
 }
 
 // Parity anchors:
@@ -275,51 +195,24 @@ fn union_inversion_normalization_and_null_removal_match_1x() {
 fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
     let mut pangine = Pangine::new();
 
-    assert_eq!(
-        must_ref(&mut pangine, "['test'] *= [A]"),
-        must_ref(&mut pangine, "[A]")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "['test'] *= [B]"),
-        must_ref(&mut pangine, "[A]*[B]")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "['test'] *= ![A]"),
-        must_ref(&mut pangine, "[B]")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "$['test']"),
-        must_ref(&mut pangine, "[B]")
-    );
+    assert_eq!(must_ref(&mut pangine, "['test'] *= [A]"), must_ref(&mut pangine, "[A]"));
+    assert_eq!(must_ref(&mut pangine, "['test'] *= [B]"), must_ref(&mut pangine, "[A]*[B]"));
+    assert_eq!(must_ref(&mut pangine, "['test'] *= ![A]"), must_ref(&mut pangine, "[B]"));
+    assert_eq!(must_ref(&mut pangine, "$['test']"), must_ref(&mut pangine, "[B]"));
 
     let experience1 = must_ref(&mut pangine, "['mind01'] ~= {[tigger]->[meows]}");
     let experience2 = must_ref(&mut pangine, "['mind01'] ~= {[tigger]->[purrs]}");
-    let expected2 = must_ref(
-        &mut pangine,
-        "<100%{[tigger]->[meows]}, 100%{[tigger]->[purrs]}, 100%x2.0[tigger], 100%[meows], 100%[purrs]>",
-    );
+    let expected2 = must_ref(&mut pangine, "<100%{[tigger]->[meows]}, 100%{[tigger]->[purrs]}, 100%x2.0[tigger], 100%[meows], 100%[purrs]>");
     let experience3 = must_ref(&mut pangine, "['mind01'] ~= {[tigger]->[purrs]}");
-    let expected3a = must_ref(
-        &mut pangine,
-        "<100%{[tigger]->[meows]}, 100%x2{[tigger]->[purrs]}, 100%[tigger], 100%x2[tigger], 100%[meows], 100%x2[purrs]>",
-    );
-    let expected3b = must_ref(
-        &mut pangine,
-        "<100%{[tigger]->[meows]}, 100%x2{[tigger]->[purrs]}, 100%x3.0[tigger], 100%[meows], 100%x2[purrs]>",
-    );
+    let expected3a = must_ref(&mut pangine, "<100%{[tigger]->[meows]}, 100%x2{[tigger]->[purrs]}, 100%[tigger], 100%x2[tigger], 100%[meows], 100%x2[purrs]>");
+    let expected3b = must_ref(&mut pangine, "<100%{[tigger]->[meows]}, 100%x2{[tigger]->[purrs]}, 100%x3.0[tigger], 100%[meows], 100%x2[purrs]>");
 
     assert_ne!(experience1, experience2);
     assert_eq!(experience2, expected2);
     assert_ne!(experience3, experience2);
     assert_eq!(experience3, expected3a);
     assert_eq!(experience3, expected3b);
-    assert_ne!(
-        expected3b,
-        must_ref(
-            &mut pangine,
-            "<100%{[tigger]->[meows]}, 100%x2.001{[tigger]->[purrs]}>"
-        )
-    );
+    assert_ne!(expected3b, must_ref(&mut pangine, "<100%{[tigger]->[meows]}, 100%x2.001{[tigger]->[purrs]}>"));
     let single_b = must_ref(&mut pangine, "['A'] ~= [B]");
     let double_b = must_ref(&mut pangine, "['A'] ~= [B]");
     assert_ne!(single_b, double_b);
@@ -327,15 +220,9 @@ fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
 
     let recursive = must_ref(&mut pangine, "['dog_eats_dog'] = {{[dog]->[eats]}->[dog]}");
     must_ref(&mut pangine, "['wisdom'] ~= ['dog_eats_dog']");
-    must_ref(
-        &mut pangine,
-        "['obvious'] ~= {{['dog_eats_dog']->[is]}->['obvious']}",
-    );
+    must_ref(&mut pangine, "['obvious'] ~= {{['dog_eats_dog']->[is]}->['obvious']}");
     let recursive_a = pangine.get_correlation_a(&recursive).unwrap();
-    assert_eq!(
-        pangine.get_correlation_a(&recursive_a),
-        pangine.get_correlation_b(&recursive)
-    );
+    assert_eq!(pangine.get_correlation_a(&recursive_a), pangine.get_correlation_b(&recursive));
 
     let okay = must_ref(&mut pangine, "['okay'] ~= {[A]->[B]}");
     let okay_twice = must_ref(&mut pangine, "['okay'] ~= {[A]->[B]}");
@@ -343,30 +230,12 @@ fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
     assert_ne!(okay, okay_twice);
     assert_eq!(still_okay, okay);
 
-    assert!(pangine
-        .reference_concept("['mind'] ~= {{[A]->[species_is]}->[cat]}")
-        .unwrap()
-        .is_some());
-    assert!(pangine
-        .reference_concept("['mind'] ~= {{[B]->[species_is]}->[dog]}")
-        .unwrap()
-        .is_some());
-    assert!(pangine
-        .reference_concept("['mind'] ~= {{[A]->[sound_is]}->[meow]}")
-        .unwrap()
-        .is_some());
-    assert!(pangine
-        .reference_concept("['mind'] ~= {{[B]->[sound_is]}->[bark]}")
-        .unwrap()
-        .is_some());
-    assert!(pangine
-        .reference_concept("['mind'] ~= {{[C]->[species_is]}->[cat]}")
-        .unwrap()
-        .is_some());
-    assert!(pangine
-        .reference_concept("['mind'] ~= {{[C]->[sound_is]}->['output']}")
-        .unwrap()
-        .is_some());
+    assert!(pangine.reference_concept("['mind'] ~= {{[A]->[species_is]}->[cat]}").unwrap().is_some());
+    assert!(pangine.reference_concept("['mind'] ~= {{[B]->[species_is]}->[dog]}").unwrap().is_some());
+    assert!(pangine.reference_concept("['mind'] ~= {{[A]->[sound_is]}->[meow]}").unwrap().is_some());
+    assert!(pangine.reference_concept("['mind'] ~= {{[B]->[sound_is]}->[bark]}").unwrap().is_some());
+    assert!(pangine.reference_concept("['mind'] ~= {{[C]->[species_is]}->[cat]}").unwrap().is_some());
+    assert!(pangine.reference_concept("['mind'] ~= {{[C]->[sound_is]}->['output']}").unwrap().is_some());
     assert!(pangine.reference_concept("[meow]").unwrap().is_some());
 }
 
@@ -375,18 +244,9 @@ fn correlation_questions_keep_each_output_binding_separate() {
     let mut pangine = Pangine::new();
     must_ref(&mut pangine, "['test'] ~= {[A]->[B]}");
 
-    assert_eq!(
-        must_ref(&mut pangine, "['test'] @ {['1']->[C]}*{['2']->[B]}"),
-        must_ref(&mut pangine, "{['1']->[C]}*{['2']->[B]}")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "$['1']"),
-        must_ref(&mut pangine, "[A]")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "$['2']"),
-        must_ref(&mut pangine, "<x2[A]>")
-    );
+    assert_eq!(must_ref(&mut pangine, "['test'] @ {['1']->[C]}*{['2']->[B]}"), must_ref(&mut pangine, "{['1']->[C]}*{['2']->[B]}"));
+    assert_eq!(must_ref(&mut pangine, "$['1']"), must_ref(&mut pangine, "[A]"));
+    assert_eq!(must_ref(&mut pangine, "$['2']"), must_ref(&mut pangine, "<x2[A]>"));
 }
 
 // Parity anchors:
@@ -396,9 +256,7 @@ fn correlation_questions_keep_each_output_binding_separate() {
 fn parse_text_matches_1x_word_union_behavior() {
     let mut pangine = Pangine::new();
     let text1 = pangine.parse_text("simple parse text test").unwrap();
-    let text2 = pangine
-        .parse_text("simple text test %%%%% $$parse")
-        .unwrap();
+    let text2 = pangine.parse_text("simple text test %%%%% $$parse").unwrap();
     let expected = must_ref(&mut pangine, "[simple]*[parse]*[text]*[test]");
 
     assert_eq!(text1, text2);
@@ -417,19 +275,11 @@ fn formatting_round_trips_and_relevance_map_orders_like_1x() {
     assert_eq!(concept, reparsed);
 
     let relevance = must_ref(&mut pangine, "[A]*[A]*[C]*[C]*[B]*[C]");
-    let strengths: Vec<_> = pangine
-        .get_relevance_map(&relevance)
-        .into_iter()
-        .map(|(relevance, _)| relevance.strength)
-        .collect();
+    let strengths: Vec<_> = pangine.get_relevance_map(&relevance).into_iter().map(|(relevance, _)| relevance.strength).collect();
     assert_eq!(strengths, vec![3.0, 2.0, 1.0]);
 
     let equal_relevance = must_ref(&mut pangine, "[A]*[C]*[B]");
-    let strengths: Vec<_> = pangine
-        .get_relevance_map(&equal_relevance)
-        .into_iter()
-        .map(|(relevance, _)| relevance.strength)
-        .collect();
+    let strengths: Vec<_> = pangine.get_relevance_map(&equal_relevance).into_iter().map(|(relevance, _)| relevance.strength).collect();
     assert_eq!(strengths, vec![1.0, 1.0, 1.0]);
 
     let single = must_ref(&mut pangine, "[A]");
@@ -449,23 +299,14 @@ fn debug_console_rows_match_1x_display_rules() {
     assert_eq!(pangine.debug_console_lines(None, false), vec!["  []"]);
 
     let relevance = must_ref(&mut pangine, "<50%[A], x2[B], x-1[C]>");
-    assert_eq!(
-        pangine.debug_console_lines(Some(&relevance), false),
-        vec!["  50% [A]", "  x2 [B]", "  ![C]"]
-    );
+    assert_eq!(pangine.debug_console_lines(Some(&relevance), false), vec!["  50% [A]", "  x2 [B]", "  ![C]"]);
 
     let combined_relevance = must_ref(&mut pangine, "<50%x2[a]>");
-    assert_eq!(
-        pangine.debug_console_lines(Some(&combined_relevance), false),
-        vec!["  50%x2 [a]"]
-    );
+    assert_eq!(pangine.debug_console_lines(Some(&combined_relevance), false), vec!["  50%x2 [a]"]);
 
     must_ref(&mut pangine, "['test'] = [A]");
     let percept = must_ref(&mut pangine, "['test']");
-    assert_eq!(
-        pangine.debug_console_lines(Some(&percept), true),
-        vec!["  [A]"]
-    );
+    assert_eq!(pangine.debug_console_lines(Some(&percept), true), vec!["  [A]"]);
 }
 
 // Parity anchors:
@@ -474,31 +315,13 @@ fn debug_console_rows_match_1x_display_rules() {
 #[test]
 fn historical_1x_scripts_return_success() {
     let scripts = [
-        (
-            "test_pangine.pae",
-            include_str!("fixtures/1x/test_pangine.pae"),
-        ),
+        ("test_pangine.pae", include_str!("fixtures/1x/test_pangine.pae")),
         ("test_merge.pae", include_str!("fixtures/1x/test_merge.pae")),
-        (
-            "test_syllogism.pae",
-            include_str!("fixtures/1x/test_syllogism.pae"),
-        ),
-        (
-            "test_counting.pae",
-            include_str!("fixtures/1x/test_counting.pae"),
-        ),
-        (
-            "test_experience.pae",
-            include_str!("fixtures/1x/test_experience.pae"),
-        ),
-        (
-            "test_decision.pae",
-            include_str!("fixtures/1x/test_decision.pae"),
-        ),
-        (
-            "test_rule110.pae",
-            include_str!("fixtures/1x/test_rule110.pae"),
-        ),
+        ("test_syllogism.pae", include_str!("fixtures/1x/test_syllogism.pae")),
+        ("test_counting.pae", include_str!("fixtures/1x/test_counting.pae")),
+        ("test_experience.pae", include_str!("fixtures/1x/test_experience.pae")),
+        ("test_decision.pae", include_str!("fixtures/1x/test_decision.pae")),
+        ("test_rule110.pae", include_str!("fixtures/1x/test_rule110.pae")),
     ];
 
     for (name, script) in scripts {
@@ -513,10 +336,7 @@ fn historical_1x_scripts_return_success() {
 fn historical_1x_question_fixture_is_not_a_recursive_projection_fixture() {
     let mut pangine = Pangine::new();
     let mut details = Vec::new();
-    let result = pangine.parse_script_text_with_details(
-        include_str!("fixtures/1x/test_question.pae"),
-        &mut details,
-    );
+    let result = pangine.parse_script_text_with_details(include_str!("fixtures/1x/test_question.pae"), &mut details);
     let details = String::from_utf8(details).expect("details should be UTF-8");
 
     assert!(matches!(result, Err(ParseError::InvalidSyntax)));
@@ -524,8 +344,5 @@ fn historical_1x_question_fixture_is_not_a_recursive_projection_fixture() {
 }
 
 fn must_ref(pangine: &mut Pangine, script: &str) -> ConceptId {
-    pangine
-        .reference_concept(script)
-        .unwrap()
-        .unwrap_or_else(|| panic!("failed to reference concept: {script}"))
+    pangine.reference_concept(script).unwrap().unwrap_or_else(|| panic!("failed to reference concept: {script}"))
 }

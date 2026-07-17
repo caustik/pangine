@@ -23,19 +23,10 @@ fn question_keeps_correlation_output_bindings_distinct() {
 
     must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
     let question = must_ref(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->['Y']}");
-    assert_eq!(
-        question,
-        must_ref(&mut pangine, "{['X']->[A]}*{[B]->['Y']}")
-    );
+    assert_eq!(question, must_ref(&mut pangine, "{['X']->[A]}*{[B]->['Y']}"));
 
     let answer = must_ref(&mut pangine, "$['memory'] @ {['X']->[A]}*{[B]->['Y']}");
-    assert_eq!(
-        answer,
-        must_ref(
-            &mut pangine,
-            "{<x12[C], x4[B]>->[A]}*{[B]-><x12[D], x4[A]>}",
-        )
-    );
+    assert_eq!(answer, must_ref(&mut pangine, "{<x12[C], x4[B]>->[A]}*{[B]-><x12[D], x4[A]>}",));
 
     let x = must_ref(&mut pangine, "$['X']");
     let x_candidates = named_relevance(&pangine, &x);
@@ -56,13 +47,7 @@ fn question_preserves_outer_correlation_context_across_unordered_children() {
 
     must_ref(&mut pangine, "['memory'] ~= {([C]*[A])->([B]*[D])}");
     let answer = must_ref(&mut pangine, "$['memory'] @ {(['X']*[A])->([B]*['Y'])}");
-    assert_eq!(
-        answer,
-        must_ref(
-            &mut pangine,
-            "{[A]<x16[C], x8[A], [B], [D]>->[B]<x16[D], x8[B], [A], [C]>}",
-        )
-    );
+    assert_eq!(answer, must_ref(&mut pangine, "{[A]<x16[C], x8[A], [B], [D]>->[B]<x16[D], x8[B], [A], [C]>}",));
 
     let x = must_ref(&mut pangine, "$['X']");
     let x_candidates = named_relevance(&pangine, &x);
@@ -86,13 +71,7 @@ fn evaluation_recursively_resolves_percepts_inside_a_shape() {
     must_ref(&mut pangine, "['A'] = [resolved_a]");
     must_ref(&mut pangine, "['B'] = ['A']->[resolved_b]");
 
-    assert_eq!(
-        must_ref(&mut pangine, "$(?['B']:{[fixed]->['A']})"),
-        must_ref(
-            &mut pangine,
-            "?({[resolved_a]->[resolved_b]}):({[fixed]->[resolved_a]})",
-        )
-    );
+    assert_eq!(must_ref(&mut pangine, "$(?['B']:{[fixed]->['A']})"), must_ref(&mut pangine, "?({[resolved_a]->[resolved_b]}):({[fixed]->[resolved_a]})",));
 }
 
 #[test]
@@ -161,10 +140,7 @@ fn question_clears_an_output_when_no_projection_can_bind_it() {
 
     must_ref(&mut pangine, "['X'] = [old]");
     must_ref(&mut pangine, "['memory'] ~= [A]");
-    assert_eq!(
-        must_ref(&mut pangine, "['memory'] @ {['X']->[B]}"),
-        must_ref(&mut pangine, "{['X']->[B]}")
-    );
+    assert_eq!(must_ref(&mut pangine, "['memory'] @ {['X']->[B]}"), must_ref(&mut pangine, "{['X']->[B]}"));
     assert!(pangine.reference_concept("$['X']").unwrap().is_none());
 }
 
@@ -175,10 +151,7 @@ fn standalone_wildcard_question_can_bind_a_single_atomic_experience() {
     must_ref(&mut pangine, "['memory'] ~= [A]");
     ask_question(&mut pangine, "['memory'] @ ['X']");
 
-    assert_eq!(
-        must_ref(&mut pangine, "$['X']"),
-        must_ref(&mut pangine, "[A]")
-    );
+    assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "[A]"));
 }
 
 #[test]
@@ -196,23 +169,25 @@ fn experience_stores_linear_structure_instead_of_wildcard_closure() {
 }
 
 #[test]
+fn experience_recurses_through_ordered_and_unordered_structure() {
+    let mut pangine = Pangine::new();
+    let value = must_ref(&mut pangine, "['memory'] ~= ?({[A]->[B]}):([C][D])");
+    let entries = pangine.get_relevance_map(&value);
+
+    assert_eq!(entries.len(), 7);
+    for expected in ["?({[A]->[B]}):([C][D])", "{[A]->[B]}", "[A]", "[B]", "[C][D]", "[C]", "[D]"] {
+        let expected = must_ref(&mut pangine, expected);
+        assert!(entries.iter().any(|(relevance, concept)| { *relevance == Relevance::DEFAULT && *concept == expected }));
+    }
+}
+
+#[test]
 fn wide_unordered_projection_uses_folded_matching() {
     let mut pangine = Pangine::new();
     let width = 20;
-    let experience = (0..width)
-        .map(|index| format!("{{[V{index}]->[K{index}]}}"))
-        .collect::<Vec<_>>()
-        .join("*");
-    let question = (0..width)
-        .map(|index| {
-            if index == 0 {
-                "{['X']->[K0]}".to_owned()
-            } else {
-                format!("{{[V{index}]->[K{index}]}}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("*");
+    let experience = (0..width).map(|index| format!("{{[V{index}]->[K{index}]}}")).collect::<Vec<_>>().join("*");
+    let question =
+        (0..width).map(|index| if index == 0 { "{['X']->[K0]}".to_owned() } else { format!("{{[V{index}]->[K{index}]}}") }).collect::<Vec<_>>().join("*");
 
     must_ref(&mut pangine, &format!("['memory'] ~= {experience}"));
     ask_question(&mut pangine, &format!("['memory'] @ {question}"));
@@ -220,18 +195,11 @@ fn wide_unordered_projection_uses_folded_matching() {
     let result = must_ref(&mut pangine, "$['X']");
     let candidates = named_relevance(&pangine, &result);
     assert_eq!(candidates[0].1, "V0");
-    assert!(candidates
-        .iter()
-        .all(|(relevance, _)| relevance.weight().is_finite()));
+    assert!(candidates.iter().all(|(relevance, _)| relevance.weight().is_finite()));
 }
 
 fn candidate_weight(candidates: &[(Relevance, String)], name: &str) -> f32 {
-    candidates
-        .iter()
-        .find(|(_, candidate)| candidate == name)
-        .unwrap_or_else(|| panic!("missing candidate {name:?}"))
-        .0
-        .weight()
+    candidates.iter().find(|(_, candidate)| candidate == name).unwrap_or_else(|| panic!("missing candidate {name:?}")).0.weight()
 }
 
 fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, String)> {
@@ -239,9 +207,7 @@ fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, St
         .get_relevance_map(concept)
         .into_iter()
         .map(|(relevance, concept)| {
-            let name = pangine
-                .get_name(&concept)
-                .unwrap_or_else(|| panic!("expected named candidate, got {concept:?}"));
+            let name = pangine.get_name(&concept).unwrap_or_else(|| panic!("expected named candidate, got {concept:?}"));
             (relevance, name.to_owned())
         })
         .collect()

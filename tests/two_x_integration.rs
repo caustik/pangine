@@ -7,36 +7,15 @@ use pangine::{ConceptId, Pangine, ParseError, Relevance};
 fn implicit_union_syntax_and_star_merge_are_distinct_operations() {
     let mut pangine = Pangine::new();
 
-    assert_eq!(
-        must_ref(&mut pangine, "[A][B]"),
-        must_ref(&mut pangine, "[A]*[B]")
-    );
+    assert_eq!(must_ref(&mut pangine, "[A][B]"), must_ref(&mut pangine, "[A]*[B]"));
     let merged_simple_pair = must_ref(&mut pangine, "[A]*[B]");
-    assert_eq!(
-        pangine.format_concept(&merged_simple_pair, false),
-        "([A][B])"
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "[A][B]"),
-        must_ref(&mut pangine, "[B][A]")
-    );
-    assert_ne!(
-        must_ref(&mut pangine, "[A][A]"),
-        must_ref(&mut pangine, "[A]")
-    );
-    assert_eq!(
-        must_ref(&mut pangine, "[A][A]"),
-        must_ref(&mut pangine, "<x2[A]>")
-    );
-    assert_ne!(
-        must_ref(&mut pangine, "[A][B][A][B]"),
-        must_ref(&mut pangine, "[A][B]")
-    );
+    assert_eq!(pangine.format_concept(&merged_simple_pair, false), "([A][B])");
+    assert_eq!(must_ref(&mut pangine, "[A][B]"), must_ref(&mut pangine, "[B][A]"));
+    assert_ne!(must_ref(&mut pangine, "[A][A]"), must_ref(&mut pangine, "[A]"));
+    assert_eq!(must_ref(&mut pangine, "[A][A]"), must_ref(&mut pangine, "<x2[A]>"));
+    assert_ne!(must_ref(&mut pangine, "[A][B][A][B]"), must_ref(&mut pangine, "[A][B]"));
 
-    assert_eq!(
-        must_ref(&mut pangine, "[A][A]*[A][A]"),
-        must_ref(&mut pangine, "[A][A][A][A]")
-    );
+    assert_eq!(must_ref(&mut pangine, "[A][A]*[A][A]"), must_ref(&mut pangine, "[A][A][A][A]"));
 
     let implicitly_unioned_groups = must_ref(&mut pangine, "([A][B])([A][B])");
     let merged_groups = must_ref(&mut pangine, "([A][B])*([A][B])");
@@ -45,14 +24,8 @@ fn implicit_union_syntax_and_star_merge_are_distinct_operations() {
     assert_ne!(implicitly_unioned_groups, merged_groups);
     assert_eq!(merged_groups, flat_repeated);
 
-    assert!(matches!(
-        pangine.reference_concept("*[A]"),
-        Err(ParseError::InvalidSyntax)
-    ));
-    assert!(matches!(
-        pangine.reference_concept("[A]*"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(pangine.reference_concept("*[A]"), Err(ParseError::InvalidSyntax)));
+    assert!(matches!(pangine.reference_concept("[A]*"), Err(ParseError::InvalidSyntax)));
 }
 
 // Integration anchors:
@@ -70,20 +43,12 @@ fn parenthesized_union_operands_remain_composite_until_merge() {
     assert_ne!(repeated_pair, repeated_atoms);
     let repeated_pair_formatted = pangine.format_concept(&repeated_pair, false);
     assert_eq!(repeated_pair_formatted, "<x2([A][B])>");
-    assert_eq!(
-        pangine.reference_concept(&repeated_pair_formatted).unwrap(),
-        Some(repeated_pair)
-    );
+    assert_eq!(pangine.reference_concept(&repeated_pair_formatted).unwrap(), Some(repeated_pair));
 
     let distinct_groups = must_ref(&mut pangine, "([A][B])([B][C])");
     let distinct_groups_formatted = pangine.format_concept(&distinct_groups, false);
     assert_eq!(distinct_groups_formatted, "(([A][B])([B][C]))");
-    assert_eq!(
-        pangine
-            .reference_concept(&distinct_groups_formatted)
-            .unwrap(),
-        Some(distinct_groups)
-    );
+    assert_eq!(pangine.reference_concept(&distinct_groups_formatted).unwrap(), Some(distinct_groups));
     assert_eq!(must_ref(&mut pangine, "([A][B])*([A][B])"), repeated_atoms);
 }
 
@@ -111,14 +76,8 @@ fn richer_numeric_relevance_grammar_preserves_components() {
     assert_relevance(&pangine, &negative_both, -0.505, -2.3);
     assert_round_trip(&mut pangine, &negative_both, "<-50.5%x-2.3[A]>");
 
-    assert!(matches!(
-        pangine.reference_concept("<%[A]>"),
-        Err(ParseError::InvalidSyntax)
-    ));
-    assert!(matches!(
-        pangine.reference_concept("<50.5[A]>"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(pangine.reference_concept("<%[A]>"), Err(ParseError::InvalidSyntax)));
+    assert!(matches!(pangine.reference_concept("<50.5[A]>"), Err(ParseError::InvalidSyntax)));
 }
 
 // Integration anchors:
@@ -137,12 +96,7 @@ fn embedded_relevance_multiplies_when_single_child_bubbles_up() {
     assert_eq!(negative, must_ref(&mut pangine, "<x-6[A]>"));
     assert_round_trip(&mut pangine, &negative, "<x-6[A]>");
 
-    assert_eq!(
-        pangine
-            .reference_concept("<x2<x-3[A]>, x-2<x-3[A]>>")
-            .unwrap(),
-        None
-    );
+    assert_eq!(pangine.reference_concept("<x2<x-3[A]>, x-2<x-3[A]>>").unwrap(), None);
 
     let combined = must_ref(&mut pangine, "<x2<x-3[A]>, x2<x3[B]>, x2<x-3[A]>>");
     assert_eq!(combined, must_ref(&mut pangine, "<x-12[A], x6[B]>"));
@@ -154,10 +108,7 @@ fn embedded_relevance_multiplies_when_single_child_bubbles_up() {
 }
 
 fn must_ref(pangine: &mut Pangine, script: &str) -> ConceptId {
-    pangine
-        .reference_concept(script)
-        .unwrap()
-        .unwrap_or_else(|| panic!("failed to reference concept: {script}"))
+    pangine.reference_concept(script).unwrap().unwrap_or_else(|| panic!("failed to reference concept: {script}"))
 }
 
 fn assert_relevance(pangine: &Pangine, concept: &ConceptId, probability: f32, strength: f32) {
@@ -174,8 +125,5 @@ fn assert_near(actual: Relevance, expected: Relevance) {
 fn assert_round_trip(pangine: &mut Pangine, concept: &ConceptId, expected: &str) {
     let formatted = pangine.format_concept(concept, false);
     assert_eq!(formatted, expected);
-    assert_eq!(
-        pangine.reference_concept(&formatted).unwrap(),
-        Some(concept.clone())
-    );
+    assert_eq!(pangine.reference_concept(&formatted).unwrap(), Some(concept.clone()));
 }

@@ -25,10 +25,7 @@ fn ordinary_concepts_live_as_long_as_owning_handles() {
 fn failed_pure_parses_release_transient_concepts() {
     let mut pangine = Pangine::new();
 
-    assert!(matches!(
-        pangine.reference_concept("([A][B]"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(pangine.reference_concept("([A][B]"), Err(ParseError::InvalidSyntax)));
     assert_eq!(pangine.concept_count(), 0);
 }
 
@@ -54,10 +51,7 @@ fn parse_failures_do_not_roll_back_prior_percept_mutations() {
     let percept = pangine.reference_percept("state");
 
     drop(pangine.reference_concept("['state'] = [before]").unwrap());
-    assert!(matches!(
-        pangine.reference_concept("['state'] = [after]; ([broken]"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(pangine.reference_concept("['state'] = [after]; ([broken]"), Err(ParseError::InvalidSyntax)));
 
     let after = pangine.reference_concept("[after]").unwrap().unwrap();
     assert_eq!(pangine.get_value(&percept), Some(after.clone()));
@@ -75,15 +69,9 @@ fn owning_handles_cannot_cross_engine_state_boundaries() {
     let foreign = first.reference_concept("[A]").unwrap().unwrap();
     let local_percept = second.reference_percept("memory");
 
-    assert!(matches!(
-        second.reference_concept_with_params("[%]", std::slice::from_ref(&foreign)),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(second.reference_concept_with_params("[%]", std::slice::from_ref(&foreign)), Err(ParseError::InvalidSyntax)));
     assert!(!second.set_percept_value(&local_percept, Some(foreign.clone())));
-    assert_eq!(
-        second.perform_addition(&local_percept, Some(&foreign)),
-        None
-    );
+    assert_eq!(second.perform_addition(&local_percept, Some(&foreign)), None);
     assert_eq!(second.concept_count(), 0);
 }
 
@@ -92,18 +80,12 @@ fn global_percept_is_a_read_only_computed_view() {
     let mut pangine = Pangine::new();
     let global = pangine.global_percept();
 
-    assert_eq!(
-        pangine.reference_concept("['*']").unwrap(),
-        Some(global.clone())
-    );
+    assert_eq!(pangine.reference_concept("['*']").unwrap(), Some(global.clone()));
     assert_eq!(pangine.format_concept(&global, false), "['*']");
     assert_eq!(pangine.get_value(&global), None);
     assert_eq!(pangine.reference_concept("$['*']").unwrap(), None);
     assert!(!pangine.set_percept_value(&global, None));
-    assert!(matches!(
-        pangine.reference_concept("['*'] = [A]"),
-        Err(ParseError::InvalidSyntax)
-    ));
+    assert!(matches!(pangine.reference_concept("['*'] = [A]"), Err(ParseError::InvalidSyntax)));
     assert_eq!(pangine.concept_count(), 0);
 }
 
@@ -129,27 +111,18 @@ fn global_percept_snapshots_every_live_ordinary_concept() {
 #[test]
 fn global_snapshot_expands_shared_concepts_instead_of_unlabeled_references() {
     let mut pangine = Pangine::new();
-    pangine
-        .reference_concept("['memory'] ~= {[C]->[A]}*{[B]->[D]}")
-        .unwrap()
-        .unwrap();
+    pangine.reference_concept("['memory'] ~= {[C]->[A]}*{[B]->[D]}").unwrap().unwrap();
     let snapshot = pangine.reference_concept("$['*']").unwrap().unwrap();
     let lines = pangine.debug_console_lines(Some(&snapshot), false);
 
     assert!(lines.iter().all(|line| !line.contains("[#")));
-    assert_eq!(
-        lines.last().map(String::as_str),
-        Some("  ([A][B][C][D]{[B]->[D]}{[C]->[A]}({[B]->[D]}{[C]->[A]}))")
-    );
+    assert_eq!(lines.last().map(String::as_str), Some("  ([A][B][C][D]{[B]->[D]}{[C]->[A]}({[B]->[D]}{[C]->[A]}))"));
 }
 
 #[test]
 fn evaluated_formatting_stops_a_percept_cycle_at_its_named_reference() {
     let mut pangine = Pangine::new();
-    let cycle = pangine
-        .reference_concept("['cycle'] = ['cycle']")
-        .unwrap()
-        .unwrap();
+    let cycle = pangine.reference_concept("['cycle'] = ['cycle']").unwrap().unwrap();
 
     assert_eq!(pangine.format_concept(&cycle, true), "['cycle']");
 }
