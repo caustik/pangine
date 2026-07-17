@@ -371,13 +371,21 @@ fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
 }
 
 #[test]
-fn correlation_questions_search_all_question_correlations() {
+fn correlation_questions_keep_each_output_binding_separate() {
     let mut pangine = Pangine::new();
     must_ref(&mut pangine, "['test'] ~= {[A]->[B]}");
 
     assert_eq!(
         must_ref(&mut pangine, "['test'] @ {['1']->[C]}*{['2']->[B]}"),
+        must_ref(&mut pangine, "{['1']->[C]}*{['2']->[B]}")
+    );
+    assert_eq!(
+        must_ref(&mut pangine, "$['1']"),
         must_ref(&mut pangine, "[A]")
+    );
+    assert_eq!(
+        must_ref(&mut pangine, "$['2']"),
+        must_ref(&mut pangine, "<x2[A]>")
     );
 }
 
@@ -466,22 +474,53 @@ fn debug_console_rows_match_1x_display_rules() {
 #[test]
 fn historical_1x_scripts_return_success() {
     let scripts = [
-        include_str!("fixtures/1x/test_pangine.pae"),
-        include_str!("fixtures/1x/test_merge.pae"),
-        include_str!("fixtures/1x/test_syllogism.pae"),
-        include_str!("fixtures/1x/test_counting.pae"),
-        include_str!("fixtures/1x/test_experience.pae"),
-        include_str!("fixtures/1x/test_question.pae"),
-        include_str!("fixtures/1x/test_decision.pae"),
-        include_str!("fixtures/1x/test_rule110.pae"),
+        (
+            "test_pangine.pae",
+            include_str!("fixtures/1x/test_pangine.pae"),
+        ),
+        ("test_merge.pae", include_str!("fixtures/1x/test_merge.pae")),
+        (
+            "test_syllogism.pae",
+            include_str!("fixtures/1x/test_syllogism.pae"),
+        ),
+        (
+            "test_counting.pae",
+            include_str!("fixtures/1x/test_counting.pae"),
+        ),
+        (
+            "test_experience.pae",
+            include_str!("fixtures/1x/test_experience.pae"),
+        ),
+        (
+            "test_decision.pae",
+            include_str!("fixtures/1x/test_decision.pae"),
+        ),
+        (
+            "test_rule110.pae",
+            include_str!("fixtures/1x/test_rule110.pae"),
+        ),
     ];
 
-    for script in scripts {
+    for (name, script) in scripts {
         let mut pangine = Pangine::new();
         let result = pangine.parse_script_text(script).unwrap();
         let success = pangine.reference_concept("[success]").unwrap();
-        assert_eq!(result, success);
+        assert_eq!(result, success, "historical fixture failed: {name}");
     }
+}
+
+#[test]
+fn historical_1x_question_fixture_is_not_a_recursive_projection_fixture() {
+    let mut pangine = Pangine::new();
+    let mut details = Vec::new();
+    let result = pangine.parse_script_text_with_details(
+        include_str!("fixtures/1x/test_question.pae"),
+        &mut details,
+    );
+    let details = String::from_utf8(details).expect("details should be UTF-8");
+
+    assert!(matches!(result, Err(ParseError::InvalidSyntax)));
+    assert!(details.contains("['current'] ~= $['1']*$['2']*$['3']"));
 }
 
 fn must_ref(pangine: &mut Pangine, script: &str) -> ConceptId {

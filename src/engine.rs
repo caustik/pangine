@@ -10,6 +10,100 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 type ConceptMap = BTreeMap<ConceptId, Relevance>;
+type BindingMap = BTreeMap<ConceptId, ConceptMap>;
+type ProjectionBindingWeights = BTreeMap<ConceptId, BTreeMap<ConceptId, f64>>;
+type ProjectionCache = BTreeMap<(usize, usize), ProjectionSummary>;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ProjectionKind {
+    Named,
+    Percept,
+    Anonymous,
+    Correlation,
+    Dependency,
+}
+
+#[derive(Clone)]
+struct ProjectionSummary {
+    // Total folded projection mass, including paths that bind no output.
+    total: f64,
+    // First-order output marginals. Distinct output percepts do not require
+    // materializing their joint Cartesian product.
+    bindings: ProjectionBindingWeights,
+}
+
+impl ProjectionSummary {
+    fn wildcard() -> Self {
+        Self {
+            total: 1.0,
+            bindings: ProjectionBindingWeights::new(),
+        }
+    }
+
+    fn variable(percept: ConceptId, candidate: ConceptId) -> Self {
+        Self {
+            // Wildcarding this node leaves the output unbound; preserving it
+            // binds the exact experienced subtree.
+            total: 2.0,
+            bindings: ProjectionBindingWeights::from([(
+                percept,
+                BTreeMap::from([(candidate, 1.0)]),
+            )]),
+        }
+    }
+
+    fn multiply(&self, other: &Self) -> Self {
+        let mut bindings = ProjectionBindingWeights::new();
+
+        for (percept, candidates) in &self.bindings {
+            for (candidate, weight) in candidates {
+                *bindings
+                    .entry(percept.clone())
+                    .or_default()
+                    .entry(candidate.clone())
+                    .or_default() += weight * other.total;
+            }
+        }
+
+        for (percept, candidates) in &other.bindings {
+            for (candidate, weight) in candidates {
+                *bindings
+                    .entry(percept.clone())
+                    .or_default()
+                    .entry(candidate.clone())
+                    .or_default() += weight * self.total;
+            }
+        }
+
+        Self {
+            total: self.total * other.total,
+            bindings,
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.total += other.total;
+        for (percept, candidates) in other.bindings {
+            for (candidate, weight) in candidates {
+                *self
+                    .bindings
+                    .entry(percept.clone())
+                    .or_default()
+                    .entry(candidate)
+                    .or_default() += weight;
+            }
+        }
+    }
+
+    fn scale(&mut self, scale: f64) {
+        self.total *= scale;
+        for candidates in self.bindings.values_mut() {
+            for weight in candidates.values_mut() {
+                *weight *= scale;
+            }
+        }
+    }
+}
 
 static NEXT_PANGINE_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -42,15 +136,14 @@ Percept operations:
   ['name'] *= expression     Flattening merge
   ['name'] /= expression     Inverse merge
   ['name'] ~= expression     Experience
-  ['name'] @ expression      Question / output binding
-  $['name']                  Evaluate
+  ['name'] @ expression      Bind outputs; return the question shape
+  $operand                   Recursively evaluate every percept in the operand
   $['*']                     Snapshot all live ordinary concepts
 
 Experience:
   ['memory'] ~= {[cat]->[purrs]}
-  Learns an experience by accumulating its complete form plus recursively
-  expanded correlation/dependency endpoints and union terms. Repetition
-  accumulates relevance.
+  Stores exact recursive structure and accumulated relevance. Questions fold
+  the implied recursive wildcard projections lazily instead of storing them.
 
 Scripts:
   expression; expression    Multiple statements
@@ -690,7 +783,7 @@ impl Pangine {
                 let evaluated = self
                     .parse_union_operand(parser)?
                     .ok_or(ParseError::InvalidSyntax)?;
-                Ok(self.get_value(&evaluated))
+                Ok(self.evaluate_concept(&evaluated))
             }
             Some('^') => {
                 parser.next();
@@ -1028,11 +1121,22 @@ impl Pangine {
             .map(|concept| (concept, Relevance::DEFAULT))
             .collect::<ConceptMap>();
 
-        match map.len() {
-            0 => None,
-            1 => map.into_keys().next(),
-            _ => Some(self.alloc(ConceptKind::Anonymous, map)),
+        self.reference_transient_map(map)
+    }
+
+    fn reference_transient_map(&self, map: ConceptMap) -> Option<ConceptId> {
+        if map.is_empty() {
+            return None;
         }
+
+        if map.len() == 1 {
+            let (concept, relevance) = map.iter().next().unwrap();
+            if *relevance == Relevance::DEFAULT {
+                return Some(concept.clone());
+            }
+        }
+
+        Some(self.alloc(ConceptKind::Anonymous, map))
     }
 
     fn prune_indexes(&mut self) {
@@ -1147,153 +1251,401 @@ impl Pangine {
         percept: &ConceptId,
         question: Option<ConceptId>,
     ) -> Option<ConceptId> {
-        let value = self.get_value(percept)?;
         let question = question?;
-        let target_map = value.0.subconcepts.clone();
-        let mut question_map = question.0.subconcepts.clone();
-        let mut result_map = ConceptMap::new();
-        let mut concept_map = ConceptMap::new();
-        let mut percept_map = ConceptMap::new();
-        let mut correl_map = ConceptMap::new();
-
-        if question_map.is_empty() {
-            self.add_relevance(&mut question_map, question, false, Relevance::DEFAULT);
+        let Some(value) = self.get_value(percept) else {
+            return Some(question);
+        };
+        let mut experiences = value.0.subconcepts.clone();
+        if experiences.is_empty() {
+            experiences.insert(value, Relevance::DEFAULT);
         }
 
-        for (concept, relevance) in question_map {
-            if self.is_percept(&concept) {
-                self.add_relevance(&mut percept_map, concept, false, relevance);
-            } else if self.get_percept_a(&concept).is_some()
-                || self.get_percept_b(&concept).is_some()
-            {
-                self.add_relevance(&mut correl_map, concept, false, relevance);
+        let projection_results = self.get_projection_results(&question, &experiences);
+
+        for (percept, binding_result) in projection_results {
+            self.set_percept_value(&percept, binding_result);
+        }
+
+        Some(question)
+    }
+
+    fn evaluate_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
+        self.evaluate_concept_inner(concept, &mut BTreeSet::new())
+    }
+
+    fn evaluate_concept_inner(
+        &mut self,
+        concept: &ConceptId,
+        visited_percepts: &mut BTreeSet<ConceptId>,
+    ) -> Option<ConceptId> {
+        match &concept.0.kind {
+            ConceptKind::Named(_) => Some(concept.clone()),
+            ConceptKind::Percept { .. } => {
+                if !visited_percepts.insert(concept.clone()) {
+                    return Some(concept.clone());
+                }
+
+                let evaluated = self.get_value(concept).and_then(|value| {
+                    if self.is_global_percept(concept) {
+                        self.evaluate_transient_concept(&value, visited_percepts)
+                    } else {
+                        self.evaluate_concept_inner(&value, visited_percepts)
+                    }
+                });
+                visited_percepts.remove(concept);
+                evaluated
+            }
+            ConceptKind::Anonymous => {
+                let evaluated = self.evaluate_subconcepts(concept, visited_percepts);
+                self.reference_map(&evaluated)
+            }
+            ConceptKind::Correlation { a, b } => {
+                let a = self.evaluate_concept_inner(a, visited_percepts)?;
+                let b = self.evaluate_concept_inner(b, visited_percepts)?;
+                Some(self.reference_correlation(a, b))
+            }
+            ConceptKind::Dependency { a, b } => {
+                let a = self.evaluate_concept_inner(a, visited_percepts)?;
+                let b = self.evaluate_concept_inner(b, visited_percepts)?;
+                Some(self.reference_dependency(a, b))
+            }
+        }
+    }
+
+    fn evaluate_transient_concept(
+        &mut self,
+        concept: &ConceptId,
+        visited_percepts: &mut BTreeSet<ConceptId>,
+    ) -> Option<ConceptId> {
+        if matches!(concept.0.kind, ConceptKind::Anonymous) {
+            let evaluated = self.evaluate_subconcepts(concept, visited_percepts);
+            self.reference_transient_map(evaluated)
+        } else {
+            self.evaluate_concept_inner(concept, visited_percepts)
+        }
+    }
+
+    fn evaluate_subconcepts(
+        &mut self,
+        concept: &ConceptId,
+        visited_percepts: &mut BTreeSet<ConceptId>,
+    ) -> ConceptMap {
+        let mut evaluated = ConceptMap::new();
+        for (child, relevance) in concept.0.subconcepts.clone() {
+            if let Some(child) = self.evaluate_concept_inner(&child, visited_percepts) {
+                self.add_relevance(&mut evaluated, child, false, relevance);
+            }
+        }
+        evaluated
+    }
+
+    fn get_projection_results(
+        &mut self,
+        question: &ConceptId,
+        experiences: &ConceptMap,
+    ) -> BTreeMap<ConceptId, Option<ConceptId>> {
+        let mut questions = ConceptMap::new();
+        let mut contains_percept_cache = BTreeMap::new();
+        self.collect_question_patterns(
+            question,
+            Relevance::DEFAULT,
+            true,
+            &mut questions,
+            &mut contains_percept_cache,
+        );
+
+        let mut output_percepts = BTreeSet::new();
+        self.collect_output_percepts(question, &mut output_percepts);
+        let mut bindings = output_percepts
+            .into_iter()
+            .map(|percept| (percept, ConceptMap::new()))
+            .collect::<BindingMap>();
+        let mut cache = ProjectionCache::new();
+        let mut experience_index = BTreeMap::<ProjectionKind, Vec<_>>::new();
+        for experience in experiences {
+            experience_index
+                .entry(Self::projection_kind(experience.0))
+                .or_default()
+                .push(experience);
+        }
+
+        for (question, &question_relevance) in &questions {
+            let matching_experiences = if self.is_percept(question) {
+                experiences.iter().collect::<Vec<_>>()
             } else {
-                self.add_relevance(&mut concept_map, concept, false, relevance);
+                experience_index
+                    .get(&Self::projection_kind(question))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<_>>()
+            };
+
+            for (experience, &experience_relevance) in matching_experiences {
+                let summary = self.projection_summary(experience, question, &mut cache);
+                for (percept, candidates) in summary.bindings {
+                    for (candidate, weight) in candidates {
+                        let relevance =
+                            projection_relevance(experience_relevance, question_relevance, weight);
+                        self.add_relevance(
+                            bindings.entry(percept.clone()).or_default(),
+                            candidate,
+                            false,
+                            relevance,
+                        );
+                    }
+                }
             }
         }
 
-        for (concept, relevance) in target_map {
-            let mut multiplier = 0.0;
-            let mut remainder_map = ConceptMap::new();
-            let subconcepts = concept.0.subconcepts.clone();
+        bindings
+            .into_iter()
+            .map(|(percept, candidates)| (percept, self.reference_map(&candidates)))
+            .collect()
+    }
 
-            if subconcepts.is_empty() {
-                self.get_remainder_concept(
-                    concept,
-                    Relevance::DEFAULT,
-                    &concept_map,
-                    &correl_map,
-                    &mut remainder_map,
-                    &mut multiplier,
-                );
-            } else {
-                self.get_remainder_map(
-                    &subconcepts,
-                    &concept_map,
-                    &correl_map,
-                    &mut remainder_map,
-                    &mut multiplier,
-                );
+    fn projection_kind(concept: &ConceptId) -> ProjectionKind {
+        match &concept.0.kind {
+            ConceptKind::Named(_) => ProjectionKind::Named,
+            ConceptKind::Percept { .. } => ProjectionKind::Percept,
+            ConceptKind::Anonymous => ProjectionKind::Anonymous,
+            ConceptKind::Correlation { .. } => ProjectionKind::Correlation,
+            ConceptKind::Dependency { .. } => ProjectionKind::Dependency,
+        }
+    }
+
+    fn collect_output_percepts(&self, concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {
+        if self.is_percept(concept) {
+            percepts.insert(concept.clone());
+            return;
+        }
+
+        match &concept.0.kind {
+            ConceptKind::Correlation { a, b } | ConceptKind::Dependency { a, b } => {
+                self.collect_output_percepts(a, percepts);
+                self.collect_output_percepts(b, percepts);
             }
+            _ => {
+                for child in concept.0.subconcepts.keys() {
+                    self.collect_output_percepts(child, percepts);
+                }
+            }
+        }
+    }
 
-            multiplier *= relevance.weight();
-            self.add_relevance_map(
-                &mut result_map,
-                remainder_map,
-                Relevance::new(1.0, multiplier),
+    fn collect_question_patterns(
+        &self,
+        question: &ConceptId,
+        relevance: Relevance,
+        is_root: bool,
+        patterns: &mut ConceptMap,
+        contains_percept_cache: &mut BTreeMap<usize, bool>,
+    ) {
+        if !self.contains_percept(question, contains_percept_cache) {
+            return;
+        }
+
+        if is_root || !self.is_percept(question) {
+            patterns
+                .entry(question.clone())
+                .and_modify(|current| current.add(relevance))
+                .or_insert(relevance);
+        }
+
+        let relations = match &question.0.kind {
+            ConceptKind::Correlation { a, b } | ConceptKind::Dependency { a, b } => {
+                [Some(a), Some(b)]
+            }
+            _ => [None, None],
+        };
+
+        for child in relations.into_iter().flatten() {
+            self.collect_question_patterns(
+                child,
+                relevance,
+                false,
+                patterns,
+                contains_percept_cache,
             );
         }
 
-        let result = self.reference_map(&result_map);
-        let mut final_result = None;
-
-        for percept in percept_map.keys().cloned().collect::<Vec<_>>() {
-            if self.set_percept_value(&percept, result.clone()) {
-                final_result.clone_from(&result);
-            }
+        for (child, &child_relevance) in &question.0.subconcepts {
+            self.collect_question_patterns(
+                child,
+                multiply_relevance(relevance, child_relevance),
+                false,
+                patterns,
+                contains_percept_cache,
+            );
         }
-
-        for correlation in correl_map.keys().cloned().collect::<Vec<_>>() {
-            if let Some(percept) = self.get_percept_a(&correlation) {
-                if self.set_percept_value(&percept, result.clone()) {
-                    final_result.clone_from(&result);
-                }
-            }
-
-            if let Some(percept) = self.get_percept_b(&correlation) {
-                if self.set_percept_value(&percept, result.clone()) {
-                    final_result.clone_from(&result);
-                }
-            }
-        }
-
-        final_result
     }
 
-    fn get_remainder_map(
-        &mut self,
-        left: &ConceptMap,
-        right: &ConceptMap,
-        correl_map: &ConceptMap,
-        remainder_map: &mut ConceptMap,
-        multiplier: &mut f32,
-    ) -> bool {
-        for (concept, &relevance) in left {
-            if !self.get_remainder_concept(
-                concept.clone(),
-                relevance,
-                right,
-                correl_map,
-                remainder_map,
-                multiplier,
-            ) {
-                *multiplier = 0.0;
-                return false;
-            }
+    fn contains_percept(&self, concept: &ConceptId, cache: &mut BTreeMap<usize, bool>) -> bool {
+        if let Some(contains) = cache.get(&concept.index()) {
+            return *contains;
         }
 
-        true
-    }
-
-    fn get_remainder_concept(
-        &mut self,
-        concept: ConceptId,
-        relevance: Relevance,
-        right: &ConceptMap,
-        correl_map: &ConceptMap,
-        remainder_map: &mut ConceptMap,
-        multiplier: &mut f32,
-    ) -> bool {
-        if let Some(match_relevance) = right.get(&concept) {
-            *multiplier = match_relevance.weight() / relevance.weight();
-            return true;
-        }
-
-        let remainder = if correl_map.is_empty() {
-            Some(concept)
-        } else {
-            let concept_a = self.get_correlation_a(&concept);
-            let concept_b = self.get_correlation_b(&concept);
-            let Some(correlation) = correl_map.keys().find(|correlation| {
-                self.get_correlation_a(correlation) == concept_a
-                    || self.get_correlation_b(correlation) == concept_b
-            }) else {
-                return false;
+        let contains = self.is_percept(concept)
+            || match &concept.0.kind {
+                ConceptKind::Correlation { a, b } | ConceptKind::Dependency { a, b } => {
+                    self.contains_percept(a, cache) || self.contains_percept(b, cache)
+                }
+                _ => concept
+                    .0
+                    .subconcepts
+                    .keys()
+                    .any(|child| self.contains_percept(child, cache)),
             };
+        cache.insert(concept.index(), contains);
+        contains
+    }
 
-            *multiplier = 1.0;
-            if self.get_correlation_a(correlation) == concept_a {
-                concept_b
-            } else {
-                concept_a
+    fn projection_summary(
+        &self,
+        experience: &ConceptId,
+        question: &ConceptId,
+        cache: &mut ProjectionCache,
+    ) -> ProjectionSummary {
+        let key = (experience.index(), question.index());
+        if let Some(summary) = cache.get(&key) {
+            return summary.clone();
+        }
+
+        if self.is_percept(question) {
+            let summary = ProjectionSummary::variable(question.clone(), experience.clone());
+            cache.insert(key, summary.clone());
+            return summary;
+        }
+
+        let mut summary = ProjectionSummary::wildcard();
+        let preserved = match (&experience.0.kind, &question.0.kind) {
+            (ConceptKind::Named(experience), ConceptKind::Named(question)) => {
+                (experience == question).then(ProjectionSummary::wildcard)
             }
+            (
+                ConceptKind::Correlation {
+                    a: experience_a,
+                    b: experience_b,
+                },
+                ConceptKind::Correlation {
+                    a: question_a,
+                    b: question_b,
+                },
+            )
+            | (
+                ConceptKind::Dependency {
+                    a: experience_a,
+                    b: experience_b,
+                },
+                ConceptKind::Dependency {
+                    a: question_a,
+                    b: question_b,
+                },
+            ) => {
+                let a = self.projection_summary(experience_a, question_a, cache);
+                let b = self.projection_summary(experience_b, question_b, cache);
+                Some(a.multiply(&b))
+            }
+            (ConceptKind::Anonymous, ConceptKind::Anonymous) => {
+                self.unordered_projection_summary(experience, question, cache)
+            }
+            _ => None,
         };
 
-        if let Some(remainder) = remainder {
-            self.add_relevance(remainder_map, remainder, false, relevance);
+        if let Some(preserved) = preserved {
+            summary.add(preserved);
+        }
+        cache.insert(key, summary.clone());
+        summary
+    }
+
+    fn unordered_projection_summary(
+        &self,
+        experience: &ConceptId,
+        question: &ConceptId,
+        cache: &mut ProjectionCache,
+    ) -> Option<ProjectionSummary> {
+        let experiences = experience.0.subconcepts.iter().collect::<Vec<_>>();
+        let questions = question.0.subconcepts.iter().collect::<Vec<_>>();
+        if experiences.len() != questions.len() {
+            return None;
         }
 
-        true
+        let state_count = 1usize.checked_shl(experiences.len() as u32)?;
+        let edges = questions
+            .iter()
+            .map(|(question, question_relevance)| {
+                experiences
+                    .iter()
+                    .map(|(experience, experience_relevance)| {
+                        let mut edge = self.projection_summary(experience, question, cache);
+                        edge.scale(
+                            (experience_relevance.weight() * question_relevance.weight()) as f64,
+                        );
+                        edge
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let mut forward = vec![0.0; state_count];
+        forward[0] = 1.0;
+        // This subset DP computes the weighted permanent without enumerating
+        // every child assignment.
+        for mask in 0..state_count {
+            let question_index = mask.count_ones() as usize;
+            if question_index == questions.len() {
+                continue;
+            }
+
+            for (experience_index, edge) in edges[question_index].iter().enumerate() {
+                let bit = 1usize << experience_index;
+                if mask & bit == 0 {
+                    forward[mask | bit] += forward[mask] * edge.total;
+                }
+            }
+        }
+
+        let mut reverse = vec![0.0; state_count];
+        let mut derivatives = vec![vec![0.0; experiences.len()]; questions.len()];
+        reverse[state_count - 1] = 1.0;
+        // Reverse-mode derivatives give every edge's contribution to the
+        // permanent, which turns edge-local bindings into output marginals.
+        for mask in (0..state_count - 1).rev() {
+            let question_index = mask.count_ones() as usize;
+            for (experience_index, edge) in edges[question_index].iter().enumerate() {
+                let bit = 1usize << experience_index;
+                if mask & bit != 0 {
+                    continue;
+                }
+
+                let next = mask | bit;
+                reverse[mask] += reverse[next] * edge.total;
+                derivatives[question_index][experience_index] += reverse[next] * forward[mask];
+            }
+        }
+
+        let mut summary = ProjectionSummary {
+            total: forward[state_count - 1],
+            bindings: ProjectionBindingWeights::new(),
+        };
+        for (question_index, row) in edges.into_iter().enumerate() {
+            for (experience_index, edge) in row.into_iter().enumerate() {
+                let derivative = derivatives[question_index][experience_index];
+                for (percept, candidates) in edge.bindings {
+                    for (candidate, weight) in candidates {
+                        *summary
+                            .bindings
+                            .entry(percept.clone())
+                            .or_default()
+                            .entry(candidate)
+                            .or_default() += derivative * weight;
+                    }
+                }
+            }
+        }
+
+        Some(summary)
     }
 
     fn add_merge_concept(
@@ -2016,6 +2368,13 @@ fn multiply_relevance(left: Relevance, right: Relevance) -> Relevance {
     )
 }
 
+fn projection_relevance(experience: Relevance, question: Relevance, score: f64) -> Relevance {
+    Relevance::new(
+        experience.probability * question.probability,
+        experience.strength * question.strength * score as f32,
+    )
+}
+
 fn compare_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
     right
         .probability
@@ -2086,8 +2445,12 @@ mod tests {
         assert!(help.contains("['name'] *= expression"));
         assert!(help.contains("['name'] /= expression"));
         assert!(help.contains("['name'] ~= expression     Experience"));
-        assert!(help.contains("['name'] @ expression      Question / output binding"));
-        assert!(help.contains("Learns an experience"));
+        assert!(help.contains("['name'] @ expression      Bind outputs; return the question shape"));
+        assert!(help.contains(
+            "$operand                   Recursively evaluate every percept in the operand"
+        ));
+        assert!(help.contains("Stores exact recursive structure"));
+        assert!(help.contains("wildcard projections lazily"));
         assert!(help.contains("expression; expression"));
         assert!(help.contains("^['choice']"));
         assert!(help.contains("probability * strength"));

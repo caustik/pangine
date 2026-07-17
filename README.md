@@ -60,8 +60,8 @@ command> [cat]->[purrs]
 | `<50%x2[A]>` | Probability and strength relevance |
 | `['memory'] = expression` | Assign percept state |
 | `['memory'] ~= expression` | Accumulate an experience |
-| `['memory'] @ expression` | Ask a question and bind output |
-| `$['memory']` | Evaluate a percept |
+| `['memory'] @ expression` | Bind outputs and return the unresolved question shape |
+| `$operand` | Recursively evaluate every percept in its operand |
 
 Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from accepted input syntax; for example, `[A]->[B]` formats as `{[A]->[B]}`.
 
@@ -71,7 +71,7 @@ Statements may be separated with semicolons. C-style block comments and C++-styl
 
 Parsing distinguishes a valid null result from malformed input and I/O failure. Parsing is deliberately non-transactional: successful percept mutations before a later error remain applied.
 
-The current experience and question operations preserve behavior recovered from earlier Pangine implementations. They are compatibility baselines, not claims of general inference, unification, or semantic search.
+Experience stores exact recursively unrolled structure and accumulated relevance. Questions lazily fold the implied recursive wildcard projections into distinct ranked output bindings and cheaply return their unresolved question shape; no combinatorial wildcard closure is materialized. Because `@` binds more tightly than `$`, `$['memory'] @ expression` recursively resolves that returned shape only when an evaluated result is explicitly requested.
 
 ## Project layout
 
