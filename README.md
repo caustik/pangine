@@ -145,6 +145,7 @@ The crate has no third-party runtime dependencies and forbids unsafe Rust.
 src/                 Rust library and interactive console
 examples/            Small runnable demonstrations
 tests/               Behavioral, compatibility, and lifetime tests
+tests/research/      Reproducible experiments that are not accepted semantics
 tests/fixtures/      Grammar scripts used by the compatibility suite
 ```
 
