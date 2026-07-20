@@ -1277,6 +1277,14 @@ impl Pangine {
             };
 
             for (experience, &experience_relevance) in matching_experiences {
+                let remainder_bindings = self.unordered_remainder_bindings(experience, question);
+                for (percept, candidates) in remainder_bindings {
+                    for (candidate, weight) in candidates {
+                        let relevance = projection_relevance(experience_relevance, question_relevance, weight);
+                        self.add_relevance(bindings.entry(percept.clone()).or_default(), candidate, false, relevance);
+                    }
+                }
+
                 let summary = self.projection_summary(experience, question, &mut cache);
                 for (percept, candidates) in summary.bindings {
                     for (candidate, weight) in candidates {
@@ -1368,6 +1376,81 @@ impl Pangine {
         }
         cache.insert(key, summary.clone());
         summary
+    }
+
+    // Unequal unions currently bind only one direct output against an exact,
+    // default-relevance subset. Relevance-aware and partial subset matching
+    // remain separate oracle questions.
+    fn unordered_remainder_bindings(&mut self, experience: &ConceptId, question: &ConceptId) -> ProjectionBindingWeights {
+        if experience.0.shape() != ConceptShape::Unordered || question.0.shape() != ConceptShape::Unordered {
+            return ProjectionBindingWeights::new();
+        }
+
+        let experiences = experience.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
+        let questions = question.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
+        if experiences.len() <= questions.len()
+            || self.has_non_default_relevance(experience, &mut BTreeSet::new())
+            || self.has_non_default_relevance(question, &mut BTreeSet::new())
+        {
+            return ProjectionBindingWeights::new();
+        }
+
+        let outputs = questions.iter().filter(|(concept, _)| self.is_percept(concept)).collect::<Vec<_>>();
+        if outputs.len() != 1 {
+            return ProjectionBindingWeights::new();
+        }
+        let (output, output_relevance) = outputs[0];
+        let fixed_questions = questions.iter().filter(|(concept, _)| concept != output).collect::<Vec<_>>();
+        let mut contains_percept_cache = BTreeMap::new();
+        if fixed_questions.is_empty()
+            || fixed_questions.iter().any(|(concept, _)| self.contains_percept(concept, &mut contains_percept_cache))
+            || fixed_questions.iter().any(|(question, _)| !experience.0.subconcepts.contains_key(question))
+        {
+            return ProjectionBindingWeights::new();
+        }
+
+        let fixed_concepts = fixed_questions.iter().map(|(concept, _)| concept).collect::<BTreeSet<_>>();
+        let remainder = experiences.into_iter().filter(|(concept, _)| !fixed_concepts.contains(concept)).collect::<ConceptMap>();
+        let Some(remainder) = self.reference_map(&remainder) else {
+            return ProjectionBindingWeights::new();
+        };
+
+        let mut candidates = BTreeMap::new();
+        let output_scale = output_relevance.weight() as f64;
+        let root_weight = fixed_questions.iter().fold(output_scale, |weight, _| weight * 2.0);
+        if root_weight.is_finite() {
+            candidates.insert(remainder.clone(), root_weight);
+            self.accumulate_exact_descendant_weights(&remainder, output_scale, &mut candidates);
+        }
+
+        ProjectionBindingWeights::from([(output.clone(), candidates)])
+    }
+
+    fn has_non_default_relevance(&self, concept: &ConceptId, visited: &mut BTreeSet<ConceptId>) -> bool {
+        if !visited.insert(concept.clone()) {
+            return false;
+        }
+
+        concept.0.subconcepts.values().any(|&relevance| relevance != Relevance::DEFAULT)
+            || concept.0.children().any(|(child, _)| self.has_non_default_relevance(child, visited))
+    }
+
+    fn accumulate_exact_descendant_weights(&self, concept: &ConceptId, scale: f64, candidates: &mut BTreeMap<ConceptId, f64>) {
+        if let Some((_, a, b)) = concept.0.relation() {
+            self.accumulate_exact_node_weight(a, scale, candidates);
+            self.accumulate_exact_node_weight(b, scale, candidates);
+        }
+
+        for child in concept.0.subconcepts.keys() {
+            self.accumulate_exact_node_weight(child, scale, candidates);
+        }
+    }
+
+    fn accumulate_exact_node_weight(&self, concept: &ConceptId, scale: f64, candidates: &mut BTreeMap<ConceptId, f64>) {
+        if concept.0.subconcepts.len() != 1 {
+            *candidates.entry(concept.clone()).or_default() += scale;
+        }
+        self.accumulate_exact_descendant_weights(concept, scale, candidates);
     }
 
     fn unordered_projection_summary(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> Option<ProjectionSummary> {

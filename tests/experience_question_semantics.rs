@@ -135,6 +135,28 @@ fn repeated_experience_scales_folded_projection_evidence() {
 }
 
 #[test]
+fn repeated_partial_experience_can_induce_an_unseen_complete_answer() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
+    for partial in ["{[E]->[A]}*{[P1]->[Q1]}", "{[E]->[A]}*{[P2]->[Q2]}", "{[E]->[A]}*{[P3]->[Q3]}"] {
+        must_ref(&mut pangine, &format!("['memory'] ~= {partial}"));
+    }
+
+    let unseen_complete = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
+    let memory = must_ref(&mut pangine, "$['memory']");
+    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, concept)| concept == &unseen_complete));
+
+    ask_question(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
+    let result = must_ref(&mut pangine, "$['X']");
+    let candidates = named_relevance(&pangine, &result);
+    assert_eq!(pangine.format_concept(&result, false), "<x18[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>");
+    assert_eq!(candidate_weight(&candidates, "E"), 18.0);
+    assert_eq!(candidate_weight(&candidates, "C"), 12.0);
+    assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[E]"));
+}
+
+#[test]
 fn question_clears_an_output_when_no_projection_can_bind_it() {
     let mut pangine = Pangine::new();
 
@@ -152,6 +174,38 @@ fn standalone_wildcard_question_can_bind_a_single_atomic_experience() {
     ask_question(&mut pangine, "['memory'] @ ['X']");
 
     assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "[A]"));
+}
+
+#[test]
+fn unequal_union_question_binds_the_exact_remainder_above_its_parts() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]*[B]*[C]");
+    ask_question(&mut pangine, "['memory'] @ ['X']*[B]");
+
+    assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "<x2([A]*[C]), [A], [C]>",));
+    assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[A]*[C]"));
+}
+
+#[test]
+fn unequal_union_question_does_not_bind_a_generic_mismatch_remainder() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]*[B]*[C]");
+    must_ref(&mut pangine, "['X'] = [old]");
+    ask_question(&mut pangine, "['memory'] @ ['X']*[D]");
+
+    assert!(pangine.reference_concept("$['X']").unwrap().is_none());
+}
+
+#[test]
+fn unequal_union_remainder_defers_non_default_relevance() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= <x2[A], [B], [C]>");
+    ask_question(&mut pangine, "['memory'] @ ['X']*[B]");
+
+    assert!(pangine.reference_concept("$['X']").unwrap().is_none());
 }
 
 #[test]

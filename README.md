@@ -66,18 +66,32 @@ cd pangine
 cargo test --all-targets --release
 ```
 
-Run the semantic-memory example:
+Run the induction example:
+
+```sh
+cargo run --example induction
+```
+
+```text
+hypothesis: repeated partial experience can outweigh one complete observation
+complete experience: {[C]->[A]}*{[B]->[D]}
+partial experience:  {[E]->[A]}*{[P1]->[Q1]}
+partial experience:  {[E]->[A]}*{[P2]->[Q2]}
+partial experience:  {[E]->[A]}*{[P3]->[Q3]}
+question:            {['X']->[A]}*{[B]->[D]}
+ranked candidates:   <x18[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>
+selected candidate:  [E]
+result: E wins without the complete E-shaped observation ever being experienced
+limitation: these strengths are deterministic projection scores, not calibrated probabilities
+```
+
+The complete observation supports C under the entire question shape. E only appears in three partial observations, each paired with a different distractor. The question combines those partial structural matches and ranks E above C even though the complete E-shaped observation was never stored. This is a bounded induction result, not a claim that the current relevance strengths are calibrated probabilities.
+
+The smaller `semantic_memory` example demonstrates assignment, canonical storage, and recall:
 
 ```sh
 cargo run --example semantic_memory
 ```
-
-```text
-stored:   {[cat]->[purrs]}
-recalled: {[cat]->[purrs]}
-```
-
-The example stores a directed relation in a named percept, recalls it through the grammar, and verifies that both paths resolve to the same canonical concept.
 
 ## Console
 
