@@ -26,9 +26,10 @@ A correlation describes a relationship in the observed material. An observation 
 ```text
 {[rain]->[wet_ground]}
 ?[weather_station]:{[rain]->[wet_ground]}
+?[]:{[rain]->[wet_ground]}
 ```
 
-The second expression reads as "the weather station observed or asserted that rain relates to wet ground." Both sides may be any recursive Concept. The observer may be a person, sensor, document, model run, or another observation. When an expression is experienced without an explicit observer, it is globally scoped. The grammar does not imply observer-specific confidence or independence. I have decided that replay handling belongs in the experience operation, although that behavior is not implemented yet.
+The second expression reads as "the weather station observed or asserted that rain relates to wet ground." Both the observer and the observation may be any recursive Concept. Pangine does not reserve the observer position for particular kinds of Concept. The third form uses the null observer, written `[]`, for a globally scoped observation. Pangine creates that form when an expression is experienced without an explicit observer. The grammar does not imply observer-specific confidence or independence.
 
 A named percept holds state. Assignment stores a value, experience accumulates what has been observed, a question binds output percepts, and evaluation materializes their current values.
 
@@ -50,9 +51,9 @@ When I first thought about scaling Pangine, the model was closer to map/reduce t
 
 Changing how relevance is divided should not change the answer. If an entity goes down, Pangine should keep working with less relevance instead of breaking the model. With enough entities and reasonably balanced relevance, that failure becomes a relatively small change in the available evidence. Rare or important evidence may still need replication.
 
-I have now tested one small part of this idea. In a test-only experiment, I split three source-labeled observations into different groups, folded each group separately, and combined the resulting support Concepts. Every grouping produced the same canonical result as folding all three observations together. This happened inside one Pangine engine, so it is not distributed execution yet. Sending the same partial result twice still counts it twice.
+I have now tested one small part of this idea. I split observations into different groups, folded each group separately, and combined the resulting Concepts. Every grouping and arrival order produced the same canonical result as folding all of the observations together. This happened inside one Pangine engine, so it is not distributed execution yet.
 
-I do not want a later evidence reducer to repair that duplication. Replay handling belongs inside `~=` while the Observation still has an observer and a complete recursive payload. I have decided on one content-blind rule: treat every complete canonical Observation as an element of a set. Adding the same Observation again changes nothing, while a different Observation is retained without `~=` inspecting why its payload differs. The same rule applies when an Observation is a subset of a larger experience. An unwrapped experience uses the global/null observer and follows the identical rule. Unlike first-write or last-write replacement, set union produces the same state in every arrival order. The later meaning of compatible, inverted, or conflicting observations remains separate from ingestion. This accepted rule is not current production behavior yet.
+I do not want a later evidence reducer to repair replay duplication. Replay handling now belongs inside `~=` while the Observation still has an observer and a complete recursive payload. Pangine treats every complete canonical Observation as an element of a set. Adding the same Observation again changes nothing, while a different Observation is retained without `~=` inspecting why its payload differs. The same rule applies when an Observation is a recursive part of a larger experience. An unwrapped experience uses the global/null observer and follows the identical rule. Unlike first-write or last-write replacement, set union produces the same state in every arrival order. The later meaning of compatible, inverted, or conflicting observations remains separate from ingestion.
 
 The recursive closure still has to remain implied. Sending every wildcard permutation over the network would replace a storage problem with a messaging problem. Distributed execution is only a design direction today. GPU acceleration could still be useful inside any of the workers.
 
@@ -63,7 +64,7 @@ The current Rust implementation includes:
 - Parsing and canonical formatting of the grammar
 - Weakly interned, canonical concept graphs
 - Engine-owned percept state and relevance operations
-- Recursive experience accumulation
+- Recursive, observer-scoped experience sets with idempotent replay
 - Lazy recursive wildcard projection and ranked question bindings
 - An interactive console, a Rust example, and compatibility tests
 
@@ -86,13 +87,13 @@ cargo run --example induction
 ```
 
 ```text
-hypothesis: repeated partial experience can outweigh one complete observation
+hypothesis: several partial experiences can outweigh one complete observation
 complete experience: {[C]->[A]}*{[B]->[D]}
 partial experience:  {[E]->[A]}*{[P1]->[Q1]}
 partial experience:  {[E]->[A]}*{[P2]->[Q2]}
 partial experience:  {[E]->[A]}*{[P3]->[Q3]}
 question:            {['X']->[A]}*{[B]->[D]}
-ranked candidates:   <x18[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>
+ranked candidates:   <x14[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>
 selected candidate:  [E]
 result: E wins without the complete E-shaped observation ever being experienced
 limitation: these strengths are deterministic projection scores, not calibrated probabilities
@@ -134,9 +135,10 @@ command> [cat]->[purrs]
 | `![A]` | Inversion |
 | `[A]->[B]` | Directed correlation |
 | `?[observer]:[observation]` | Observation made or asserted by an observer |
+| `?[]:[observation]` | Observation in global scope |
 | `<50%x2[A]>` | Probability and strength relevance |
 | `['memory'] = expression` | Assign percept state |
-| `['memory'] ~= expression` | Accumulate an experience |
+| `['memory'] ~= expression` | Insert an experience and its recursive observations |
 | `['memory'] @ expression` | Bind outputs and return the unresolved question shape |
 | `$operand` | Recursively evaluate every percept in its operand |
 
@@ -148,7 +150,7 @@ Statements may be separated with semicolons. C-style block comments and C++-styl
 
 Parsing distinguishes a valid null result from malformed input and I/O failure. Parsing is deliberately non-transactional: successful percept mutations before a later error remain applied.
 
-Experience stores exact recursively unrolled structure and accumulated relevance. Questions lazily fold the implied recursive wildcard projections into distinct ranked output bindings, so the combinatorial closure does not have to be stored. Because `@` binds more tightly than `$`, `$['memory'] @ expression` resolves the returned question shape only when an evaluated snapshot is explicitly requested.
+Experience stores the complete input and its exact recursively exposed parts as a set of Observations. Explicit observations keep their observer; unwrapped inputs use the global/null observer. Equal observations are stored once, unequal observations remain distinct, and ordinary Concept relevance and structural multiplicity are unchanged. Questions derive a temporary payload view and lazily fold the implied recursive wildcard projections into distinct ranked output bindings, so neither a second authoritative state nor the combinatorial wildcard closure has to be stored. Because `@` binds more tightly than `$`, `$['memory'] @ expression` resolves the returned question shape only when an evaluated snapshot is explicitly requested.
 
 The crate has no third-party runtime dependencies and forbids unsafe Rust.
 

@@ -104,6 +104,7 @@ Concept syntax:
   ![A]                       Inversion
   [A]->[B]                   Correlation
   ?[observer]:[observation]  Observation
+  ?[]:[observation]          Global observation
   <50%x2[A], [B]>            Relevance
 
 Percept operations:
@@ -119,8 +120,10 @@ Percept operations:
 
 Experience:
   ['memory'] ~= {[cat]->[purrs]}
-  Stores exact recursive structure and accumulated relevance. Questions fold
-  the implied recursive wildcard projections lazily instead of storing them.
+  Stores the complete experience and its recursive parts as observations.
+  Exact replay changes nothing; unequal observations remain distinct. An
+  unwrapped experience uses the global observer shown as ?[]:expression.
+  Questions fold implied wildcard projections lazily instead of storing them.
 
 Scripts:
   expression; expression    Multiple statements
@@ -247,8 +250,8 @@ pub enum ConceptKind {
     },
     /// A Concept observed or asserted by `observer`.
     Observation {
-        /// The concept that made or supplied the observation.
-        observer: ConceptId,
+        /// The concept that made or supplied the observation, or global scope.
+        observer: Option<ConceptId>,
         /// The concept that was observed or asserted.
         observation: ConceptId,
     },
@@ -272,17 +275,17 @@ impl Concept {
         }
     }
 
-    fn relation(&self) -> Option<(RelationKind, &ConceptId, &ConceptId)> {
+    fn relation(&self) -> Option<(RelationKind, Option<&ConceptId>, &ConceptId)> {
         match &self.kind {
-            ConceptKind::Correlation { a, b } => Some((RelationKind::Correlation, a, b)),
-            ConceptKind::Observation { observer, observation } => Some((RelationKind::Observation, observer, observation)),
+            ConceptKind::Correlation { a, b } => Some((RelationKind::Correlation, Some(a), b)),
+            ConceptKind::Observation { observer, observation } => Some((RelationKind::Observation, observer.as_ref(), observation)),
             _ => None,
         }
     }
 
     fn children(&self) -> impl Iterator<Item = (&ConceptId, Relevance)> {
         let relation = match self.relation() {
-            Some((_, a, b)) => [Some(a), Some(b)],
+            Some((_, a, b)) => [a, Some(b)],
             None => [None, None],
         };
 
@@ -478,19 +481,19 @@ impl Pangine {
         self.perform_merge_update(percept, merge.cloned(), true)
     }
 
-    /// Accumulates an experience in a mutable percept and returns the resulting concept.
+    /// Inserts an experience and its recursively exposed observations into a mutable percept's observation set.
     pub fn perform_experience(&mut self, percept: &ConceptId, experience: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, experience) {
             return None;
         }
 
-        let mut map = self.percept_value_map(percept)?;
+        let Some(experience) = experience else {
+            return self.get_value(percept);
+        };
 
-        if let Some(experience) = experience {
-            self.add_relevance_rec(&mut map, experience.clone(), false, Relevance::DEFAULT);
-        }
-
-        self.reference_map(&map)
+        let mut records = self.percept_experience_value_map(percept)?;
+        self.add_experience_input(&mut records, experience, &mut BTreeSet::new());
+        self.reference_map(&records)
     }
 
     /// Returns a concept's kind when it belongs to this engine.
@@ -546,9 +549,9 @@ impl Pangine {
         self.correlation(concept).map(|(_, b)| b.clone())
     }
 
-    /// Returns the observer of an owned observation.
+    /// Returns the observer of an owned observation, or `None` for global scope or a non-observation.
     pub fn get_observer(&self, concept: &ConceptId) -> Option<ConceptId> {
-        self.observation(concept).map(|(observer, _)| observer.clone())
+        self.observation(concept).and_then(|(observer, _)| observer.cloned())
     }
 
     /// Returns the observed concept of an owned observation.
@@ -798,10 +801,14 @@ impl Pangine {
 
     fn parse_observation(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.next();
-        let observer = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
+        let observer_start = parser.pos;
+        let observer = self.parse_expression(parser)?;
+        if observer.is_none() && parser.pos == observer_start {
+            return Err(ParseError::InvalidSyntax);
+        }
         parser.expect(':')?;
         let observation = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
-        Ok(Some(self.reference_observation(observer, observation)))
+        Ok(Some(self.reference_observation_with(observer, observation)))
     }
 
     fn parse_relevance(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
@@ -1011,14 +1018,15 @@ impl Pangine {
     }
 
     fn reference_observation(&mut self, observer: ConceptId, observation: ConceptId) -> ConceptId {
-        self.reference_pair(ConceptKind::Observation { observer, observation })
+        self.reference_observation_with(Some(observer), observation)
     }
 
-    fn reference_relation(&mut self, kind: RelationKind, a: ConceptId, b: ConceptId) -> ConceptId {
-        match kind {
-            RelationKind::Observation => self.reference_observation(a, b),
-            RelationKind::Correlation => self.reference_correlation(a, b),
-        }
+    fn reference_global_observation(&mut self, observation: ConceptId) -> ConceptId {
+        self.reference_observation_with(None, observation)
+    }
+
+    fn reference_observation_with(&mut self, observer: Option<ConceptId>, observation: ConceptId) -> ConceptId {
+        self.reference_pair(ConceptKind::Observation { observer, observation })
     }
 
     fn reference_pair(&mut self, kind: ConceptKind) -> ConceptId {
@@ -1124,6 +1132,81 @@ impl Pangine {
         Some(map)
     }
 
+    fn percept_experience_value_map(&mut self, percept: &ConceptId) -> Option<ConceptMap> {
+        if !self.is_percept(percept) {
+            return None;
+        }
+
+        let Some(current) = self.get_value(percept) else {
+            return Some(ConceptMap::new());
+        };
+        if matches!(current.0.kind, ConceptKind::Observation { .. }) {
+            return Some(ConceptMap::from([(current, Relevance::DEFAULT)]));
+        }
+        if Self::is_observation_set(&current) {
+            return Some(current.0.subconcepts.clone());
+        }
+
+        let mut records = ConceptMap::new();
+        self.add_experience_rec(&mut records, &current, None, &mut BTreeSet::new());
+        Some(records)
+    }
+
+    fn is_observation_set(concept: &ConceptId) -> bool {
+        matches!(concept.0.kind, ConceptKind::Anonymous)
+            && !concept.0.subconcepts.is_empty()
+            && concept
+                .0
+                .subconcepts
+                .iter()
+                .all(|(record, relevance)| matches!(record.0.kind, ConceptKind::Observation { .. }) && *relevance == Relevance::DEFAULT)
+    }
+
+    fn add_experience_input(&mut self, records: &mut ConceptMap, experience: &ConceptId, visited: &mut BTreeSet<ConceptId>) {
+        if Self::is_observation_set(experience) {
+            for record in experience.0.subconcepts.keys() {
+                self.add_experience_rec(records, record, None, visited);
+            }
+        } else {
+            self.add_experience_rec(records, experience, None, visited);
+        }
+    }
+
+    fn add_experience_rec(&mut self, records: &mut ConceptMap, concept: &ConceptId, inherited_observer: Option<ConceptId>, visited: &mut BTreeSet<ConceptId>) {
+        match &concept.0.kind {
+            ConceptKind::Observation { observer, observation } => {
+                self.add_observed_payload_rec(records, observation, observer.clone(), visited);
+            }
+            _ => self.add_observed_payload_rec(records, concept, inherited_observer, visited),
+        }
+    }
+
+    fn add_observed_payload_rec(&mut self, records: &mut ConceptMap, concept: &ConceptId, observer: Option<ConceptId>, visited: &mut BTreeSet<ConceptId>) {
+        let record = match observer.clone() {
+            Some(observer) => self.reference_observation(observer, concept.clone()),
+            None => self.reference_global_observation(concept.clone()),
+        };
+        if !visited.insert(record.clone()) {
+            return;
+        }
+        records.entry(record).or_insert(Relevance::DEFAULT);
+
+        match &concept.0.kind {
+            ConceptKind::Correlation { a, b } => {
+                self.add_experience_rec(records, a, observer.clone(), visited);
+                self.add_experience_rec(records, b, observer, visited);
+            }
+            ConceptKind::Observation { .. } => self.add_experience_rec(records, concept, observer, visited),
+            ConceptKind::Anonymous => {
+                for (child, relevance) in &concept.0.subconcepts {
+                    let weighted = self.reference_map(&ConceptMap::from([(child.clone(), *relevance)])).unwrap();
+                    self.add_experience_rec(records, &weighted, observer.clone(), visited);
+                }
+            }
+            ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
+        }
+    }
+
     fn perform_union_update(&mut self, percept: &ConceptId, concept: Option<ConceptId>, inversion: bool) -> Option<(Option<ConceptId>, Option<ConceptId>)> {
         let mut map = self.percept_union_value_map(percept)?;
 
@@ -1182,10 +1265,7 @@ impl Pangine {
         let Some(value) = self.get_value(percept) else {
             return Some(question);
         };
-        let mut experiences = value.0.subconcepts.clone();
-        if experiences.is_empty() {
-            experiences.insert(value, Relevance::DEFAULT);
-        }
+        let experiences = self.question_experience_map(value, &question);
 
         let projection_results = self.get_projection_results(&question, &experiences);
 
@@ -1194,6 +1274,37 @@ impl Pangine {
         }
 
         Some(question)
+    }
+
+    fn question_experience_map(&mut self, value: ConceptId, question: &ConceptId) -> ConceptMap {
+        let include_records = matches!(question.0.kind, ConceptKind::Observation { .. });
+        if matches!(value.0.kind, ConceptKind::Observation { .. }) {
+            return self.question_experiences_from_records(std::iter::once((value, Relevance::DEFAULT)), include_records);
+        }
+        if Self::is_observation_set(&value) {
+            return self.question_experiences_from_records(value.0.subconcepts.clone(), include_records);
+        }
+
+        let mut experiences = value.0.subconcepts.clone();
+        if experiences.is_empty() {
+            experiences.insert(value, Relevance::DEFAULT);
+        }
+        experiences
+    }
+
+    fn question_experiences_from_records(&mut self, records: impl IntoIterator<Item = (ConceptId, Relevance)>, include_records: bool) -> ConceptMap {
+        let mut experiences = ConceptMap::new();
+        for (record, relevance) in records {
+            let ConceptKind::Observation { observation, .. } = &record.0.kind else {
+                continue;
+            };
+            let observation = observation.clone();
+            self.add_relevance(&mut experiences, observation, false, relevance);
+            if include_records {
+                self.add_relevance(&mut experiences, record, false, relevance);
+            }
+        }
+        experiences
     }
 
     fn evaluate_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
@@ -1222,12 +1333,17 @@ impl Pangine {
                 let evaluated = self.evaluate_subconcepts(concept, visited_percepts);
                 self.reference_map(&evaluated)
             }
-            ConceptKind::Correlation { .. } | ConceptKind::Observation { .. } => {
-                let (kind, a, b) = concept.0.relation().unwrap();
+            ConceptKind::Correlation { a, b } => {
                 let (a, b) = (a.clone(), b.clone());
                 let a = self.evaluate_concept_inner(&a, visited_percepts)?;
                 let b = self.evaluate_concept_inner(&b, visited_percepts)?;
-                Some(self.reference_relation(kind, a, b))
+                Some(self.reference_correlation(a, b))
+            }
+            ConceptKind::Observation { observer, observation } => {
+                let (observer, observation) = (observer.clone(), observation.clone());
+                let observer = observer.and_then(|observer| self.evaluate_concept_inner(&observer, visited_percepts));
+                let observation = self.evaluate_concept_inner(&observation, visited_percepts)?;
+                Some(self.reference_observation_with(observer, observation))
             }
         }
     }
@@ -1361,9 +1477,15 @@ impl Pangine {
             if experience_kind != question_kind {
                 None
             } else {
-                let a = self.projection_summary(experience_a, question_a, cache);
                 let b = self.projection_summary(experience_b, question_b, cache);
-                Some(a.multiply(&b))
+                match (experience_a, question_a) {
+                    (Some(experience_a), Some(question_a)) => {
+                        let a = self.projection_summary(experience_a, question_a, cache);
+                        Some(a.multiply(&b))
+                    }
+                    (None, None) => Some(b),
+                    _ => None,
+                }
             }
         } else if experience.0.shape() == ConceptShape::Unordered && question.0.shape() == ConceptShape::Unordered {
             self.unordered_projection_summary(experience, question, cache)
@@ -1437,7 +1559,9 @@ impl Pangine {
 
     fn accumulate_exact_descendant_weights(&self, concept: &ConceptId, scale: f64, candidates: &mut BTreeMap<ConceptId, f64>) {
         if let Some((_, a, b)) = concept.0.relation() {
-            self.accumulate_exact_node_weight(a, scale, candidates);
+            if let Some(a) = a {
+                self.accumulate_exact_node_weight(a, scale, candidates);
+            }
             self.accumulate_exact_node_weight(b, scale, candidates);
         }
 
@@ -1604,23 +1728,6 @@ impl Pangine {
         }
     }
 
-    fn add_relevance_rec(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
-        let subconcepts = concept.0.subconcepts.clone();
-        let relation = concept.0.relation().map(|(_, a, b)| [a.clone(), b.clone()]);
-
-        if subconcepts.len() != 1 {
-            self.add_relevance(map, concept, inversion, relevance);
-        }
-
-        for child in relation.into_iter().flatten() {
-            self.add_relevance_rec(map, child, inversion, relevance);
-        }
-
-        for (child, child_relevance) in subconcepts {
-            self.add_relevance_rec(map, child, inversion, child_relevance);
-        }
-    }
-
     fn make_decision(&self, concept: &ConceptId) -> Option<ConceptId> {
         let mut concept = self.get_value(concept)?;
         let subconcepts = concept.0.subconcepts.clone();
@@ -1645,8 +1752,15 @@ impl Pangine {
         self.relation(concept, RelationKind::Correlation)
     }
 
-    fn observation<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
-        self.relation(concept, RelationKind::Observation)
+    fn observation<'a>(&self, concept: &'a ConceptId) -> Option<(Option<&'a ConceptId>, &'a ConceptId)> {
+        if !self.owns(concept) {
+            return None;
+        }
+
+        match &concept.0.kind {
+            ConceptKind::Observation { observer, observation } => Some((observer.as_ref(), observation)),
+            _ => None,
+        }
     }
 
     fn relation<'a>(&self, concept: &'a ConceptId, expected: RelationKind) -> Option<(&'a ConceptId, &'a ConceptId)> {
@@ -1654,7 +1768,7 @@ impl Pangine {
             return None;
         }
 
-        concept.0.relation().and_then(|(kind, a, b)| (kind == expected).then_some((a, b)))
+        concept.0.relation().and_then(|(kind, a, b)| if kind == expected { a.map(|a| (a, b)) } else { None })
     }
 
     fn relevance_entries(&self, concept: &ConceptId) -> Option<Vec<(Relevance, ConceptId)>> {
@@ -1696,11 +1810,11 @@ impl Pangine {
                 format!("{{{a}->{b}}}")
             }
             ConceptKind::Observation { observer, observation } => {
-                let observer_paren = self.needs_observation_parens(observer);
+                let observer_paren = observer.as_ref().is_some_and(|observer| self.needs_observation_parens(observer));
                 // Historical 1.x used its left operand to decide parentheses on both sides:
                 // 1.x/pangine/src/pangine/common/pae_concept.cpp:157
                 let observation_paren = self.needs_observation_parens(observation);
-                let observer = self.format_inner(observer, evaluate, active);
+                let observer = observer.as_ref().map_or_else(|| "[]".to_owned(), |observer| self.format_inner(observer, evaluate, active));
                 let observation = self.format_inner(observation, evaluate, active);
                 format!(
                     "?{}{}{}:{}{}{}",
@@ -1803,8 +1917,15 @@ impl Pangine {
 
         match (left.0.relation(), right.0.relation()) {
             (Some((left_kind, left_a, left_b)), Some((right_kind, right_a, right_b))) => {
-                let order =
-                    left_kind.cmp(&right_kind).then_with(|| self.compare_concepts(left_a, right_a)).then_with(|| self.compare_concepts(left_b, right_b));
+                let order = left_kind
+                    .cmp(&right_kind)
+                    .then_with(|| match (left_a, right_a) {
+                        (Some(left_a), Some(right_a)) => self.compare_concepts(left_a, right_a),
+                        (Some(_), None) => Ordering::Greater,
+                        (None, Some(_)) => Ordering::Less,
+                        (None, None) => Ordering::Equal,
+                    })
+                    .then_with(|| self.compare_concepts(left_b, right_b));
                 if order != Ordering::Equal {
                     return order;
                 }
@@ -2178,6 +2299,7 @@ mod tests {
         assert!(help.contains("[]                         Null"));
         assert!(help.contains("[A]/[B]"));
         assert!(help.contains("?[observer]:[observation]"));
+        assert!(help.contains("?[]:[observation]"));
         assert!(help.contains("['name'] += expression"));
         assert!(help.contains("['name'] -= expression"));
         assert!(help.contains("['name'] *= expression"));
@@ -2185,7 +2307,7 @@ mod tests {
         assert!(help.contains("['name'] ~= expression     Experience"));
         assert!(help.contains("['name'] @ expression      Bind outputs; return the question shape"));
         assert!(help.contains("$operand                   Recursively evaluate every percept in the operand"));
-        assert!(help.contains("Stores exact recursive structure"));
+        assert!(help.contains("Exact replay changes nothing"));
         assert!(help.contains("wildcard projections lazily"));
         assert!(help.contains("expression; expression"));
         assert!(help.contains("^['choice']"));

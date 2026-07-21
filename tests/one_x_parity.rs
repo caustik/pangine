@@ -87,7 +87,7 @@ fn public_api_surface_matches_1x_boundaries() {
     let memory = test.engine_mut().reference_percept("memory");
     let experience = test.concept("{[A]->[B]}");
     let experienced = test.engine_mut().perform_experience(&memory, Some(&experience));
-    assert_eq!(experienced, test.reference("<100%{[A]->[B]}, 100%[A], 100%[B]>"));
+    assert_eq!(experienced, test.reference("(?[]:{[A]->[B]})*(?[]:[A])*(?[]:[B])"));
     assert_eq!(test.engine().get_value(&memory), None);
 
     let left = test.engine_mut().reference_percept("left");
@@ -119,15 +119,20 @@ fn correlations_observations_and_relevance_are_canonical() {
     let b = test.concept("[B]");
     assert_eq!(test.engine().get_observer(&observation), Some(a));
     assert_eq!(test.engine().get_observation(&observation), Some(b));
+    let global_observation = test.concept("?[]:[B]");
+    assert_eq!(test.engine().get_observer(&global_observation), None);
+    assert_eq!(test.engine().get_observation(&global_observation), test.engine().get_observation(&observation));
     let nested_observation = test.concept("?(?[A]:[B]):(?[C]:[D])");
     assert_eq!(test.engine().get_observer(&nested_observation), Some(observation));
     test.assert_formats(pairs! {
         "?[observer]:[observation]" => "?[observer]:[observation]",
+        "?[]:[observation]" => "?[]:[observation]",
         "?[weather_station]:{[rain]->[wet_ground]}" => "?[weather_station]:{[rain]->[wet_ground]}",
         "?(?[observer]:[report]):(?[camera]:([red][square]))" => "?(?[observer]:[report]):(?[camera]:([red][square]))",
     });
     test.assert_distinct(pairs! {
         "?[observer]:[observation]" => "[observation]",
+        "?[]:[observation]" => "[observation]",
         "?[observer]:[observation]" => "{[observer]->[observation]}",
     });
 
@@ -180,7 +185,7 @@ fn union_inversion_normalization_and_null_removal_match_1x() {
 // 1.x/pangine/src/pangine/common/pae_pangine.cpp:755,810,852,1226
 // 1.x/pangine/src/test/common/test_reference_concept.cpp:421,448,554,630,674
 #[test]
-fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
+fn percept_merge_questions_and_decisions_preserve_1x_while_experience_is_idempotent() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
@@ -192,21 +197,16 @@ fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
 
     let experience1 = test.concept("['mind01'] ~= {[tigger]->[meows]}");
     let experience2 = test.concept("['mind01'] ~= {[tigger]->[purrs]}");
-    let expected2 = test.concept("<100%{[tigger]->[meows]}, 100%{[tigger]->[purrs]}, 100%x2.0[tigger], 100%[meows], 100%[purrs]>");
+    let expected2 = test.concept("(?[]:{[tigger]->[meows]})*(?[]:{[tigger]->[purrs]})*(?[]:[tigger])*(?[]:[meows])*(?[]:[purrs])");
     let experience3 = test.concept("['mind01'] ~= {[tigger]->[purrs]}");
-    let expected3a = test.concept("<100%{[tigger]->[meows]}, 100%x2{[tigger]->[purrs]}, 100%[tigger], 100%x2[tigger], 100%[meows], 100%x2[purrs]>");
-    let expected3b = test.concept("<100%{[tigger]->[meows]}, 100%x2{[tigger]->[purrs]}, 100%x3.0[tigger], 100%[meows], 100%x2[purrs]>");
 
     assert_ne!(experience1, experience2);
     assert_eq!(experience2, expected2);
-    assert_ne!(experience3, experience2);
-    assert_eq!(experience3, expected3a);
-    assert_eq!(experience3, expected3b);
-    assert_ne!(expected3b, test.concept("<100%{[tigger]->[meows]}, 100%x2.001{[tigger]->[purrs]}>"));
+    assert_eq!(experience3, experience2);
     let single_b = test.concept("['A'] ~= [B]");
     let double_b = test.concept("['A'] ~= [B]");
-    assert_ne!(single_b, double_b);
-    assert_eq!(double_b, test.concept("[B]*[B]"));
+    assert_eq!(single_b, double_b);
+    assert_eq!(double_b, test.concept("?[]:[B]"));
 
     let recursive = test.concept("['dog_eats_dog'] = {{[dog]->[eats]}->[dog]}");
     test.exec(["['wisdom'] ~= ['dog_eats_dog']", "['obvious'] ~= {{['dog_eats_dog']->[is]}->['obvious']}"]);
@@ -216,8 +216,10 @@ fn percept_merge_experience_recursion_questions_and_decisions_match_1x() {
     let okay = test.concept("['okay'] ~= {[A]->[B]}");
     let okay_twice = test.concept("['okay'] ~= {[A]->[B]}");
     let still_okay = test.concept("['okay'] ~= !{[A]->[B]}");
-    assert_ne!(okay, okay_twice);
-    assert_eq!(still_okay, okay);
+    assert_eq!(okay, okay_twice);
+    assert_ne!(still_okay, okay);
+    let inverted = test.concept("?[]:!{[A]->[B]}");
+    assert!(test.engine().get_relevance_map(&still_okay).iter().any(|(_, record)| record == &inverted));
 
     test.exec([
         "['mind'] ~= {{[A]->[species_is]}->[cat]}",
@@ -308,21 +310,34 @@ fn debug_console_rows_match_1x_display_rules() {
 #[test]
 fn historical_1x_scripts_return_success() {
     let scripts = [
-        ("test_pangine.pae", include_str!("fixtures/1x/test_pangine.pae")),
-        ("test_merge.pae", include_str!("fixtures/1x/test_merge.pae")),
-        ("test_syllogism.pae", include_str!("fixtures/1x/test_syllogism.pae")),
-        ("test_counting.pae", include_str!("fixtures/1x/test_counting.pae")),
-        ("test_experience.pae", include_str!("fixtures/1x/test_experience.pae")),
-        ("test_decision.pae", include_str!("fixtures/1x/test_decision.pae")),
-        ("test_rule110.pae", include_str!("fixtures/1x/test_rule110.pae")),
+        ("test_pangine.pae", include_str!("fixtures/1x/test_pangine.pae"), "[success]"),
+        ("test_merge.pae", include_str!("fixtures/1x/test_merge.pae"), "?[]:[success]"),
+        ("test_syllogism.pae", include_str!("fixtures/1x/test_syllogism.pae"), "[success]"),
+        ("test_counting.pae", include_str!("fixtures/1x/test_counting.pae"), "[success]"),
+        ("test_decision.pae", include_str!("fixtures/1x/test_decision.pae"), "?[]:[success]"),
+        ("test_rule110.pae", include_str!("fixtures/1x/test_rule110.pae"), "?[]:[success]"),
     ];
 
-    for (name, script) in scripts {
+    for (name, script, expected) in scripts {
         let mut pangine = Pangine::new();
         let result = pangine.parse_script_text(script).unwrap();
-        let success = pangine.reference_concept("[success]").unwrap();
+        let success = pangine.reference_concept(expected).unwrap();
         assert_eq!(result, success, "historical fixture failed: {name}");
     }
+}
+
+#[test]
+fn historical_1x_experience_fixture_preserves_inverted_observations_instead_of_cancelling_them() {
+    let mut pangine = Pangine::new();
+    let result = pangine.parse_script_text(include_str!("fixtures/1x/test_experience.pae")).unwrap().unwrap();
+    let records = pangine.get_relevance_map(&result);
+    let success = pangine.reference_concept("?[]:[success]").unwrap().unwrap();
+    let positive_a = pangine.reference_concept("?[]:[A]").unwrap().unwrap();
+    let inverted_a = pangine.reference_concept("?[]:![A]").unwrap().unwrap();
+
+    assert!(records.iter().any(|(_, record)| record == &success));
+    assert!(records.iter().any(|(_, record)| record == &positive_a));
+    assert!(records.iter().any(|(_, record)| record == &inverted_a));
 }
 
 #[test]

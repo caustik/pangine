@@ -14,14 +14,14 @@ fn main() {
 
     let unseen_complete = must_reference(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
     let memory = must_reference(&mut pangine, "$['memory']");
-    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, concept)| concept == &unseen_complete));
+    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, record)| pangine.get_observation(record).as_ref() == Some(&unseen_complete)));
 
     must_reference(&mut pangine, &format!("['memory'] @ {QUESTION}"));
     let ranked = must_reference(&mut pangine, "$['X']");
     let selected = must_reference(&mut pangine, "^['X']");
     assert_eq!(selected, must_reference(&mut pangine, "[E]"));
 
-    println!("hypothesis: repeated partial experience can outweigh one complete observation");
+    println!("hypothesis: several partial experiences can outweigh one complete observation");
     println!("complete experience: {COMPLETE_EXPERIENCE}");
     for partial in PARTIAL_EXPERIENCES {
         println!("partial experience:  {partial}");

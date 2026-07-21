@@ -63,7 +63,12 @@ fn projection_alternatives(pangine: &Pangine, experience: &ConceptId, question: 
         (experience.0.relation(), question.0.relation())
     {
         (experience_kind == question_kind).then(|| {
-            multiply_alternatives(&projection_alternatives(pangine, experience_a, question_a), &projection_alternatives(pangine, experience_b, question_b))
+            let b = projection_alternatives(pangine, experience_b, question_b);
+            match (experience_a, question_a) {
+                (Some(experience_a), Some(question_a)) => multiply_alternatives(&projection_alternatives(pangine, experience_a, question_a), &b),
+                (None, None) => b,
+                _ => Vec::new(),
+            }
         })
     } else if experience.0.shape() == ConceptShape::Unordered && question.0.shape() == ConceptShape::Unordered {
         unordered_preserved_alternatives(pangine, experience, question)
@@ -157,6 +162,92 @@ fn assert_projection_parity(pangine: &Pangine, experience: &ConceptId, question:
     }
 }
 
+fn fold_experience_set(pangine: &mut Pangine, experiences: &[ConceptId]) -> Option<ConceptId> {
+    let mut records = ConceptMap::new();
+    let mut visited = BTreeSet::new();
+    for experience in experiences {
+        collect_experience_node(pangine, experience, None, &mut records, &mut visited);
+    }
+    pangine.reference_map(&records)
+}
+
+fn collect_experience_node(
+    pangine: &mut Pangine,
+    concept: &ConceptId,
+    inherited_observer: Option<ConceptId>,
+    records: &mut ConceptMap,
+    visited: &mut BTreeSet<ConceptId>,
+) {
+    match &concept.0.kind {
+        ConceptKind::Observation { observer, observation } => {
+            collect_observed_payload(pangine, observation, observer.clone(), records, visited);
+        }
+        _ => collect_observed_payload(pangine, concept, inherited_observer, records, visited),
+    }
+}
+
+fn collect_observed_payload(
+    pangine: &mut Pangine,
+    concept: &ConceptId,
+    observer: Option<ConceptId>,
+    records: &mut ConceptMap,
+    visited: &mut BTreeSet<ConceptId>,
+) {
+    let record = pangine.reference_observation_with(observer.clone(), concept.clone());
+    if !visited.insert(record.clone()) {
+        return;
+    }
+    records.insert(record, Relevance::DEFAULT);
+
+    match &concept.0.kind {
+        ConceptKind::Correlation { a, b } => {
+            collect_experience_node(pangine, a, observer.clone(), records, visited);
+            collect_experience_node(pangine, b, observer, records, visited);
+        }
+        ConceptKind::Observation { .. } => collect_experience_node(pangine, concept, observer, records, visited),
+        ConceptKind::Anonymous => {
+            for (child, relevance) in &concept.0.subconcepts {
+                let weighted = pangine.reference_map(&ConceptMap::from([(child.clone(), *relevance)])).unwrap();
+                collect_experience_node(pangine, &weighted, observer.clone(), records, visited);
+            }
+        }
+        ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
+    }
+}
+
+fn experience_records(state: &ConceptId) -> Result<Vec<ConceptId>, &'static str> {
+    let records = if matches!(state.0.kind, ConceptKind::Observation { .. }) {
+        vec![(state, Relevance::DEFAULT)]
+    } else if matches!(state.0.kind, ConceptKind::Anonymous) {
+        state.0.subconcepts.iter().map(|(record, &relevance)| (record, relevance)).collect()
+    } else {
+        return Err("experience state is not observation-scoped");
+    };
+
+    records
+        .into_iter()
+        .map(|(record, relevance)| {
+            if relevance != Relevance::DEFAULT {
+                return Err("experience records have structural relevance");
+            }
+            if !matches!(record.0.kind, ConceptKind::Observation { .. }) {
+                return Err("experience state contains a non-observation");
+            }
+            Ok(record.clone())
+        })
+        .collect()
+}
+
+fn combine_experience_states(pangine: &mut Pangine, partials: &[Option<ConceptId>]) -> Result<Option<ConceptId>, &'static str> {
+    let mut records = ConceptMap::new();
+    for partial in partials.iter().flatten() {
+        for record in experience_records(partial)? {
+            records.insert(record, Relevance::DEFAULT);
+        }
+    }
+    Ok(pangine.reference_map(&records))
+}
+
 fn encode_occurrence_state(pangine: &mut Pangine, occurrences: &[(ConceptId, ConceptId)]) -> Result<Option<ConceptId>, &'static str> {
     let mut sources = BTreeMap::<ConceptId, ConceptId>::new();
     for (source, root) in occurrences {
@@ -191,7 +282,7 @@ fn decode_occurrence_state(state: &ConceptId) -> Result<BTreeMap<ConceptId, Conc
         if relevance != Relevance::DEFAULT {
             return Err("source records have structural relevance");
         }
-        let ConceptKind::Observation { observer: source, observation: root } = &record.0.kind else {
+        let ConceptKind::Observation { observer: Some(source), observation: root } = &record.0.kind else {
             return Err("occurrence state contains a non-record");
         };
         match sources.get(source) {
@@ -340,6 +431,99 @@ fn enumerated_matcher_cells_fold_back_to_the_current_projection_summary() {
 }
 
 #[test]
+fn recursive_observation_set_fold_is_content_blind_and_idempotent() {
+    let mut pangine = Pangine::new();
+    let global_rain = must_reference(&mut pangine, "[rain]");
+    let event_rain = must_reference(&mut pangine, "?[event-1]:[rain]");
+    let event_snow = must_reference(&mut pangine, "?[event-1]:[snow]");
+    let event_inverse_rain = must_reference(&mut pangine, "?[event-1]:![rain]");
+
+    let global_once = fold_experience_set(&mut pangine, std::slice::from_ref(&global_rain));
+    let global_replay = fold_experience_set(&mut pangine, &[global_rain.clone(), global_rain]);
+    assert_eq!(global_once, global_replay);
+    assert_eq!(pangine.format_concept(global_once.as_ref().unwrap(), false), "?[]:[rain]");
+
+    let event_once = fold_experience_set(&mut pangine, std::slice::from_ref(&event_rain));
+    let event_replay = fold_experience_set(&mut pangine, &[event_rain.clone(), event_rain.clone()]);
+    assert_eq!(event_once, event_replay);
+
+    let unequal = fold_experience_set(&mut pangine, &[event_rain.clone(), event_snow.clone(), event_inverse_rain.clone()]).unwrap();
+    let unequal_records = experience_records(&unequal).unwrap().into_iter().collect::<BTreeSet<_>>();
+    assert_eq!(unequal_records, BTreeSet::from([event_rain, event_snow, event_inverse_rain]));
+}
+
+#[test]
+fn recursive_observation_set_fold_deduplicates_subobservations_without_inventing_shapes() {
+    let mut pangine = Pangine::new();
+    let a_root = must_reference(&mut pangine, "?[event-1]:[rain]*[A]");
+    let b_root = must_reference(&mut pangine, "?[event-1]:[rain]*[B]");
+    let state = fold_experience_set(&mut pangine, &[a_root.clone(), b_root.clone()]).unwrap();
+    let records = experience_records(&state).unwrap().into_iter().collect::<BTreeSet<_>>();
+
+    for expected in [
+        a_root,
+        b_root,
+        must_reference(&mut pangine, "?[event-1]:[rain]"),
+        must_reference(&mut pangine, "?[event-1]:[A]"),
+        must_reference(&mut pangine, "?[event-1]:[B]"),
+    ] {
+        assert!(records.contains(&expected), "missing {}", pangine.format_concept(&expected, false));
+    }
+    assert_eq!(records.len(), 5);
+    assert!(!records.contains(&must_reference(&mut pangine, "?[event-1]:[rain]*[A]*[B]")));
+
+    let outer_a = must_reference(&mut pangine, "{(?[event-1]:[rain])->[A]}");
+    let outer_b = must_reference(&mut pangine, "{(?[event-1]:[rain])->[B]}");
+    let nested_state = fold_experience_set(&mut pangine, &[outer_a, outer_b]).unwrap();
+    let nested_records = experience_records(&nested_state).unwrap().into_iter().collect::<BTreeSet<_>>();
+    assert_eq!(nested_records.iter().filter(|record| **record == must_reference(&mut pangine, "?[event-1]:[rain]")).count(), 1);
+    assert_eq!(nested_records.len(), 5);
+}
+
+#[test]
+fn recursive_observation_set_fold_preserves_structural_multiplicity() {
+    let mut pangine = Pangine::new();
+    let one = must_reference(&mut pangine, "[A]");
+    let two = must_reference(&mut pangine, "<x2[A]>");
+    let state = fold_experience_set(&mut pangine, &[one, two]).unwrap();
+    let records = experience_records(&state).unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().any(|record| pangine.format_concept(record, false) == "?[]:[A]"));
+    assert!(records.iter().any(|record| pangine.format_concept(record, false) == "?[]:<x2[A]>"));
+}
+
+#[test]
+fn recursive_observation_set_fold_is_order_and_partition_independent() {
+    let mut pangine = Pangine::new();
+    let experiences = [
+        must_reference(&mut pangine, "?[event-1]:[rain]*[A]"),
+        must_reference(&mut pangine, "?[event-1]:[rain]*[B]"),
+        must_reference(&mut pangine, "?[event-2]:[rain]"),
+        must_reference(&mut pangine, "[global]"),
+    ];
+
+    let combined = fold_experience_set(&mut pangine, &experiences);
+    let reversed = fold_experience_set(&mut pangine, &experiences.iter().rev().cloned().collect::<Vec<_>>());
+    assert_eq!(combined, reversed);
+
+    for partitions in [
+        vec![vec![experiences[0].clone(), experiences[2].clone()], vec![experiences[1].clone(), experiences[3].clone()]],
+        vec![vec![experiences[3].clone()], vec![experiences[2].clone(), experiences[1].clone()], vec![experiences[0].clone()]],
+    ] {
+        let partials = partitions.iter().map(|partition| fold_experience_set(&mut pangine, partition)).collect::<Vec<_>>();
+        assert_eq!(combine_experience_states(&mut pangine, &partials).unwrap(), combined);
+    }
+
+    let partials = experiences.iter().map(|experience| fold_experience_set(&mut pangine, std::slice::from_ref(experience))).collect::<Vec<_>>();
+    let left = combine_experience_states(&mut pangine, &partials[..2]).unwrap();
+    let left_grouped = combine_experience_states(&mut pangine, &[left, partials[2].clone(), partials[3].clone()]).unwrap();
+    let right = combine_experience_states(&mut pangine, &partials[2..]).unwrap();
+    let right_grouped = combine_experience_states(&mut pangine, &[partials[0].clone(), partials[1].clone(), right]).unwrap();
+    assert_eq!(left_grouped, combined);
+    assert_eq!(right_grouped, combined);
+}
+
+#[test]
 fn one_recursive_concept_can_preserve_source_and_structural_occurrence_boundaries() {
     let mut pangine = Pangine::new();
     let source_a = must_reference(&mut pangine, "[source-a]");
@@ -469,7 +653,7 @@ fn concept_native_support_fold_is_partition_independent_for_disjoint_sources() {
 }
 
 #[test]
-fn replaying_a_partial_support_concept_currently_becomes_structural_multiplicity() {
+fn question_support_prototype_replay_becomes_structural_multiplicity() {
     let mut pangine = Pangine::new();
     let source = must_reference(&mut pangine, "[source]");
     let root = must_reference(&mut pangine, "{[E]->[A]}");

@@ -1,4 +1,5 @@
 use pangine::{ConceptId, Pangine, Relevance};
+use std::collections::BTreeSet;
 
 #[test]
 fn question_ranks_exact_correlation_above_generic_role_evidence() {
@@ -120,7 +121,7 @@ fn generic_projection_rule_applies_to_observations_too() {
 }
 
 #[test]
-fn repeated_experience_scales_folded_projection_evidence() {
+fn repeated_experience_is_idempotent_in_folded_projection_evidence() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}");
@@ -130,12 +131,115 @@ fn repeated_experience_scales_folded_projection_evidence() {
 
     let result = must_ref(&mut pangine, "$['X']");
     let candidates = named_relevance(&pangine, &result);
-    assert_eq!(candidate_weight(&candidates, "C"), 4.0);
+    assert_eq!(candidate_weight(&candidates, "C"), 2.0);
     assert_eq!(candidate_weight(&candidates, "B"), 1.0);
 }
 
 #[test]
-fn repeated_partial_experience_can_induce_an_unseen_complete_answer() {
+fn experience_set_replay_is_content_blind_and_idempotent() {
+    let mut pangine = Pangine::new();
+
+    let global_once = must_ref(&mut pangine, "['global'] ~= [rain]");
+    let global_replay = must_ref(&mut pangine, "['global'] ~= [rain]");
+    assert_eq!(global_once, global_replay);
+    assert_eq!(global_replay, must_ref(&mut pangine, "?[]:[rain]"));
+
+    let event_once = must_ref(&mut pangine, "['event'] ~= ?[event-1]:[rain]");
+    let event_replay = must_ref(&mut pangine, "['event'] ~= ?[event-1]:[rain]");
+    assert_eq!(event_once, event_replay);
+
+    must_ref(&mut pangine, "['event'] ~= ?[event-1]:[snow]");
+    let unequal = must_ref(&mut pangine, "['event'] ~= ?[event-1]:![rain]");
+    let records = observation_records(&pangine, &unequal);
+    assert_eq!(
+        records,
+        BTreeSet::from([
+            must_ref(&mut pangine, "?[event-1]:[rain]"),
+            must_ref(&mut pangine, "?[event-1]:[snow]"),
+            must_ref(&mut pangine, "?[event-1]:![rain]"),
+        ])
+    );
+}
+
+#[test]
+fn experience_set_deduplicates_recursive_observations_without_inventing_shapes() {
+    let mut pangine = Pangine::new();
+
+    let a_root = must_ref(&mut pangine, "?[event-1]:[rain]*[A]");
+    let b_root = must_ref(&mut pangine, "?[event-1]:[rain]*[B]");
+    must_ref(&mut pangine, "['memory'] ~= ?[event-1]:[rain]*[A]");
+    let state = must_ref(&mut pangine, "['memory'] ~= ?[event-1]:[rain]*[B]");
+    let records = observation_records(&pangine, &state);
+
+    assert_eq!(
+        records,
+        BTreeSet::from([
+            a_root,
+            b_root,
+            must_ref(&mut pangine, "?[event-1]:[rain]"),
+            must_ref(&mut pangine, "?[event-1]:[A]"),
+            must_ref(&mut pangine, "?[event-1]:[B]"),
+        ])
+    );
+    assert!(!records.contains(&must_ref(&mut pangine, "?[event-1]:[rain]*[A]*[B]")));
+
+    must_ref(&mut pangine, "['nested'] ~= {(?[event-1]:[rain])->[A]}");
+    let nested = must_ref(&mut pangine, "['nested'] ~= {(?[event-1]:[rain])->[B]}");
+    let nested_records = observation_records(&pangine, &nested);
+    assert_eq!(nested_records.len(), 5);
+    assert!(nested_records.contains(&must_ref(&mut pangine, "?[event-1]:[rain]")));
+}
+
+#[test]
+fn experience_set_preserves_structural_multiplicity() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    let state = must_ref(&mut pangine, "['memory'] ~= <x2[A]>");
+    let records = observation_records(&pangine, &state);
+
+    assert_eq!(records, BTreeSet::from([must_ref(&mut pangine, "?[]:[A]"), must_ref(&mut pangine, "?[]:<x2[A]>")]));
+}
+
+#[test]
+fn experience_set_is_order_and_partition_independent() {
+    let mut pangine = Pangine::new();
+    let forward = ["?[event-1]:[rain]*[A]", "?[event-1]:[rain]*[B]", "?[event-2]:[rain]", "[global]"];
+
+    for experience in forward {
+        must_ref(&mut pangine, &format!("['forward'] ~= {experience}"));
+    }
+    for experience in forward.into_iter().rev() {
+        must_ref(&mut pangine, &format!("['reverse'] ~= {experience}"));
+    }
+    let forward_state = must_ref(&mut pangine, "$['forward']");
+    assert_eq!(must_ref(&mut pangine, "$['reverse']"), forward_state);
+
+    for experience in [forward[0], forward[2]] {
+        must_ref(&mut pangine, &format!("['partition-a'] ~= {experience}"));
+    }
+    for experience in [forward[1], forward[3]] {
+        must_ref(&mut pangine, &format!("['partition-b'] ~= {experience}"));
+    }
+    must_ref(&mut pangine, "['combined'] ~= $['partition-a']");
+    let combined = must_ref(&mut pangine, "['combined'] ~= $['partition-b']");
+    assert_eq!(combined, forward_state);
+}
+
+#[test]
+fn global_observations_remain_queryable_without_leaking_the_wrapper_into_plain_questions() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    ask_question(&mut pangine, "['memory'] @ ?[]:['scoped']");
+    assert_eq!(must_ref(&mut pangine, "$['scoped']"), must_ref(&mut pangine, "[A]"));
+
+    ask_question(&mut pangine, "['memory'] @ ['plain']");
+    assert_eq!(must_ref(&mut pangine, "$['plain']"), must_ref(&mut pangine, "[A]"));
+}
+
+#[test]
+fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
@@ -145,13 +249,13 @@ fn repeated_partial_experience_can_induce_an_unseen_complete_answer() {
 
     let unseen_complete = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
     let memory = must_ref(&mut pangine, "$['memory']");
-    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, concept)| concept == &unseen_complete));
+    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, record)| pangine.get_observation(record).as_ref() == Some(&unseen_complete)));
 
     ask_question(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
     let result = must_ref(&mut pangine, "$['X']");
     let candidates = named_relevance(&pangine, &result);
-    assert_eq!(pangine.format_concept(&result, false), "<x18[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>");
-    assert_eq!(candidate_weight(&candidates, "E"), 18.0);
+    assert_eq!(pangine.format_concept(&result, false), "<x14[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>");
+    assert_eq!(candidate_weight(&candidates, "E"), 14.0);
     assert_eq!(candidate_weight(&candidates, "C"), 12.0);
     assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[E]"));
 }
@@ -223,13 +327,13 @@ fn experience_stores_linear_structure_instead_of_wildcard_closure() {
 }
 
 #[test]
-fn experience_recurses_through_ordered_and_unordered_structure() {
+fn experience_recurses_within_the_explicit_observer_scope() {
     let mut pangine = Pangine::new();
     let value = must_ref(&mut pangine, "['memory'] ~= ?({[A]->[B]}):([C][D])");
     let entries = pangine.get_relevance_map(&value);
 
-    assert_eq!(entries.len(), 7);
-    for expected in ["?({[A]->[B]}):([C][D])", "{[A]->[B]}", "[A]", "[B]", "[C][D]", "[C]", "[D]"] {
+    assert_eq!(entries.len(), 3);
+    for expected in ["?({[A]->[B]}):([C][D])", "?({[A]->[B]}):[C]", "?({[A]->[B]}):[D]"] {
         let expected = must_ref(&mut pangine, expected);
         assert!(entries.iter().any(|(relevance, concept)| { *relevance == Relevance::DEFAULT && *concept == expected }));
     }
@@ -263,6 +367,18 @@ fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, St
         .map(|(relevance, concept)| {
             let name = pangine.get_name(&concept).unwrap_or_else(|| panic!("expected named candidate, got {concept:?}"));
             (relevance, name.to_owned())
+        })
+        .collect()
+}
+
+fn observation_records(pangine: &Pangine, state: &ConceptId) -> BTreeSet<ConceptId> {
+    pangine
+        .get_relevance_map(state)
+        .into_iter()
+        .map(|(relevance, record)| {
+            assert_eq!(relevance, Relevance::DEFAULT);
+            assert!(pangine.get_observation(&record).is_some());
+            record
         })
         .collect()
 }

@@ -130,11 +130,11 @@ fn explicit_percept_mutation_operators_are_required() {
 
     let mut experience = PangineTest::new();
     experience.assert_equivalent(pairs! {
-        "['A'] ~= [A]" => "[A]",
-        "['A'] ~= [B]" => "[A][B]",
-        "['A'] ~= ![A]" => "[B]",
+        "['A'] ~= [A]" => "?[]:[A]",
+        "['A'] ~= [B]" => "(?[]:[A])*(?[]:[B])",
+        "['A'] ~= ![A]" => "(?[]:[A])*(?[]:[B])*(?[]:![A])",
+        "['A'] ~= ![B]" => "(?[]:[A])*(?[]:[B])*(?[]:![A])*(?[]:![B])",
     });
-    experience.assert_null(["['A'] ~= ![B]"]);
 }
 
 // Integration anchors:

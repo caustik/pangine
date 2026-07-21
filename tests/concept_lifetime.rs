@@ -116,7 +116,7 @@ fn global_snapshot_expands_shared_concepts_instead_of_unlabeled_references() {
     let lines = pangine.debug_console_lines(Some(&snapshot), false);
 
     assert!(lines.iter().all(|line| !line.contains("[#")));
-    assert_eq!(lines.last().map(String::as_str), Some("  ([A][B][C][D]{[B]->[D]}{[C]->[A]}({[B]->[D]}{[C]->[A]}))"));
+    assert_eq!(lines.last().map(String::as_str), Some("  ((?[]:[A])(?[]:[B])(?[]:[C])(?[]:[D])(?[]:{[B]->[D]})(?[]:{[C]->[A]})(?[]:({[B]->[D]}{[C]->[A]})))"));
 }
 
 #[test]
