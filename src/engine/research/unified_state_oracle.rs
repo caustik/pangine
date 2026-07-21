@@ -1,5 +1,5 @@
-//! Bounded, test-only prototype for inspecting projection alternatives before
-//! the production matcher collapses them into scalar relevance.
+//! Bounded, test-only prototypes for inspecting projection alternatives and
+//! reducing Concept-native support across state partitions.
 //!
 //! This module deliberately favors explicit enumeration and readable
 //! falsifiers over production efficiency. Its occurrence encoding, supported
@@ -281,6 +281,19 @@ fn encode_support_state(pangine: &mut Pangine, observations: &[ContextObservatio
     pangine.reference_map(&records)
 }
 
+fn fold_support_state(pangine: &mut Pangine, state: &ConceptId, question: &ConceptId) -> Result<Option<ConceptId>, &'static str> {
+    let observations = collect_context_observations(pangine, state, question)?;
+    Ok(encode_support_state(pangine, &observations))
+}
+
+fn reduce_support_states(pangine: &mut Pangine, partials: &[Option<ConceptId>]) -> Option<ConceptId> {
+    let mut records = ConceptMap::new();
+    for partial in partials.iter().flatten() {
+        pangine.add_merge_concept(&mut records, partial.clone(), false, Relevance::DEFAULT);
+    }
+    pangine.reference_map(&records)
+}
+
 fn candidate_sources(observations: &[ContextObservation], candidate: &ConceptId, context: &ConceptId, include_specializations: bool) -> BTreeSet<ConceptId> {
     observations
         .iter()
@@ -403,6 +416,73 @@ fn source_identity_deduplicates_paths_and_delivery_but_not_independent_occurrenc
     assert_eq!(once_observations.len(), 1);
     assert_eq!(independent_observations.len(), 2);
     assert!(independent_observations.iter().all(|observation| observation.context == question && observation.candidate == e));
+}
+
+#[test]
+fn concept_native_support_fold_is_partition_independent_for_disjoint_sources() {
+    let mut pangine = Pangine::new();
+    let source_a = must_reference(&mut pangine, "[source-a]");
+    let source_b = must_reference(&mut pangine, "[source-b]");
+    let source_c = must_reference(&mut pangine, "[source-c]");
+    let repeated_subtree = must_reference(&mut pangine, "{[E]->[A]}*{{[E]->[A]}->[Z]}");
+    let c_root = must_reference(&mut pangine, "{[C]->[A]}");
+    let question = must_reference(&mut pangine, "{['X']->[A]}");
+    let c = must_reference(&mut pangine, "[C]");
+    let e = must_reference(&mut pangine, "[E]");
+
+    let occurrences = [(source_a, repeated_subtree.clone()), (source_b, c_root), (source_c, repeated_subtree)];
+    let combined_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
+    let combined_observations = collect_context_observations(&pangine, &combined_state, &question).unwrap();
+    assert_eq!(candidate_sources(&combined_observations, &c, &question, false).len(), 1);
+    assert_eq!(candidate_sources(&combined_observations, &e, &question, false).len(), 2);
+    let combined_support = encode_support_state(&mut pangine, &combined_observations);
+
+    for partitions in [
+        vec![vec![occurrences[0].clone()], vec![occurrences[1].clone(), occurrences[2].clone()]],
+        vec![vec![occurrences[2].clone()], vec![occurrences[0].clone()], vec![occurrences[1].clone()]],
+        vec![vec![occurrences[1].clone(), occurrences[0].clone()], vec![occurrences[2].clone()]],
+    ] {
+        let partials = partitions
+            .iter()
+            .map(|partition| {
+                let state = encode_occurrence_state(&mut pangine, partition).unwrap().unwrap();
+                fold_support_state(&mut pangine, &state, &question).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reduce_support_states(&mut pangine, &partials), combined_support);
+    }
+
+    let source_partials = occurrences
+        .iter()
+        .map(|occurrence| {
+            let state = encode_occurrence_state(&mut pangine, std::slice::from_ref(occurrence)).unwrap().unwrap();
+            fold_support_state(&mut pangine, &state, &question).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let left_pair = reduce_support_states(&mut pangine, &source_partials[..2]);
+    let left_grouped = reduce_support_states(&mut pangine, &[left_pair, source_partials[2].clone()]);
+    let right_pair = reduce_support_states(&mut pangine, &source_partials[1..]);
+    let right_grouped = reduce_support_states(&mut pangine, &[source_partials[0].clone(), right_pair]);
+    assert_eq!(left_grouped, combined_support);
+    assert_eq!(right_grouped, combined_support);
+    assert_eq!(reduce_support_states(&mut pangine, &[None, combined_support.clone()]), combined_support);
+}
+
+#[test]
+fn replaying_a_partial_support_concept_currently_becomes_structural_multiplicity() {
+    let mut pangine = Pangine::new();
+    let source = must_reference(&mut pangine, "[source]");
+    let root = must_reference(&mut pangine, "{[E]->[A]}");
+    let question = must_reference(&mut pangine, "{['X']->[A]}");
+    let state = encode_occurrence_state(&mut pangine, &[(source, root)]).unwrap().unwrap();
+    let partial = fold_support_state(&mut pangine, &state, &question).unwrap().unwrap();
+
+    let reduced_once = reduce_support_states(&mut pangine, &[Some(partial.clone())]).unwrap();
+    let reduced_replay = reduce_support_states(&mut pangine, &[Some(partial.clone()), Some(partial)]).unwrap();
+
+    assert_ne!(reduced_once, reduced_replay);
+    assert_eq!(reduced_replay.0.subconcepts.values().copied().collect::<Vec<_>>(), vec![Relevance::new(1.0, 2.0)]);
+    assert_eq!(pangine.format_concept(&reduced_replay, false), "<x2?[source]:{{['X']->[A]}->[E]}>");
 }
 
 #[test]
