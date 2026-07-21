@@ -106,7 +106,7 @@ fn question_folds_multiple_output_wildcards_into_separate_marginals() {
 }
 
 #[test]
-fn generic_projection_rule_applies_to_dependencies_too() {
+fn generic_projection_rule_applies_to_observations_too() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['memory'] ~= ?[C]:[A]");

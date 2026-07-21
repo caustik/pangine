@@ -14,12 +14,21 @@ Created by [Aaron (`caustik`)](https://github.com/caustik) and released by APU S
 
 ## The core idea
 
-A Pangine expression describes a semantic shape. Named concepts can be composed into unions, directed correlations, dependencies, and deeper structures. Applications decide what those concepts mean.
+A Pangine expression describes a semantic shape. Named concepts can be composed into unions, directed correlations, observations, and deeper structures. Applications decide what those concepts mean.
 
 ```text
 {[cat]->[purrs]}
 {{[cat]->[purrs]}->{[sound]->[soft]}}
 ```
+
+A correlation describes a relationship in the observed material. An observation can preserve who or what supplied an entire Concept without changing the Concept it contains:
+
+```text
+{[rain]->[wet_ground]}
+?[weather_station]:{[rain]->[wet_ground]}
+```
+
+The second expression reads as "the weather station observed or asserted that rain relates to wet ground." Both sides may be any recursive Concept. The observer may be a person, sensor, document, model run, or another observation. When an expression is experienced without an explicit observer, it is globally scoped. The grammar does not yet assign observer-specific confidence, replay, or retraction behavior.
 
 A named percept holds state. Assignment stores a value, experience accumulates what has been observed, a question binds output percepts, and evaluation materializes their current values.
 
@@ -120,7 +129,7 @@ command> [cat]->[purrs]
 | `[A]/[B]` | Merge with an inverted right operand |
 | `![A]` | Inversion |
 | `[A]->[B]` | Directed correlation |
-| `?[A]:[B]` | Dependency pair |
+| `?[observer]:[observation]` | Observation made or asserted by an observer |
 | `<50%x2[A]>` | Probability and strength relevance |
 | `['memory'] = expression` | Assign percept state |
 | `['memory'] ~= expression` | Accumulate an experience |

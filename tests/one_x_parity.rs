@@ -100,7 +100,7 @@ fn public_api_surface_matches_1x_boundaries() {
 // Parity anchors:
 // 1.x/pangine/src/test/common/test_reference_concept.cpp:218,244,272,313
 #[test]
-fn correlations_dependencies_and_relevance_are_canonical() {
+fn correlations_observations_and_relevance_are_canonical() {
     let mut test = PangineTest::new();
 
     let a = test.concept("[A]");
@@ -115,12 +115,21 @@ fn correlations_dependencies_and_relevance_are_canonical() {
     assert_eq!(test.engine().get_correlation_b(&nested), Some(question_to_d));
     test.exec(["{{[A]->[B]}->[C]}", "{[C]->{[A]->[B]}}"]);
 
-    let dependency = test.concept("?[A]:[B]");
+    let observation = test.concept("?[A]:[B]");
     let b = test.concept("[B]");
-    assert_eq!(test.engine().get_dependency_a(&dependency), Some(a));
-    assert_eq!(test.engine().get_dependency_b(&dependency), Some(b));
-    let nested_dependency = test.concept("?(?[A]:[B]):(?[C]:[D])");
-    assert_eq!(test.engine().get_dependency_a(&nested_dependency), Some(dependency));
+    assert_eq!(test.engine().get_observer(&observation), Some(a));
+    assert_eq!(test.engine().get_observation(&observation), Some(b));
+    let nested_observation = test.concept("?(?[A]:[B]):(?[C]:[D])");
+    assert_eq!(test.engine().get_observer(&nested_observation), Some(observation));
+    test.assert_formats(pairs! {
+        "?[observer]:[observation]" => "?[observer]:[observation]",
+        "?[weather_station]:{[rain]->[wet_ground]}" => "?[weather_station]:{[rain]->[wet_ground]}",
+        "?(?[observer]:[report]):(?[camera]:([red][square]))" => "?(?[observer]:[report]):(?[camera]:([red][square]))",
+    });
+    test.assert_distinct(pairs! {
+        "?[observer]:[observation]" => "[observation]",
+        "?[observer]:[observation]" => "{[observer]->[observation]}",
+    });
 
     test.assert_distinct(pairs! {
         "<50%[A], 50%[B]>" => "<25%[A], 25%[B]>",

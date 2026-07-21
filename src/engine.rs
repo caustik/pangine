@@ -16,7 +16,7 @@ type ProjectionCache = BTreeMap<(usize, usize), ProjectionSummary>;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RelationKind {
-    Dependency,
+    Observation,
     Correlation,
 }
 
@@ -103,7 +103,7 @@ Concept syntax:
   [A]/[B]                    Merge with inverted [B]
   ![A]                       Inversion
   [A]->[B]                   Correlation
-  ?[A]:[B]                   Dependency
+  ?[observer]:[observation]  Observation
   <50%x2[A], [B]>            Relevance
 
 Percept operations:
@@ -245,12 +245,12 @@ pub enum ConceptKind {
         /// The target concept.
         b: ConceptId,
     },
-    /// A dependency whose question shape is `a` and answer shape is `b`.
-    Dependency {
-        /// The question concept.
-        a: ConceptId,
-        /// The answer concept.
-        b: ConceptId,
+    /// A Concept observed or asserted by `observer`.
+    Observation {
+        /// The concept that made or supplied the observation.
+        observer: ConceptId,
+        /// The concept that was observed or asserted.
+        observation: ConceptId,
     },
 }
 
@@ -268,14 +268,14 @@ impl Concept {
             ConceptKind::Percept { .. } => ConceptShape::Percept,
             ConceptKind::Anonymous => ConceptShape::Unordered,
             ConceptKind::Correlation { .. } => ConceptShape::Relation(RelationKind::Correlation),
-            ConceptKind::Dependency { .. } => ConceptShape::Relation(RelationKind::Dependency),
+            ConceptKind::Observation { .. } => ConceptShape::Relation(RelationKind::Observation),
         }
     }
 
     fn relation(&self) -> Option<(RelationKind, &ConceptId, &ConceptId)> {
         match &self.kind {
             ConceptKind::Correlation { a, b } => Some((RelationKind::Correlation, a, b)),
-            ConceptKind::Dependency { a, b } => Some((RelationKind::Dependency, a, b)),
+            ConceptKind::Observation { observer, observation } => Some((RelationKind::Observation, observer, observation)),
             _ => None,
         }
     }
@@ -546,14 +546,14 @@ impl Pangine {
         self.correlation(concept).map(|(_, b)| b.clone())
     }
 
-    /// Returns the question side of an owned dependency.
-    pub fn get_dependency_a(&self, concept: &ConceptId) -> Option<ConceptId> {
-        self.dependency(concept).map(|(a, _)| a.clone())
+    /// Returns the observer of an owned observation.
+    pub fn get_observer(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.observation(concept).map(|(observer, _)| observer.clone())
     }
 
-    /// Returns the answer side of an owned dependency.
-    pub fn get_dependency_b(&self, concept: &ConceptId) -> Option<ConceptId> {
-        self.dependency(concept).map(|(_, b)| b.clone())
+    /// Returns the observed concept of an owned observation.
+    pub fn get_observation(&self, concept: &ConceptId) -> Option<ConceptId> {
+        self.observation(concept).map(|(_, observation)| observation.clone())
     }
 
     /// Returns `concept` when it is an owned percept.
@@ -771,7 +771,7 @@ impl Pangine {
                 let decision = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
                 Ok(self.make_decision(&decision))
             }
-            Some('?') => self.parse_dependency(parser),
+            Some('?') => self.parse_observation(parser),
             Some('!') => {
                 parser.next();
                 parser.skip_ws();
@@ -796,12 +796,12 @@ impl Pangine {
         Ok(Some(self.reference_correlation(left, right)))
     }
 
-    fn parse_dependency(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+    fn parse_observation(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.next();
-        let dependency = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
+        let observer = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
         parser.expect(':')?;
-        let consequent = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
-        Ok(Some(self.reference_dependency(dependency, consequent)))
+        let observation = self.parse_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
+        Ok(Some(self.reference_observation(observer, observation)))
     }
 
     fn parse_relevance(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
@@ -1010,13 +1010,13 @@ impl Pangine {
         self.reference_pair(ConceptKind::Correlation { a, b })
     }
 
-    fn reference_dependency(&mut self, a: ConceptId, b: ConceptId) -> ConceptId {
-        self.reference_pair(ConceptKind::Dependency { a, b })
+    fn reference_observation(&mut self, observer: ConceptId, observation: ConceptId) -> ConceptId {
+        self.reference_pair(ConceptKind::Observation { observer, observation })
     }
 
     fn reference_relation(&mut self, kind: RelationKind, a: ConceptId, b: ConceptId) -> ConceptId {
         match kind {
-            RelationKind::Dependency => self.reference_dependency(a, b),
+            RelationKind::Observation => self.reference_observation(a, b),
             RelationKind::Correlation => self.reference_correlation(a, b),
         }
     }
@@ -1222,7 +1222,7 @@ impl Pangine {
                 let evaluated = self.evaluate_subconcepts(concept, visited_percepts);
                 self.reference_map(&evaluated)
             }
-            ConceptKind::Correlation { .. } | ConceptKind::Dependency { .. } => {
+            ConceptKind::Correlation { .. } | ConceptKind::Observation { .. } => {
                 let (kind, a, b) = concept.0.relation().unwrap();
                 let (a, b) = (a.clone(), b.clone());
                 let a = self.evaluate_concept_inner(&a, visited_percepts)?;
@@ -1645,8 +1645,8 @@ impl Pangine {
         self.relation(concept, RelationKind::Correlation)
     }
 
-    fn dependency<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
-        self.relation(concept, RelationKind::Dependency)
+    fn observation<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
+        self.relation(concept, RelationKind::Observation)
     }
 
     fn relation<'a>(&self, concept: &'a ConceptId, expected: RelationKind) -> Option<(&'a ConceptId, &'a ConceptId)> {
@@ -1695,21 +1695,21 @@ impl Pangine {
                 let b = self.format_semantic_operand(b, evaluate, active);
                 format!("{{{a}->{b}}}")
             }
-            ConceptKind::Dependency { a, b } => {
-                let a_paren = self.needs_dependency_parens(a);
-                // Historical 1.x used dependency A to decide parentheses on both sides:
+            ConceptKind::Observation { observer, observation } => {
+                let observer_paren = self.needs_observation_parens(observer);
+                // Historical 1.x used its left operand to decide parentheses on both sides:
                 // 1.x/pangine/src/pangine/common/pae_concept.cpp:157
-                let b_paren = self.needs_dependency_parens(a);
-                let a = self.format_inner(a, evaluate, active);
-                let b = self.format_inner(b, evaluate, active);
+                let observation_paren = self.needs_observation_parens(observation);
+                let observer = self.format_inner(observer, evaluate, active);
+                let observation = self.format_inner(observation, evaluate, active);
                 format!(
                     "?{}{}{}:{}{}{}",
-                    if a_paren { "(" } else { "" },
-                    a,
-                    if a_paren { ")" } else { "" },
-                    if b_paren { "(" } else { "" },
-                    b,
-                    if b_paren { ")" } else { "" }
+                    if observer_paren { "(" } else { "" },
+                    observer,
+                    if observer_paren { ")" } else { "" },
+                    if observation_paren { "(" } else { "" },
+                    observation,
+                    if observation_paren { ")" } else { "" }
                 )
             }
             ConceptKind::Anonymous => self.format_subconcepts(&concept.0.subconcepts, evaluate, active, true),
@@ -1719,8 +1719,8 @@ impl Pangine {
         formatted
     }
 
-    fn needs_dependency_parens(&self, concept: &ConceptId) -> bool {
-        concept.0.shape() == ConceptShape::Relation(RelationKind::Dependency) || concept.0.subconcepts.len() > 1
+    fn needs_observation_parens(&self, concept: &ConceptId) -> bool {
+        concept.0.shape() == ConceptShape::Relation(RelationKind::Observation)
     }
 
     fn format_semantic_operand(&self, concept: &ConceptId, evaluate: bool, active: &mut BTreeSet<ConceptId>) -> String {
@@ -1841,12 +1841,12 @@ impl Pangine {
             }
 
             out.push_str(&format_relevance_strength(relevance));
-            let wrap_dependency = use_implicit_union && concept.0.shape() == ConceptShape::Relation(RelationKind::Dependency);
-            if wrap_dependency {
+            let wrap_observation = use_implicit_union && concept.0.shape() == ConceptShape::Relation(RelationKind::Observation);
+            if wrap_observation {
                 out.push('(');
             }
             out.push_str(&self.format_inner(&concept, evaluate, active));
-            if wrap_dependency {
+            if wrap_observation {
                 out.push(')');
             }
         }
@@ -2163,6 +2163,9 @@ fn format_float(value: f32) -> String {
 }
 
 #[cfg(test)]
+mod research;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2174,7 +2177,7 @@ mod tests {
         assert!(help.contains("help, h"));
         assert!(help.contains("[]                         Null"));
         assert!(help.contains("[A]/[B]"));
-        assert!(help.contains("?[A]:[B]"));
+        assert!(help.contains("?[observer]:[observation]"));
         assert!(help.contains("['name'] += expression"));
         assert!(help.contains("['name'] -= expression"));
         assert!(help.contains("['name'] *= expression"));

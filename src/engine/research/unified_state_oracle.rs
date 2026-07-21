@@ -173,12 +173,12 @@ fn encode_occurrence_state(pangine: &mut Pangine, occurrences: &[(ConceptId, Con
         }
     }
 
-    let records = sources.into_iter().map(|(source, root)| (pangine.reference_dependency(source, root), Relevance::DEFAULT)).collect::<ConceptMap>();
+    let records = sources.into_iter().map(|(source, root)| (pangine.reference_observation(source, root), Relevance::DEFAULT)).collect::<ConceptMap>();
     Ok(pangine.reference_map(&records))
 }
 
 fn decode_occurrence_state(state: &ConceptId) -> Result<BTreeMap<ConceptId, ConceptId>, &'static str> {
-    let records = if matches!(state.0.kind, ConceptKind::Dependency { .. }) {
+    let records = if matches!(state.0.kind, ConceptKind::Observation { .. }) {
         vec![(state, Relevance::DEFAULT)]
     } else if matches!(state.0.kind, ConceptKind::Anonymous) {
         state.0.subconcepts.iter().map(|(record, &relevance)| (record, relevance)).collect()
@@ -191,7 +191,7 @@ fn decode_occurrence_state(state: &ConceptId) -> Result<BTreeMap<ConceptId, Conc
         if relevance != Relevance::DEFAULT {
             return Err("source records have structural relevance");
         }
-        let ConceptKind::Dependency { a: source, b: root } = &record.0.kind else {
+        let ConceptKind::Observation { observer: source, observation: root } = &record.0.kind else {
             return Err("occurrence state contains a non-record");
         };
         match sources.get(source) {
@@ -274,8 +274,8 @@ fn encode_support_state(pangine: &mut Pangine, observations: &[ContextObservatio
     let records = observations
         .iter()
         .map(|observation| {
-            let support = pangine.reference_dependency(observation.context.clone(), observation.candidate.clone());
-            (pangine.reference_dependency(observation.source.clone(), support), Relevance::DEFAULT)
+            let support = pangine.reference_correlation(observation.context.clone(), observation.candidate.clone());
+            (pangine.reference_observation(observation.source.clone(), support), Relevance::DEFAULT)
         })
         .collect::<ConceptMap>();
     pangine.reference_map(&records)
@@ -350,7 +350,7 @@ fn one_recursive_concept_can_preserve_source_and_structural_occurrence_boundarie
 }
 
 #[test]
-fn exact_context_dependencies_remove_generic_swamping_without_parallel_state() {
+fn source_scoped_observations_remove_generic_swamping_without_parallel_state() {
     let mut pangine = Pangine::new();
     let mut occurrences = Vec::new();
     let mut legacy_generic_weight = 0.0;
