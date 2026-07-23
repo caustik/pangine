@@ -6,3 +6,6 @@
 
 #[path = "research/unified_concept_state.rs"]
 mod unified_concept_state;
+
+#[path = "research/classified_collections.rs"]
+mod classified_collections;
