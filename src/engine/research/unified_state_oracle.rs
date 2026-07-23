@@ -70,7 +70,7 @@ fn projection_alternatives(pangine: &Pangine, experience: &ConceptId, question: 
                 _ => Vec::new(),
             }
         })
-    } else if experience.0.shape() == ConceptShape::Unordered && question.0.shape() == ConceptShape::Unordered {
+    } else if experience.0.shape() == question.0.shape() && matches!(experience.0.shape(), ConceptShape::Relevance | ConceptShape::ObservationSet) {
         unordered_preserved_alternatives(pangine, experience, question)
     } else {
         None
@@ -168,7 +168,7 @@ fn fold_experience_set(pangine: &mut Pangine, experiences: &[ConceptId]) -> Opti
     for experience in experiences {
         collect_experience_node(pangine, experience, None, &mut records, &mut visited);
     }
-    pangine.reference_map(&records)
+    pangine.reference_observation_set(&records)
 }
 
 fn collect_experience_node(
@@ -205,10 +205,15 @@ fn collect_observed_payload(
             collect_experience_node(pangine, b, observer, records, visited);
         }
         ConceptKind::Observation { .. } => collect_experience_node(pangine, concept, observer, records, visited),
-        ConceptKind::Anonymous => {
+        ConceptKind::Relevance => {
             for (child, relevance) in &concept.0.subconcepts {
                 let weighted = pangine.reference_map(&ConceptMap::from([(child.clone(), *relevance)])).unwrap();
                 collect_experience_node(pangine, &weighted, observer.clone(), records, visited);
+            }
+        }
+        ConceptKind::ObservationSet => {
+            for record in concept.0.subconcepts.keys() {
+                collect_experience_node(pangine, record, observer.clone(), records, visited);
             }
         }
         ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
@@ -218,7 +223,7 @@ fn collect_observed_payload(
 fn experience_records(state: &ConceptId) -> Result<Vec<ConceptId>, &'static str> {
     let records = if matches!(state.0.kind, ConceptKind::Observation { .. }) {
         vec![(state, Relevance::DEFAULT)]
-    } else if matches!(state.0.kind, ConceptKind::Anonymous) {
+    } else if matches!(state.0.kind, ConceptKind::ObservationSet) {
         state.0.subconcepts.iter().map(|(record, &relevance)| (record, relevance)).collect()
     } else {
         return Err("experience state is not observation-scoped");
@@ -245,7 +250,7 @@ fn combine_experience_states(pangine: &mut Pangine, partials: &[Option<ConceptId
             records.insert(record, Relevance::DEFAULT);
         }
     }
-    Ok(pangine.reference_map(&records))
+    Ok(pangine.reference_observation_set(&records))
 }
 
 fn encode_occurrence_state(pangine: &mut Pangine, occurrences: &[(ConceptId, ConceptId)]) -> Result<Option<ConceptId>, &'static str> {
@@ -265,13 +270,13 @@ fn encode_occurrence_state(pangine: &mut Pangine, occurrences: &[(ConceptId, Con
     }
 
     let records = sources.into_iter().map(|(source, root)| (pangine.reference_observation(source, root), Relevance::DEFAULT)).collect::<ConceptMap>();
-    Ok(pangine.reference_map(&records))
+    Ok(pangine.reference_observation_set(&records))
 }
 
 fn decode_occurrence_state(state: &ConceptId) -> Result<BTreeMap<ConceptId, ConceptId>, &'static str> {
     let records = if matches!(state.0.kind, ConceptKind::Observation { .. }) {
         vec![(state, Relevance::DEFAULT)]
-    } else if matches!(state.0.kind, ConceptKind::Anonymous) {
+    } else if matches!(state.0.kind, ConceptKind::ObservationSet) {
         state.0.subconcepts.iter().map(|(record, &relevance)| (record, relevance)).collect()
     } else {
         return Err("occurrence state is not source-keyed");
@@ -422,7 +427,7 @@ fn enumerated_matcher_cells_fold_back_to_the_current_projection_summary() {
         ("[A]*[B]", "['X']*[B]"),
         ("{[C]->[A]}*{[B]->[D]}", "{['X']->[A]}*{[B]->[D]}"),
         ("{[E]->[A]}*{[P]->[Q]}", "{['X']->[A]}*{[B]->[D]}"),
-        ("<x2[A], [B]>", "['X']*[B]"),
+        ("x2[A][B]", "['X']*[B]"),
     ] {
         let experience = must_reference(&mut pangine, experience);
         let question = must_reference(&mut pangine, question);
@@ -484,12 +489,12 @@ fn recursive_observation_set_fold_deduplicates_subobservations_without_inventing
 fn recursive_observation_set_fold_preserves_structural_multiplicity() {
     let mut pangine = Pangine::new();
     let one = must_reference(&mut pangine, "[A]");
-    let two = must_reference(&mut pangine, "<x2[A]>");
+    let two = must_reference(&mut pangine, "x2[A]");
     let state = fold_experience_set(&mut pangine, &[one, two]).unwrap();
     let records = experience_records(&state).unwrap();
     assert_eq!(records.len(), 2);
     assert!(records.iter().any(|record| pangine.format_concept(record, false) == "?[]:[A]"));
-    assert!(records.iter().any(|record| pangine.format_concept(record, false) == "?[]:<x2[A]>"));
+    assert!(records.iter().any(|record| pangine.format_concept(record, false) == "?[]:x2[A]"));
 }
 
 #[test]
@@ -530,7 +535,7 @@ fn one_recursive_concept_can_preserve_source_and_structural_occurrence_boundarie
     let source_b = must_reference(&mut pangine, "[source-b]");
     let a = must_reference(&mut pangine, "[A]");
     let b = must_reference(&mut pangine, "[B]");
-    let structural_repeat = must_reference(&mut pangine, "<x2[A]>");
+    let structural_repeat = must_reference(&mut pangine, "x2[A]");
 
     let one_structural_source = encode_occurrence_state(&mut pangine, &[(source_a.clone(), structural_repeat)]).unwrap().unwrap();
     let two_empirical_sources = encode_occurrence_state(&mut pangine, &[(source_a.clone(), a.clone()), (source_b.clone(), a.clone())]).unwrap().unwrap();
@@ -666,7 +671,7 @@ fn question_support_prototype_replay_becomes_structural_multiplicity() {
 
     assert_ne!(reduced_once, reduced_replay);
     assert_eq!(reduced_replay.0.subconcepts.values().copied().collect::<Vec<_>>(), vec![Relevance::new(1.0, 2.0)]);
-    assert_eq!(pangine.format_concept(&reduced_replay, false), "<x2?[source]:{{['X']->[A]}->[E]}>");
+    assert_eq!(pangine.format_concept(&reduced_replay, false), "x2?[source]:{{['X']->[A]}->[E]}");
 }
 
 #[test]

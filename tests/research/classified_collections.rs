@@ -8,7 +8,7 @@ use pangine::{ConceptId, Pangine, Relevance};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum ModelConcept {
+pub(super) enum ModelConcept {
     Null,
     Named(String),
     Relevance(BTreeMap<ModelConcept, i32>),
@@ -17,22 +17,22 @@ enum ModelConcept {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct DirectedPair {
-    source: ModelConcept,
-    target: ModelConcept,
+pub(super) struct DirectedPair {
+    pub(super) source: ModelConcept,
+    pub(super) target: ModelConcept,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct ObservedPair {
-    observer: Option<ModelConcept>,
-    observation: ModelConcept,
+pub(super) struct ObservedPair {
+    pub(super) observer: Option<ModelConcept>,
+    pub(super) observation: ModelConcept,
 }
 
-fn named(name: &str) -> ModelConcept {
+pub(super) fn named(name: &str) -> ModelConcept {
     ModelConcept::Named(name.to_owned())
 }
 
-fn relevance(entries: impl IntoIterator<Item = (ModelConcept, i32)>) -> ModelConcept {
+pub(super) fn relevance(entries: impl IntoIterator<Item = (ModelConcept, i32)>) -> ModelConcept {
     let mut members = BTreeMap::new();
     for (concept, coefficient) in entries {
         *members.entry(concept).or_default() += coefficient;
@@ -51,7 +51,7 @@ fn relevance(entries: impl IntoIterator<Item = (ModelConcept, i32)>) -> ModelCon
     ModelConcept::Relevance(members)
 }
 
-fn correlation(entries: impl IntoIterator<Item = (DirectedPair, i32)>) -> ModelConcept {
+pub(super) fn correlation(entries: impl IntoIterator<Item = (DirectedPair, i32)>) -> ModelConcept {
     let mut pairs = BTreeMap::new();
     for (pair, coefficient) in entries {
         *pairs.entry(pair).or_default() += coefficient;
@@ -68,7 +68,7 @@ fn correlate(source: ModelConcept, target: ModelConcept) -> ModelConcept {
     correlation([(DirectedPair { source, target }, 1)])
 }
 
-fn observation(entries: impl IntoIterator<Item = ObservedPair>) -> ModelConcept {
+pub(super) fn observation(entries: impl IntoIterator<Item = ObservedPair>) -> ModelConcept {
     let entries = entries.into_iter().collect::<BTreeSet<_>>();
     if entries.is_empty() {
         ModelConcept::Null
@@ -81,7 +81,7 @@ fn observe(observer: Option<ModelConcept>, observed: ModelConcept) -> ModelConce
     observation([ObservedPair { observer, observation: observed }])
 }
 
-fn fold_experiences(experiences: impl IntoIterator<Item = ModelConcept>) -> ModelConcept {
+pub(super) fn fold_experiences(experiences: impl IntoIterator<Item = ModelConcept>) -> ModelConcept {
     let mut records = BTreeSet::new();
     for experience in experiences {
         match experience {
@@ -186,20 +186,22 @@ fn ordinary_composition_and_experience_apply_different_duplicate_laws() {
 }
 
 #[test]
-fn current_partial_state_detection_depends_on_outer_relevance_shape() {
+fn explicit_observation_state_removes_outer_relevance_shape_detection() {
     let mut pangine = Pangine::new();
     let distinct = must_reference(&mut pangine, "(?[event-1]:[A])(?[event-2]:[B])");
     let distinct_state = must_reference(&mut pangine, "['distinct'] ~= ((?[event-1]:[A])(?[event-2]:[B]))");
-    assert_eq!(distinct_state, distinct);
+    assert_ne!(distinct_state, distinct);
+    assert_eq!(distinct_state, must_reference(&mut pangine, "<?[]:((?[event-1]:[A])(?[event-2]:[B])), ?[event-1]:[A], ?[event-2]:[B]>"));
 
     let repeated = must_reference(&mut pangine, "(?[event-1]:[A])(?[event-1]:[A])");
     let repeated_state = must_reference(&mut pangine, "['repeated'] ~= ((?[event-1]:[A])(?[event-1]:[A]))");
     assert_ne!(repeated_state, repeated);
 
-    let entries = pangine.get_relevance_map(&repeated_state);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(pangine.get_observation(&entries[0].1), Some(repeated));
-    assert_eq!(pangine.get_observer(&entries[0].1), None);
+    let entries = pangine.get_observations(&repeated_state).unwrap();
+    assert!(entries.iter().any(|entry| pangine.get_observation(entry) == Some(repeated.clone()) && pangine.get_observer(entry).is_none()));
+
+    let explicit = must_reference(&mut pangine, "<?[event-1]:[A], ?[event-2]:[B]>");
+    assert_eq!(must_reference(&mut pangine, "['explicit'] ~= <?[event-1]:[A], ?[event-2]:[B]>"), explicit);
 }
 
 #[test]

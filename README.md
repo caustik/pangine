@@ -31,6 +31,14 @@ A correlation describes a relationship in the observed material. An observation 
 
 The second expression reads as "the weather station observed or asserted that rain relates to wet ground." Both the observer and the observation may be any recursive Concept. Pangine does not reserve the observer position for particular kinds of Concept. The third form uses the null observer, written `[]`, for a globally scoped observation. Pangine creates that form when an expression is experienced without an explicit observer. The grammar does not imply observer-specific confidence or independence.
 
+When state contains several distinct Observations, angle brackets identify the collection itself:
+
+```text
+<?[weather_station]:[rain], ?[camera]:[wet_ground]>
+```
+
+This is one recursive Concept, not an anonymous union that happens to contain Observations. The collection is unordered and idempotent. Repeating an entry does not change it, while ordinary composition still preserves structural multiplicity. Relevance coefficients attach to the next ordinary union operand, so `[A][A][B]` can be written `x2[A][B]`, and `x2[A]x3[B]` weights two operands independently. Parentheses only group: `x2([A][B])` applies one coefficient to the entire grouped Concept. Braces remain the canonical boundary for Correlation.
+
 A named percept holds state. Assignment stores a value, experience accumulates what has been observed, a question binds output percepts, and evaluation materializes their current values.
 
 ```text
@@ -93,7 +101,7 @@ partial experience:  {[E]->[A]}*{[P1]->[Q1]}
 partial experience:  {[E]->[A]}*{[P2]->[Q2]}
 partial experience:  {[E]->[A]}*{[P3]->[Q3]}
 question:            {['X']->[A]}*{[B]->[D]}
-ranked candidates:   <x14[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>
+ranked candidates:   x14[E]x12[C]x3[B]x3[P1]x3[P2]x3[P3]
 selected candidate:  [E]
 result: E wins without the complete E-shaped observation ever being experienced
 limitation: these strengths are deterministic projection scores, not calibrated probabilities
@@ -129,6 +137,7 @@ command> [cat]->[purrs]
 | `[]` | Null or no concept |
 | `[name]` | Named concept |
 | `['memory']` | Named percept reference |
+| `(expression)` | Grouping |
 | `[A][B]` | Union |
 | `[A]*[B]` | Flattening merge |
 | `[A]/[B]` | Merge with an inverted right operand |
@@ -136,7 +145,8 @@ command> [cat]->[purrs]
 | `[A]->[B]` | Directed correlation |
 | `?[observer]:[observation]` | Observation made or asserted by an observer |
 | `?[]:[observation]` | Observation in global scope |
-| `<50%x2[A]>` | Probability and strength relevance |
+| `<?[observer]:[A], ?[]:[B]>` | Multi-entry Observation state |
+| `50%x2[A]` | Probability and strength relevance on the next operand |
 | `['memory'] = expression` | Assign percept state |
 | `['memory'] ~= expression` | Insert an experience and its recursive observations |
 | `['memory'] @ expression` | Bind outputs and return the unresolved question shape |
@@ -150,7 +160,7 @@ Statements may be separated with semicolons. C-style block comments and C++-styl
 
 Parsing distinguishes a valid null result from malformed input and I/O failure. Parsing is deliberately non-transactional: successful percept mutations before a later error remain applied.
 
-Experience stores the complete input and its exact recursively exposed parts as a set of Observations. Explicit observations keep their observer; unwrapped inputs use the global/null observer. Equal observations are stored once, unequal observations remain distinct, and ordinary Concept relevance and structural multiplicity are unchanged. Questions derive a temporary payload view and lazily fold the implied recursive wildcard projections into distinct ranked output bindings, so neither a second authoritative state nor the combinatorial wildcard closure has to be stored. Because `@` binds more tightly than `$`, `$['memory'] @ expression` resolves the returned question shape only when an evaluated snapshot is explicitly requested.
+Experience stores the complete input and its exact recursively exposed parts as an explicit Observation-state Concept. Explicit observations keep their observer; unwrapped inputs use the global/null observer. Equal observations are stored once, unequal observations remain distinct, and ordinary Concept relevance and structural multiplicity are unchanged. A singleton state uses the existing `?observer:observation` form, while several entries use `<observation, ...>`. Questions derive a temporary payload view and lazily fold the implied recursive wildcard projections into distinct ranked output bindings, so neither a second authoritative state nor the combinatorial wildcard closure has to be stored. Because `@` binds more tightly than `$`, `$['memory'] @ expression` resolves the returned question shape only when an evaluated snapshot is explicitly requested.
 
 The crate has no third-party runtime dependencies and forbids unsafe Rust.
 

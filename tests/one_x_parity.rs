@@ -87,7 +87,7 @@ fn public_api_surface_matches_1x_boundaries() {
     let memory = test.engine_mut().reference_percept("memory");
     let experience = test.concept("{[A]->[B]}");
     let experienced = test.engine_mut().perform_experience(&memory, Some(&experience));
-    assert_eq!(experienced, test.reference("(?[]:{[A]->[B]})*(?[]:[A])*(?[]:[B])"));
+    assert_eq!(experienced, test.reference("<?[]:{[A]->[B]}, ?[]:[A], ?[]:[B]>"));
     assert_eq!(test.engine().get_value(&memory), None);
 
     let left = test.engine_mut().reference_percept("left");
@@ -128,7 +128,7 @@ fn correlations_observations_and_relevance_are_canonical() {
         "?[observer]:[observation]" => "?[observer]:[observation]",
         "?[]:[observation]" => "?[]:[observation]",
         "?[weather_station]:{[rain]->[wet_ground]}" => "?[weather_station]:{[rain]->[wet_ground]}",
-        "?(?[observer]:[report]):(?[camera]:([red][square]))" => "?(?[observer]:[report]):(?[camera]:([red][square]))",
+        "?(?[observer]:[report]):(?[camera]:([red][square]))" => "?(?[observer]:[report]):(?[camera]:[red][square])",
     });
     test.assert_distinct(pairs! {
         "?[observer]:[observation]" => "[observation]",
@@ -137,14 +137,14 @@ fn correlations_observations_and_relevance_are_canonical() {
     });
 
     test.assert_distinct(pairs! {
-        "<50%[A], 50%[B]>" => "<25%[A], 25%[B]>",
-        "<25%[A], 25%[B]>" => "<25%[A], 50%[B], 50%[B]>",
+        "50%[A]50%[B]" => "25%[A]25%[B]",
+        "25%[A]25%[B]" => "25%[A]50%[B]50%[B]",
     });
     test.assert_equivalent(pairs! {
-        "<25%[A], 50%[B], 50%[B]>" => "<25%[A], 25%[B], 75%[B]>",
-        "<25%[A]*[B], 25%[B]*[A], 10%{[C]->[D]}, 10%{[C]->[D]}>" => "<15%[B]*[A], 35%[B]*[A], 5%{[C]->[D]}, 15%{[C]->[D]}>",
+        "25%[A]50%[B]50%[B]" => "25%[A]25%[B]75%[B]",
+        "25%([A]*[B])25%([B]*[A])10%{[C]->[D]}10%{[C]->[D]}" => "15%([B]*[A])35%([B]*[A])5%{[C]->[D]}15%{[C]->[D]}",
     });
-    test.exec(["{<25%[A], 25%[B]>->[C]}"]);
+    test.exec(["{25%[A]25%[B]->[C]}"]);
 }
 
 // Parity anchors:
@@ -163,13 +163,13 @@ fn union_inversion_normalization_and_null_removal_match_1x() {
     test.assert_equivalent(pairs! {
         "[A]*[B]" => "[B]*[A]",
         "([B]*[A])*([C]*[D])" => "([D]*[C])*([A]*[B])",
-        "([D]*[C])*(([A]*[B])*[E]*[F]*([A]*[B]))" => "<100%x2[A], 100%x2[B], 100%[C], 100%[D], 100%[E], 100%[F]>",
+        "([D]*[C])*(([A]*[B])*[E]*[F]*([A]*[B]))" => "100%x2[A]100%x2[B]100%[C]100%[D]100%[E]100%[F]",
         "[A]" => "!![A]",
         "[A]" => "!(!([A]))",
         "!([A]*[B])" => "!(!!([B]*[A]))",
-        "<x-1[A]>" => "![A]",
-        "<x-1[A], x-1[B]>" => "!([A]*[B])",
-        "<x-2[A], x-2[B]>*([A]*[B])" => "!([A]*[B])",
+        "x-1[A]" => "![A]",
+        "x-1[A]x-1[B]" => "!([A]*[B])",
+        "x-2[A]x-2[B]*([A]*[B])" => "!([A]*[B])",
         "!([A])*!([B])" => "![A]*(![B])",
         "![A]*(![B])" => "![A]*![B]",
         "![A]*![B]" => "(![A])*(![B])",
@@ -177,7 +177,7 @@ fn union_inversion_normalization_and_null_removal_match_1x() {
         "!([A]*[B])*!([C]*[D])" => "(![A]*![B]*![C]*![D])",
         "([A]*[B]*[C])*!([A]*[B])" => "[C]",
     });
-    test.assert_null(["<x-2([A]*[B])>*<x2([A]*[B])>", "!([A]*[B])*([A]*[B])", "[A]*![A]", "([A]*[B])*!([A]*[B])"]);
+    test.assert_null(["x-2([A]*[B])*x2([A]*[B])", "!([A]*[B])*([A]*[B])", "[A]*![A]", "([A]*[B])*!([A]*[B])"]);
     test.assert_invalid(["([A]*![B})*(![A]*[B])"]);
 }
 
@@ -197,7 +197,7 @@ fn percept_merge_questions_and_decisions_preserve_1x_while_experience_is_idempot
 
     let experience1 = test.concept("['mind01'] ~= {[tigger]->[meows]}");
     let experience2 = test.concept("['mind01'] ~= {[tigger]->[purrs]}");
-    let expected2 = test.concept("(?[]:{[tigger]->[meows]})*(?[]:{[tigger]->[purrs]})*(?[]:[tigger])*(?[]:[meows])*(?[]:[purrs])");
+    let expected2 = test.concept("<?[]:{[tigger]->[meows]}, ?[]:{[tigger]->[purrs]}, ?[]:[tigger], ?[]:[meows], ?[]:[purrs]>");
     let experience3 = test.concept("['mind01'] ~= {[tigger]->[purrs]}");
 
     assert_ne!(experience1, experience2);
@@ -219,7 +219,7 @@ fn percept_merge_questions_and_decisions_preserve_1x_while_experience_is_idempot
     assert_eq!(okay, okay_twice);
     assert_ne!(still_okay, okay);
     let inverted = test.concept("?[]:!{[A]->[B]}");
-    assert!(test.engine().get_relevance_map(&still_okay).iter().any(|(_, record)| record == &inverted));
+    assert!(test.engine().get_observations(&still_okay).unwrap().iter().any(|record| record == &inverted));
 
     test.exec([
         "['mind'] ~= {{[A]->[species_is]}->[cat]}",
@@ -240,7 +240,7 @@ fn correlation_questions_keep_each_output_binding_separate() {
     test.assert_equivalent(pairs! {
         "['test'] @ {['1']->[C]}*{['2']->[B]}" => "{['1']->[C]}*{['2']->[B]}",
         "$['1']" => "[A]",
-        "$['2']" => "<x2[A]>",
+        "$['2']" => "x2[A]",
     });
 }
 
@@ -293,10 +293,10 @@ fn debug_console_rows_match_1x_display_rules() {
     assert_eq!(test.engine().debug_console_lines(Some(&a), false), vec!["  [A]"]);
     assert_eq!(test.engine().debug_console_lines(None, false), vec!["  []"]);
 
-    let relevance = test.concept("<50%[A], x2[B], x-1[C]>");
+    let relevance = test.concept("50%[A]x2[B]x-1[C]");
     assert_eq!(test.engine().debug_console_lines(Some(&relevance), false), vec!["  50% [A]", "  x2 [B]", "  ![C]"]);
 
-    let combined_relevance = test.concept("<50%x2[a]>");
+    let combined_relevance = test.concept("50%x2[a]");
     assert_eq!(test.engine().debug_console_lines(Some(&combined_relevance), false), vec!["  50%x2 [a]"]);
 
     test.exec(["['test'] = [A]"]);
@@ -330,14 +330,14 @@ fn historical_1x_scripts_return_success() {
 fn historical_1x_experience_fixture_preserves_inverted_observations_instead_of_cancelling_them() {
     let mut pangine = Pangine::new();
     let result = pangine.parse_script_text(include_str!("fixtures/1x/test_experience.pae")).unwrap().unwrap();
-    let records = pangine.get_relevance_map(&result);
+    let records = pangine.get_observations(&result).unwrap();
     let success = pangine.reference_concept("?[]:[success]").unwrap().unwrap();
     let positive_a = pangine.reference_concept("?[]:[A]").unwrap().unwrap();
     let inverted_a = pangine.reference_concept("?[]:![A]").unwrap().unwrap();
 
-    assert!(records.iter().any(|(_, record)| record == &success));
-    assert!(records.iter().any(|(_, record)| record == &positive_a));
-    assert!(records.iter().any(|(_, record)| record == &inverted_a));
+    assert!(records.contains(&success));
+    assert!(records.contains(&positive_a));
+    assert!(records.contains(&inverted_a));
 }
 
 #[test]

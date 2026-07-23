@@ -55,6 +55,8 @@ fn direct_semantics_are_right_associative_and_share_legacy_correlation_identity(
     test.assert_formats(pairs! {
         "[A]->[B]" => "{[A]->[B]}",
         "{[a]->[b][c][d]}" => "{[a]->[b][c][d]}",
+        "(?[]:[A])->[target]" => "{(?[]:[A])->[target]}",
+        "x2(?[]:[A])->[target]" => "{(x2?[]:[A])->[target]}",
     });
 
     let semantic = test.concept("[A]->[B]");
@@ -71,10 +73,10 @@ fn canonical_formatting_orders_relevance_shape_and_name_collisions() {
     let mut test = PangineTest::new();
 
     test.assert_formats(pairs! {
-        "([a]-><x2[b]>)*([a]-><x3[c]>)" => "({[a]-><x3[c]>}{[a]-><x2[b]>})",
-        "([a]->[b])*([a]->[b][c])" => "({[a]->[b]}{[a]->[b][c]})",
-        "['X']([B]->[F])['Y'][X][Y]" => "(['X']['Y'][X][Y]{[B]->[F]})",
-        "(?[a]:[b])*({[a]->[b]})" => "((?[a]:[b]){[a]->[b]})",
+        "([a]->x2[b])*([a]->x3[c])" => "{[a]->x3[c]}{[a]->x2[b]}",
+        "([a]->[b])*([a]->[b][c])" => "{[a]->[b]}{[a]->[b][c]}",
+        "['X']([B]->[F])['Y'][X][Y]" => "['X']['Y'][X][Y]{[B]->[F]}",
+        "(?[a]:[b])*({[a]->[b]})" => "(?[a]:[b]){[a]->[b]}",
     });
 }
 
@@ -131,9 +133,9 @@ fn explicit_percept_mutation_operators_are_required() {
     let mut experience = PangineTest::new();
     experience.assert_equivalent(pairs! {
         "['A'] ~= [A]" => "?[]:[A]",
-        "['A'] ~= [B]" => "(?[]:[A])*(?[]:[B])",
-        "['A'] ~= ![A]" => "(?[]:[A])*(?[]:[B])*(?[]:![A])",
-        "['A'] ~= ![B]" => "(?[]:[A])*(?[]:[B])*(?[]:![A])*(?[]:![B])",
+        "['A'] ~= [B]" => "<?[]:[A], ?[]:[B]>",
+        "['A'] ~= ![A]" => "<?[]:[A], ?[]:[B], ?[]:![A]>",
+        "['A'] ~= ![B]" => "<?[]:[A], ?[]:[B], ?[]:![A], ?[]:![B]>",
     });
 }
 

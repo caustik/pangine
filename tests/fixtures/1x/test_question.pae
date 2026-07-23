@@ -83,7 +83,7 @@
 ['test'] @ [A]*['current']
 
 ['current'] ~= ![C]
-['current'] ~= !<x3[B]>
+['current'] ~= !x3[B]
 
 ['result'] ~= $['current']
 
@@ -96,8 +96,8 @@
 ['test'] ~= [A]*[C]
 ['test'] @ [A]*[A]*['current']
 
-['current'] ~= !<x2[B]>
-['current'] ~= !<x2[C]>
+['current'] ~= !x2[B]
+['current'] ~= !x2[C]
 
 ['result'] ~= $['current']
 
@@ -106,10 +106,10 @@
 #
 
 ['test'] = []
-['test'] ~= <50%x2[A]>
-['test'] ~= <50%x2[A]>*<50%x3[B]>
-['test'] ~= <50%x2[A]>*<25%x1[B]>*[expected]
-['test'] @ <50%x2[A]>*<25%x1[B]>*['current']
+['test'] ~= 50%x2[A]
+['test'] ~= 50%x2[A]*50%x3[B]
+['test'] ~= 50%x2[A]*25%x1[B]*[expected]
+['test'] @ 50%x2[A]*25%x1[B]*['current']
 
 ['current'] ~= ![expected]
 
@@ -127,8 +127,8 @@
 ['test'] ~= [anytime]*[cat_sleeps]*[dog_eats]
 ['test'] @ [anytime]*[cat_eats]*['current']
 
-['current'] *= !<x3[dog_sleeps]>
-['current'] *= !<x2[dog_eats]>
+['current'] *= !x3[dog_sleeps]
+['current'] *= !x2[dog_eats]
 ['current'] *= ![cat_sleeps]
 
 ['result'] ~= $['current']
@@ -143,7 +143,7 @@
 ['test'] ~= {[time]->[is_night]}*{[cat]->[sleeps]}
 ['test'] @ {[time]->[is_morning]}*['current']
 
-['current'] *= !<x2{[cat]->[eats]}>
+['current'] *= !x2{[cat]->[eats]}
 
 ['result'] ~= $['current']
 
@@ -158,7 +158,7 @@
 ['test'] @ {[time]->[night]}*{[cat]->['current']}
 
 ['current'] *= ![plays]
-['current'] *= !<x4[sleeps]>
+['current'] *= !x4[sleeps]
 
 ['result'] ~= $['current']
 

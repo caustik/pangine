@@ -1,4 +1,4 @@
-use pangine::{ConceptId, Pangine, Relevance};
+use pangine::{ConceptId, ConceptKind, Pangine, Relevance};
 use std::collections::BTreeSet;
 
 #[test]
@@ -27,7 +27,7 @@ fn question_keeps_correlation_output_bindings_distinct() {
     assert_eq!(question, must_ref(&mut pangine, "{['X']->[A]}*{[B]->['Y']}"));
 
     let answer = must_ref(&mut pangine, "$['memory'] @ {['X']->[A]}*{[B]->['Y']}");
-    assert_eq!(answer, must_ref(&mut pangine, "{<x12[C], x4[B]>->[A]}*{[B]-><x12[D], x4[A]>}",));
+    assert_eq!(answer, must_ref(&mut pangine, "{x12[C]x4[B]->[A]}*{[B]->x12[D]x4[A]}",));
 
     let x = must_ref(&mut pangine, "$['X']");
     let x_candidates = named_relevance(&pangine, &x);
@@ -48,7 +48,7 @@ fn question_preserves_outer_correlation_context_across_unordered_children() {
 
     must_ref(&mut pangine, "['memory'] ~= {([C]*[A])->([B]*[D])}");
     let answer = must_ref(&mut pangine, "$['memory'] @ {(['X']*[A])->([B]*['Y'])}");
-    assert_eq!(answer, must_ref(&mut pangine, "{[A]<x16[C], x8[A], [B], [D]>->[B]<x16[D], x8[B], [A], [C]>}",));
+    assert_eq!(answer, must_ref(&mut pangine, "{[A](x16[C]x8[A][B][D])->[B](x16[D]x8[B][A][C])}",));
 
     let x = must_ref(&mut pangine, "$['X']");
     let x_candidates = named_relevance(&pangine, &x);
@@ -162,6 +162,51 @@ fn experience_set_replay_is_content_blind_and_idempotent() {
 }
 
 #[test]
+fn observation_state_has_explicit_identity_and_a_recursive_canonical_surface() {
+    let mut pangine = Pangine::new();
+    let state = must_ref(&mut pangine, "<?[event-2]:[B], ?[event-1]:[A]>");
+    let records = observation_records(&pangine, &state);
+    let event_1 = must_ref(&mut pangine, "?[event-1]:[A]");
+    let event_2 = must_ref(&mut pangine, "?[event-2]:[B]");
+
+    assert!(matches!(pangine.concept_kind(&state), Some(ConceptKind::ObservationSet)));
+    assert_eq!(pangine.get_observations(&state), Some(vec![event_1.clone(), event_2.clone()]));
+    assert_eq!(records, BTreeSet::from([event_1, event_2]));
+    assert_eq!(pangine.format_concept(&state, false), "<?[event-1]:[A], ?[event-2]:[B]>");
+    assert_eq!(pangine.get_relevance_map(&state), vec![(Relevance::DEFAULT, state.clone())]);
+
+    let composition = must_ref(&mut pangine, "(?[event-1]:[A])(?[event-2]:[B])");
+    assert!(matches!(pangine.concept_kind(&composition), Some(ConceptKind::Relevance)));
+    assert!(pangine.get_observations(&composition).is_none());
+    assert_ne!(state, composition);
+
+    let weighted = must_ref(&mut pangine, "x2<?[event-1]:[A], ?[event-2]:[B]>");
+    assert_eq!(pangine.format_concept(&weighted, false), "x2<?[event-1]:[A], ?[event-2]:[B]>");
+
+    let as_observer = must_ref(&mut pangine, "?<?[event-1]:[A], ?[event-2]:[B]>:[C]");
+    let as_payload = must_ref(&mut pangine, "?[outer]:<?[event-1]:[A], ?[event-2]:[B]>");
+    for concept in [state, weighted, as_observer, as_payload] {
+        let formatted = pangine.format_concept(&concept, false);
+        assert_eq!(must_ref(&mut pangine, &formatted), concept);
+    }
+}
+
+#[test]
+fn collection_delimiters_do_not_dispatch_by_member_shape() {
+    let mut pangine = Pangine::new();
+    let singleton = must_ref(&mut pangine, "?[event-1]:[A]");
+
+    assert_eq!(must_ref(&mut pangine, "<?[event-1]:[A]>"), singleton);
+    assert!(pangine.reference_concept("<>").unwrap().is_none());
+    for invalid in ["<[A]>", "<x2[A]>", "<?[event-1]:[A], [B]>", "{?[event-1]:[A], ?[]:[B]}", "(x2[A], [B])"] {
+        assert!(pangine.reference_concept(invalid).is_err(), "expected invalid syntax: {invalid}");
+    }
+
+    let mixed_relevance = must_ref(&mut pangine, "(?[event-1]:[A])[B]");
+    assert!(matches!(pangine.concept_kind(&mixed_relevance), Some(ConceptKind::Relevance)));
+}
+
+#[test]
 fn experience_set_deduplicates_recursive_observations_without_inventing_shapes() {
     let mut pangine = Pangine::new();
 
@@ -195,10 +240,10 @@ fn experience_set_preserves_structural_multiplicity() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['memory'] ~= [A]");
-    let state = must_ref(&mut pangine, "['memory'] ~= <x2[A]>");
+    let state = must_ref(&mut pangine, "['memory'] ~= x2[A]");
     let records = observation_records(&pangine, &state);
 
-    assert_eq!(records, BTreeSet::from([must_ref(&mut pangine, "?[]:[A]"), must_ref(&mut pangine, "?[]:<x2[A]>")]));
+    assert_eq!(records, BTreeSet::from([must_ref(&mut pangine, "?[]:[A]"), must_ref(&mut pangine, "?[]:x2[A]")]));
 }
 
 #[test]
@@ -249,12 +294,12 @@ fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
 
     let unseen_complete = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
     let memory = must_ref(&mut pangine, "$['memory']");
-    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, record)| pangine.get_observation(record).as_ref() == Some(&unseen_complete)));
+    assert!(!pangine.get_observations(&memory).unwrap().iter().any(|record| pangine.get_observation(record).as_ref() == Some(&unseen_complete)));
 
     ask_question(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
     let result = must_ref(&mut pangine, "$['X']");
     let candidates = named_relevance(&pangine, &result);
-    assert_eq!(pangine.format_concept(&result, false), "<x14[E], x12[C], x3[B], x3[P1], x3[P2], x3[P3]>");
+    assert_eq!(pangine.format_concept(&result, false), "x14[E]x12[C]x3[B]x3[P1]x3[P2]x3[P3]");
     assert_eq!(candidate_weight(&candidates, "E"), 14.0);
     assert_eq!(candidate_weight(&candidates, "C"), 12.0);
     assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[E]"));
@@ -287,7 +332,7 @@ fn unequal_union_question_binds_the_exact_remainder_above_its_parts() {
     must_ref(&mut pangine, "['memory'] ~= [A]*[B]*[C]");
     ask_question(&mut pangine, "['memory'] @ ['X']*[B]");
 
-    assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "<x2([A]*[C]), [A], [C]>",));
+    assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "x2([A]*[C])[A][C]",));
     assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[A]*[C]"));
 }
 
@@ -306,7 +351,7 @@ fn unequal_union_question_does_not_bind_a_generic_mismatch_remainder() {
 fn unequal_union_remainder_defers_non_default_relevance() {
     let mut pangine = Pangine::new();
 
-    must_ref(&mut pangine, "['memory'] ~= <x2[A], [B], [C]>");
+    must_ref(&mut pangine, "['memory'] ~= x2[A][B][C]");
     ask_question(&mut pangine, "['memory'] @ ['X']*[B]");
 
     assert!(pangine.reference_concept("$['X']").unwrap().is_none());
@@ -323,19 +368,19 @@ fn experience_stores_linear_structure_instead_of_wildcard_closure() {
 
     let value = must_ref(&mut pangine, &format!("['memory'] ~= {experience}"));
 
-    assert_eq!(pangine.get_relevance_map(&value).len(), depth * 2 + 1);
+    assert_eq!(pangine.get_observations(&value).unwrap().len(), depth * 2 + 1);
 }
 
 #[test]
 fn experience_recurses_within_the_explicit_observer_scope() {
     let mut pangine = Pangine::new();
     let value = must_ref(&mut pangine, "['memory'] ~= ?({[A]->[B]}):([C][D])");
-    let entries = pangine.get_relevance_map(&value);
+    let entries = pangine.get_observations(&value).unwrap();
 
     assert_eq!(entries.len(), 3);
     for expected in ["?({[A]->[B]}):([C][D])", "?({[A]->[B]}):[C]", "?({[A]->[B]}):[D]"] {
         let expected = must_ref(&mut pangine, expected);
-        assert!(entries.iter().any(|(relevance, concept)| { *relevance == Relevance::DEFAULT && *concept == expected }));
+        assert!(entries.contains(&expected));
     }
 }
 
@@ -373,12 +418,11 @@ fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, St
 
 fn observation_records(pangine: &Pangine, state: &ConceptId) -> BTreeSet<ConceptId> {
     pangine
-        .get_relevance_map(state)
+        .get_observations(state)
+        .unwrap_or_else(|| panic!("expected Observation state, got {state:?}"))
         .into_iter()
-        .map(|(relevance, record)| {
-            assert_eq!(relevance, Relevance::DEFAULT);
-            assert!(pangine.get_observation(&record).is_some());
-            record
+        .inspect(|record| {
+            assert!(pangine.get_observation(record).is_some());
         })
         .collect()
 }

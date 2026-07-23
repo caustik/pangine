@@ -26,13 +26,13 @@
 # Test Union Experience - Relevance #1
 #
 
-['test'] ~= <50%x2[A]>
-['test'] ~= <50%x2[A]>*<50%x3[B]>
-['test'] ~= <50%x2[A]>*<25%x1[B]>*<10%x99[C]>
+['test'] ~= 50%x2[A]
+['test'] ~= 50%x2[A]*50%x3[B]
+['test'] ~= 50%x2[A]*25%x1[B]*10%x99[C]
 
-['test'] ~= !<50%x2[A]>
-['test'] ~= !<50%x2[A]>*!<50%x3[B]>
-['test'] ~= !<50%x2[A]>*!<25%x1[B]>*!<10%x99[C]>
+['test'] ~= !50%x2[A]
+['test'] ~= !50%x2[A]*!50%x3[B]
+['test'] ~= !50%x2[A]*!25%x1[B]*!10%x99[C]
 
 #
 # Test Union Experience - Relevance #2
@@ -40,11 +40,11 @@
 # This was a specific issue with relevance calculations
 #
 
-['test'] ~= <50%[A]>
+['test'] ~= 50%[A]
 ['test'] ~= ![A]
-['test'] ~= <75%x2[A]>
-['test'] ~= !<50%[A]>
-['test'] ~= !<50%[A]>
+['test'] ~= 75%x2[A]
+['test'] ~= !50%[A]
+['test'] ~= !50%[A]
 
 #
 # Test Union Experience - Parenthesis

@@ -14,7 +14,11 @@ fn main() {
 
     let unseen_complete = must_reference(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
     let memory = must_reference(&mut pangine, "$['memory']");
-    assert!(!pangine.get_relevance_map(&memory).iter().any(|(_, record)| pangine.get_observation(record).as_ref() == Some(&unseen_complete)));
+    assert!(!pangine
+        .get_observations(&memory)
+        .expect("memory should contain Observation state")
+        .iter()
+        .any(|record| pangine.get_observation(record).as_ref() == Some(&unseen_complete)));
 
     must_reference(&mut pangine, &format!("['memory'] @ {QUESTION}"));
     let ranked = must_reference(&mut pangine, "$['X']");

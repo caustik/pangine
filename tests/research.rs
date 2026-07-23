@@ -9,3 +9,6 @@ mod unified_concept_state;
 
 #[path = "research/classified_collections.rs"]
 mod classified_collections;
+
+#[path = "research/observation_collection_syntax.rs"]
+mod observation_collection_syntax;

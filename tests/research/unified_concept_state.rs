@@ -40,7 +40,7 @@ fn a_top_level_concept_union_can_preserve_a_composite_root_boundary() {
 fn singleton_relevance_still_collapses_structural_multiplicity_and_repetition() {
     let mut pangine = Pangine::new();
 
-    must_reference(&mut pangine, "['one-root'] += <x2[A]>");
+    must_reference(&mut pangine, "['one-root'] += x2[A]");
     must_reference(&mut pangine, "['two-roots'] += [A]");
     must_reference(&mut pangine, "['two-roots'] += [A]");
 

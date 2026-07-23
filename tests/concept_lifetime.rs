@@ -97,8 +97,8 @@ fn global_percept_snapshots_every_live_ordinary_concept() {
     let snapshot = pangine.reference_concept("$['*']").unwrap().unwrap();
 
     assert_eq!(pangine.get_relevance_map(&snapshot).len(), 3);
-    assert_eq!(pangine.format_concept(&snapshot, false), "([A][B]([A][B]))");
-    assert_eq!(pangine.format_concept(&global, true), "([A][B]([A][B]))");
+    assert_eq!(pangine.format_concept(&snapshot, false), "[A][B]([A][B])");
+    assert_eq!(pangine.format_concept(&global, true), "[A][B]([A][B])");
     assert_eq!(pangine.concept_count(), 3);
 
     drop(pair);
@@ -116,7 +116,7 @@ fn global_snapshot_expands_shared_concepts_instead_of_unlabeled_references() {
     let lines = pangine.debug_console_lines(Some(&snapshot), false);
 
     assert!(lines.iter().all(|line| !line.contains("[#")));
-    assert_eq!(lines.last().map(String::as_str), Some("  ((?[]:[A])(?[]:[B])(?[]:[C])(?[]:[D])(?[]:{[B]->[D]})(?[]:{[C]->[A]})(?[]:({[B]->[D]}{[C]->[A]})))"));
+    assert_eq!(lines.last().map(String::as_str), Some("  <?[]:[A], ?[]:[B], ?[]:[C], ?[]:[D], ?[]:{[B]->[D]}, ?[]:{[C]->[A]}, ?[]:{[B]->[D]}{[C]->[A]}>"));
 }
 
 #[test]
