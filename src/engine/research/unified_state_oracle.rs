@@ -392,6 +392,56 @@ fn source_scoped_observations_remove_generic_swamping_without_parallel_state() {
 }
 
 #[test]
+fn source_scoped_observations_separate_literal_support_from_a_generic_tie() {
+    let mut pangine = Pangine::new();
+    let question = must_reference(&mut pangine, "['X']*[B]");
+    let a = must_reference(&mut pangine, "[A]");
+    let b = must_reference(&mut pangine, "[B]");
+    let c = must_reference(&mut pangine, "[C]");
+    let occurrences = [
+        (must_reference(&mut pangine, "[left-source]"), must_reference(&mut pangine, "[A]*[B]")),
+        (must_reference(&mut pangine, "[right-source]"), must_reference(&mut pangine, "[B]*[C]")),
+    ];
+
+    let mut legacy_weights = BTreeMap::<ConceptId, f64>::new();
+    for (_, root) in &occurrences {
+        let summary = fold_projection_alternatives(&projection_alternatives(&pangine, root, &question));
+        for candidates in summary.bindings.values() {
+            for (candidate, weight) in candidates {
+                *legacy_weights.entry(candidate.clone()).or_default() += weight;
+            }
+        }
+    }
+    assert_eq!(legacy_weights.get(&a), Some(&2.0));
+    assert_eq!(legacy_weights.get(&b), Some(&2.0));
+    assert_eq!(legacy_weights.get(&c), Some(&2.0));
+
+    let occurrence_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
+    let observations = collect_context_observations(&pangine, &occurrence_state, &question).unwrap();
+    assert_eq!(candidate_sources(&observations, &a, &question, false).len(), 1);
+    assert_eq!(candidate_sources(&observations, &b, &question, false).len(), 0);
+    assert_eq!(candidate_sources(&observations, &c, &question, false).len(), 1);
+}
+
+#[test]
+fn nested_agent_memory_retains_conflicting_updates_until_correction_is_defined() {
+    let mut pangine = Pangine::new();
+    let source_v1 = must_reference(&mut pangine, "[policy-v1]");
+    let source_v2 = must_reference(&mut pangine, "[policy-v2]");
+    let cargo = must_reference(&mut pangine, "[cargo]");
+    let cli_runner = must_reference(&mut pangine, "[cli-runner]");
+    let old_root = must_reference(&mut pangine, "{({[repo]->[pangine]}*{[operation]->[test]}*{[scope]->[full]})->[cargo]}");
+    let new_root = must_reference(&mut pangine, "{({[repo]->[pangine]}*{[operation]->[test]}*{[scope]->[full]})->[cli-runner]}");
+    let question = must_reference(&mut pangine, "{({[repo]->[pangine]}*{[operation]->[test]}*{[scope]->[full]})->['route']}");
+    let state = encode_occurrence_state(&mut pangine, &[(source_v1, old_root), (source_v2, new_root)]).unwrap().unwrap();
+
+    let observations = collect_context_observations(&pangine, &state, &question).unwrap();
+    assert_eq!(candidate_sources(&observations, &cargo, &question, false).len(), 1);
+    assert_eq!(candidate_sources(&observations, &cli_runner, &question, false).len(), 1);
+    assert!(encode_support_state(&mut pangine, &observations).is_some());
+}
+
+#[test]
 fn source_identity_deduplicates_paths_and_delivery_but_not_independent_occurrences() {
     let mut pangine = Pangine::new();
     let source_a = must_reference(&mut pangine, "[source-a]");
