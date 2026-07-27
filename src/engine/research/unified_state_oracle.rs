@@ -47,6 +47,22 @@ struct ContextObservation {
     candidate: ConceptId,
 }
 
+#[derive(Clone, Debug)]
+struct BackoffProfile {
+    path: Vec<ConceptId>,
+    predictive: BTreeMap<ConceptId, f64>,
+}
+
+struct BackoffEvaluator<'a> {
+    pangine: &'a Pangine,
+    contexts: &'a BTreeSet<ConceptId>,
+    observations: &'a [ContextObservation],
+    frame: &'a [ConceptId],
+    background: &'a BTreeMap<ConceptId, f64>,
+    concentration: f64,
+    cache: BTreeMap<ConceptId, Vec<BackoffProfile>>,
+}
+
 fn must_reference(pangine: &mut Pangine, script: &str) -> ConceptId {
     pangine.reference_concept(script).unwrap().unwrap_or_else(|| panic!("expected a concept from {script:?}"))
 }
@@ -269,6 +285,79 @@ fn contains_node(outer: &ConceptId, inner: &ConceptId, visited: &mut BTreeSet<Co
     outer.0.children().any(|(child, _)| contains_node(child, inner, visited))
 }
 
+fn unordered_context_signature(pangine: &Pangine, context: &ConceptId) -> Option<(ConceptMap, ConceptId)> {
+    let ConceptKind::Correlation { a: fixed, b: output } = &context.0.kind else {
+        return None;
+    };
+    if !pangine.is_percept(output) || percept_occurrence_count(pangine, fixed) != 0 {
+        return None;
+    }
+
+    let members =
+        if matches!(fixed.0.kind, ConceptKind::Relevance) { fixed.0.subconcepts.clone() } else { ConceptMap::from([(fixed.clone(), Relevance::DEFAULT)]) };
+    Some((members, output.clone()))
+}
+
+fn context_subsumes(pangine: &Pangine, outer: &ConceptId, inner: &ConceptId) -> bool {
+    if contains_node(outer, inner, &mut BTreeSet::new()) {
+        return true;
+    }
+
+    let (Some((outer_members, outer_output)), Some((inner_members, inner_output))) =
+        (unordered_context_signature(pangine, outer), unordered_context_signature(pangine, inner))
+    else {
+        return false;
+    };
+    outer_output == inner_output && inner_members.iter().all(|(member, relevance)| outer_members.get(member) == Some(relevance))
+}
+
+fn collect_flat_unordered_context_observations(
+    pangine: &mut Pangine,
+    state: &ConceptId,
+    question: &ConceptId,
+) -> Result<Vec<ContextObservation>, &'static str> {
+    let occurrences = decode_occurrence_state(state)?;
+    let ConceptKind::Correlation { a: question_fixed, b: output } = &question.0.kind else {
+        return Err("flat unordered question is not a correlation");
+    };
+    let question_fixed = question_fixed.clone();
+    let output = output.clone();
+    if !pangine.is_percept(&output) || percept_occurrence_count(pangine, &question_fixed) != 0 {
+        return Err("flat unordered question must have one direct output");
+    }
+    let question_members = if matches!(question_fixed.0.kind, ConceptKind::Relevance) {
+        question_fixed.0.subconcepts.clone()
+    } else {
+        ConceptMap::from([(question_fixed, Relevance::DEFAULT)])
+    };
+
+    let mut observations = BTreeSet::new();
+    for (source, root) in occurrences {
+        let ConceptKind::Correlation { a: experience_fixed, b: candidate } = &root.0.kind else {
+            return Err("flat unordered experience is not a correlation");
+        };
+        if percept_occurrence_count(pangine, experience_fixed) != 0 {
+            return Err("flat unordered experience context contains an output");
+        }
+        let experience_members = if matches!(experience_fixed.0.kind, ConceptKind::Relevance) {
+            experience_fixed.0.subconcepts.clone()
+        } else {
+            ConceptMap::from([(experience_fixed.clone(), Relevance::DEFAULT)])
+        };
+        let matched = question_members
+            .iter()
+            .filter(|(member, relevance)| experience_members.get(*member) == Some(*relevance))
+            .map(|(member, relevance)| (member.clone(), *relevance))
+            .collect::<ConceptMap>();
+        let Some(matched_fixed) = pangine.reference_map(&matched) else {
+            continue;
+        };
+        let context = pangine.reference_correlation(matched_fixed, output.clone());
+        observations.insert(ContextObservation { source, context, candidate: candidate.clone() });
+    }
+    Ok(observations.into_iter().collect())
+}
+
 fn encode_support_state(pangine: &mut Pangine, observations: &[ContextObservation]) -> Option<ConceptId> {
     let records = observations
         .iter()
@@ -277,7 +366,25 @@ fn encode_support_state(pangine: &mut Pangine, observations: &[ContextObservatio
             (pangine.reference_observation(observation.source.clone(), support), Relevance::DEFAULT)
         })
         .collect::<ConceptMap>();
-    pangine.reference_map(&records)
+    pangine.reference_observation_set(&records)
+}
+
+fn decode_support_state(state: &ConceptId) -> Result<Vec<ContextObservation>, &'static str> {
+    let records = state.observation_records().ok_or("support state is not source-keyed")?;
+    let mut observations = BTreeSet::new();
+    for (record, relevance) in records {
+        if relevance != Relevance::DEFAULT {
+            return Err("support records have structural relevance");
+        }
+        let ConceptKind::Observation { observer: Some(source), observation: support } = &record.0.kind else {
+            return Err("support state contains a non-record");
+        };
+        let ConceptKind::Correlation { a: context, b: candidate } = &support.0.kind else {
+            return Err("support record payload is not context-to-candidate");
+        };
+        observations.insert(ContextObservation { source: source.clone(), context: context.clone(), candidate: candidate.clone() });
+    }
+    Ok(observations.into_iter().collect())
 }
 
 fn fold_support_state(pangine: &mut Pangine, state: &ConceptId, question: &ConceptId) -> Result<Option<ConceptId>, &'static str> {
@@ -288,39 +395,140 @@ fn fold_support_state(pangine: &mut Pangine, state: &ConceptId, question: &Conce
 fn reduce_support_states(pangine: &mut Pangine, partials: &[Option<ConceptId>]) -> Option<ConceptId> {
     let mut records = ConceptMap::new();
     for partial in partials.iter().flatten() {
-        pangine.add_merge_concept(&mut records, partial.clone(), false, Relevance::DEFAULT);
+        for (record, relevance) in partial.observation_records()? {
+            if relevance != Relevance::DEFAULT {
+                return None;
+            }
+            records.entry(record).or_insert(Relevance::DEFAULT);
+        }
     }
-    pangine.reference_map(&records)
+    pangine.reference_observation_set(&records)
 }
 
-fn candidate_sources(observations: &[ContextObservation], candidate: &ConceptId, context: &ConceptId, include_specializations: bool) -> BTreeSet<ConceptId> {
+fn candidate_sources(observations: &[ContextObservation], candidate: &ConceptId, context: &ConceptId) -> BTreeSet<ConceptId> {
     observations
         .iter()
-        .filter(|observation| {
-            observation.candidate == *candidate
-                && (observation.context == *context || (include_specializations && contains_node(&observation.context, context, &mut BTreeSet::new())))
-        })
+        .filter(|observation| observation.candidate == *candidate && observation.context == *context)
         .map(|observation| observation.source.clone())
         .collect()
 }
 
-fn two_level_single_child_predictive_oracle(
+impl BackoffEvaluator<'_> {
+    fn profiles_for_context(&mut self, context: &ConceptId) -> Vec<BackoffProfile> {
+        if let Some(profiles) = self.cache.get(context) {
+            return profiles.clone();
+        }
+
+        let parents = immediate_backoff_parents(self.pangine, context, self.contexts);
+        let mut profiles = if parents.is_empty() {
+            vec![BackoffProfile { path: Vec::new(), predictive: self.background.clone() }]
+        } else {
+            let mut profiles = Vec::new();
+            for parent in parents {
+                profiles.extend(self.profiles_for_context(&parent));
+            }
+            profiles
+        };
+        let counts = self.frame.iter().map(|candidate| candidate_sources(self.observations, candidate, context).len() as f64).collect::<Vec<_>>();
+        let total = counts.iter().sum::<f64>();
+        for profile in &mut profiles {
+            profile.path.push(context.clone());
+            profile.predictive = self
+                .frame
+                .iter()
+                .zip(&counts)
+                .map(|(candidate, count)| {
+                    let probability = (count + self.concentration * profile.predictive[candidate]) / (total + self.concentration);
+                    (candidate.clone(), probability)
+                })
+                .collect();
+        }
+        self.cache.insert(context.clone(), profiles.clone());
+        profiles
+    }
+}
+
+fn partial_order_backoff_profiles(
+    pangine: &Pangine,
     observations: &[ContextObservation],
     frame: &[ConceptId],
-    candidate: &ConceptId,
-    general_context: &ConceptId,
-    specific_context: &ConceptId,
-    parent_concentration: f64,
-    child_concentration: f64,
-) -> f64 {
-    let parent_counts = frame.iter().map(|candidate| candidate_sources(observations, candidate, general_context, true).len() as f64).collect::<Vec<_>>();
-    let child_counts = frame.iter().map(|candidate| candidate_sources(observations, candidate, specific_context, true).len() as f64).collect::<Vec<_>>();
-    let candidate_index = frame.iter().position(|current| current == candidate).unwrap();
-    let parent_total = parent_counts.iter().sum::<f64>();
-    let child_total = child_counts.iter().sum::<f64>();
-    let base_rate = 1.0 / frame.len() as f64;
-    let parent_mean = (parent_concentration * base_rate + parent_counts[candidate_index]) / (parent_concentration + parent_total);
-    (child_counts[candidate_index] + child_concentration * parent_mean) / (child_concentration + child_total)
+    target: &ConceptId,
+    background: &BTreeMap<ConceptId, f64>,
+    concentration: f64,
+) -> Result<Vec<BackoffProfile>, &'static str> {
+    if frame.is_empty() {
+        return Err("candidate frame is empty");
+    }
+    if !concentration.is_finite() || concentration <= 0.0 {
+        return Err("backoff concentration must be positive and finite");
+    }
+    if frame.iter().collect::<BTreeSet<_>>().len() != frame.len() {
+        return Err("candidate frame contains duplicates");
+    }
+
+    let candidates = frame.iter().cloned().collect::<BTreeSet<_>>();
+    if background.len() != frame.len()
+        || frame.iter().any(|candidate| !background.contains_key(candidate))
+        || background.values().any(|probability| !probability.is_finite() || *probability < 0.0)
+        || (background.values().sum::<f64>() - 1.0).abs() > 1e-12
+    {
+        return Err("candidate background is not a probability distribution over the frame");
+    }
+    let eligible = observations
+        .iter()
+        .filter(|observation| candidates.contains(&observation.candidate) && context_subsumes(pangine, target, &observation.context))
+        .cloned()
+        .collect::<Vec<_>>();
+    let contexts = eligible.iter().map(|observation| observation.context.clone()).collect::<BTreeSet<_>>();
+    if contexts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let frontier = contexts
+        .iter()
+        .filter(|context| !contexts.iter().any(|other| other != *context && context_subsumes(pangine, other, context)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut evaluator = BackoffEvaluator { pangine, contexts: &contexts, observations: &eligible, frame, background, concentration, cache: BTreeMap::new() };
+    let mut profiles = Vec::new();
+    for context in frontier {
+        profiles.extend(evaluator.profiles_for_context(&context));
+    }
+    if !contexts.contains(target) {
+        for profile in &mut profiles {
+            profile.path.push(target.clone());
+        }
+    }
+    Ok(profiles)
+}
+
+fn immediate_backoff_parents(pangine: &Pangine, context: &ConceptId, contexts: &BTreeSet<ConceptId>) -> Vec<ConceptId> {
+    let ancestors = contexts.iter().filter(|ancestor| *ancestor != context && context_subsumes(pangine, context, ancestor)).collect::<Vec<_>>();
+    ancestors
+        .iter()
+        .filter(|ancestor| !ancestors.iter().any(|middle| middle != *ancestor && context_subsumes(pangine, middle, ancestor)))
+        .map(|ancestor| (*ancestor).clone())
+        .collect()
+}
+
+fn recursive_grammar_node_count(concept: &ConceptId) -> usize {
+    1 + concept.0.children().map(|(child, _)| recursive_grammar_node_count(child)).sum::<usize>()
+}
+
+fn recursive_facet_sources(pangine: &Pangine, observations: &[ContextObservation]) -> Result<BTreeMap<ConceptId, BTreeSet<ConceptId>>, &'static str> {
+    let mut sources = BTreeMap::<ConceptId, BTreeSet<ConceptId>>::new();
+    for observation in observations {
+        let Some((members, _)) = unordered_context_signature(pangine, &observation.context) else {
+            return Err("support context is not an unordered recursive-facet context");
+        };
+        for (member, relevance) in members {
+            if relevance != Relevance::DEFAULT {
+                return Err("recursive facet has non-default relevance");
+            }
+            sources.entry(member).or_default().insert(observation.source.clone());
+        }
+    }
+    Ok(sources)
 }
 
 #[test]
@@ -418,9 +626,9 @@ fn source_scoped_observations_separate_literal_support_from_a_generic_tie() {
 
     let occurrence_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
     let observations = collect_context_observations(&pangine, &occurrence_state, &question).unwrap();
-    assert_eq!(candidate_sources(&observations, &a, &question, false).len(), 1);
-    assert_eq!(candidate_sources(&observations, &b, &question, false).len(), 0);
-    assert_eq!(candidate_sources(&observations, &c, &question, false).len(), 1);
+    assert_eq!(candidate_sources(&observations, &a, &question).len(), 1);
+    assert_eq!(candidate_sources(&observations, &b, &question).len(), 0);
+    assert_eq!(candidate_sources(&observations, &c, &question).len(), 1);
 }
 
 #[test]
@@ -436,8 +644,8 @@ fn nested_agent_memory_retains_conflicting_updates_until_correction_is_defined()
     let state = encode_occurrence_state(&mut pangine, &[(source_v1, old_root), (source_v2, new_root)]).unwrap().unwrap();
 
     let observations = collect_context_observations(&pangine, &state, &question).unwrap();
-    assert_eq!(candidate_sources(&observations, &cargo, &question, false).len(), 1);
-    assert_eq!(candidate_sources(&observations, &cli_runner, &question, false).len(), 1);
+    assert_eq!(candidate_sources(&observations, &cargo, &question).len(), 1);
+    assert_eq!(candidate_sources(&observations, &cli_runner, &question).len(), 1);
     assert!(encode_support_state(&mut pangine, &observations).is_some());
 }
 
@@ -468,7 +676,7 @@ fn source_identity_deduplicates_paths_and_delivery_but_not_independent_occurrenc
 }
 
 #[test]
-fn concept_native_support_fold_is_partition_independent_for_disjoint_sources() {
+fn concept_native_support_fold_is_partition_independent_for_overlapping_sources() {
     let mut pangine = Pangine::new();
     let source_a = must_reference(&mut pangine, "[source-a]");
     let source_b = must_reference(&mut pangine, "[source-b]");
@@ -482,8 +690,8 @@ fn concept_native_support_fold_is_partition_independent_for_disjoint_sources() {
     let occurrences = [(source_a, repeated_subtree.clone()), (source_b, c_root), (source_c, repeated_subtree)];
     let combined_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
     let combined_observations = collect_context_observations(&pangine, &combined_state, &question).unwrap();
-    assert_eq!(candidate_sources(&combined_observations, &c, &question, false).len(), 1);
-    assert_eq!(candidate_sources(&combined_observations, &e, &question, false).len(), 2);
+    assert_eq!(candidate_sources(&combined_observations, &c, &question).len(), 1);
+    assert_eq!(candidate_sources(&combined_observations, &e, &question).len(), 2);
     let combined_support = encode_support_state(&mut pangine, &combined_observations);
 
     for partitions in [
@@ -515,10 +723,12 @@ fn concept_native_support_fold_is_partition_independent_for_disjoint_sources() {
     assert_eq!(left_grouped, combined_support);
     assert_eq!(right_grouped, combined_support);
     assert_eq!(reduce_support_states(&mut pangine, &[None, combined_support.clone()]), combined_support);
+    assert_eq!(reduce_support_states(&mut pangine, &[source_partials[0].clone(), combined_support.clone(), source_partials[0].clone()]), combined_support);
+    assert_eq!(decode_support_state(&combined_support.unwrap()).unwrap(), combined_observations);
 }
 
 #[test]
-fn question_support_prototype_replay_becomes_structural_multiplicity() {
+fn concept_native_support_replay_is_idempotent() {
     let mut pangine = Pangine::new();
     let source = must_reference(&mut pangine, "[source]");
     let root = must_reference(&mut pangine, "{[E]->[A]}");
@@ -529,18 +739,102 @@ fn question_support_prototype_replay_becomes_structural_multiplicity() {
     let reduced_once = reduce_support_states(&mut pangine, &[Some(partial.clone())]).unwrap();
     let reduced_replay = reduce_support_states(&mut pangine, &[Some(partial.clone()), Some(partial)]).unwrap();
 
-    assert_ne!(reduced_once, reduced_replay);
-    assert_eq!(reduced_replay.0.subconcepts.values().copied().collect::<Vec<_>>(), vec![Relevance::new(1.0, 2.0)]);
-    assert_eq!(pangine.format_concept(&reduced_replay, false), "x2?[source]:{{['X']->[A]}->[E]}");
+    assert_eq!(reduced_once, reduced_replay);
+    assert_eq!(pangine.format_concept(&reduced_replay, false), "?[source]:{{['X']->[A]}->[E]}");
 }
 
 #[test]
-fn maximal_recursive_contexts_preserve_the_full_vs_partial_crossover() {
+fn flat_unordered_support_excludes_zero_matches_and_reduces_overlapping_partitions() {
+    let mut pangine = Pangine::new();
+    let question = must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f1]->[fixed]})->['X']}");
+    let occurrences = [
+        (must_reference(&mut pangine, "[source-a]"), must_reference(&mut pangine, "{({[f0]->[fixed]}*{[noise]->[a]})->[C]}")),
+        (must_reference(&mut pangine, "[source-b]"), must_reference(&mut pangine, "{({[f1]->[fixed]}*{[noise]->[b]})->[E]}")),
+        (must_reference(&mut pangine, "[source-zero]"), must_reference(&mut pangine, "{{[noise]->[zero]}->[C]}")),
+    ];
+    let combined_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
+    let combined_observations = collect_flat_unordered_context_observations(&mut pangine, &combined_state, &question).unwrap();
+    assert_eq!(combined_observations.len(), 2);
+    assert!(combined_observations.iter().all(|observation| observation.source != occurrences[2].0));
+    let combined_support = encode_support_state(&mut pangine, &combined_observations);
+
+    let partitions = [vec![occurrences[0].clone(), occurrences[2].clone()], vec![occurrences[1].clone(), occurrences[0].clone()]];
+    let partials = partitions
+        .iter()
+        .map(|partition| {
+            let state = encode_occurrence_state(&mut pangine, partition).unwrap().unwrap();
+            let observations = collect_flat_unordered_context_observations(&mut pangine, &state, &question).unwrap();
+            encode_support_state(&mut pangine, &observations)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reduce_support_states(&mut pangine, &partials), combined_support);
+}
+
+#[test]
+fn recursive_facets_separate_domain_units_from_grammar_depth_and_direction() {
+    let mut pangine = Pangine::new();
+    let source_a = must_reference(&mut pangine, "[source-a]");
+    let source_b = must_reference(&mut pangine, "[source-b]");
+    let c = must_reference(&mut pangine, "[C]");
+    let e = must_reference(&mut pangine, "[E]");
+    let question = must_reference(&mut pangine, "{({[direct]->[value]}*{[nested]->{[slot]->[value]}}*{{[namespace]->[two-sided]}->{[slot]->[value]}})->['X']}");
+    let occurrences = [
+        (source_a.clone(), must_reference(&mut pangine, "{({[direct]->[value]}*{[nested]->{[slot]->[value]}})->[C]}")),
+        (source_b.clone(), must_reference(&mut pangine, "{({[direct]->[value]}*{[value]->[nested]}*{{[namespace]->[two-sided]}->{[slot]->[value]}})->[E]}")),
+    ];
+    let direct = must_reference(&mut pangine, "{[direct]->[value]}");
+    let nested = must_reference(&mut pangine, "{[nested]->{[slot]->[value]}}");
+    let two_sided = must_reference(&mut pangine, "{{[namespace]->[two-sided]}->{[slot]->[value]}}");
+    let reversed = must_reference(&mut pangine, "{[value]->[nested]}");
+
+    assert_eq!(recursive_grammar_node_count(&direct), 3);
+    assert_eq!(recursive_grammar_node_count(&nested), 5);
+    assert_eq!(recursive_grammar_node_count(&two_sided), 7);
+
+    let state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
+    let observations = collect_flat_unordered_context_observations(&mut pangine, &state, &question).unwrap();
+    assert_eq!(observations.len(), 2);
+
+    let c_context = &observations.iter().find(|observation| observation.candidate == c).unwrap().context;
+    let e_context = &observations.iter().find(|observation| observation.candidate == e).unwrap().context;
+    let c_members = unordered_context_signature(&pangine, c_context).unwrap().0;
+    let e_members = unordered_context_signature(&pangine, e_context).unwrap().0;
+    assert_eq!(c_members.keys().cloned().collect::<BTreeSet<_>>(), BTreeSet::from([direct.clone(), nested.clone()]));
+    assert_eq!(e_members.keys().cloned().collect::<BTreeSet<_>>(), BTreeSet::from([direct.clone(), two_sided.clone()]));
+    assert!(!c_members.contains_key(&reversed));
+    assert!(!e_members.contains_key(&reversed));
+
+    let facet_sources = recursive_facet_sources(&pangine, &observations).unwrap();
+    assert_eq!(facet_sources[&direct], BTreeSet::from([source_a.clone(), source_b.clone()]));
+    assert_eq!(facet_sources[&nested], BTreeSet::from([source_a]));
+    assert_eq!(facet_sources[&two_sided], BTreeSet::from([source_b]));
+    assert!(!facet_sources.contains_key(&reversed));
+}
+
+#[test]
+fn partial_order_backoff_requires_an_explicit_frame_background() {
+    let mut pangine = Pangine::new();
+    let target = must_reference(&mut pangine, "{{[fixed]->[value]}->['X']}");
+    let c = must_reference(&mut pangine, "[C]");
+    let e = must_reference(&mut pangine, "[E]");
+    let frame = [c.clone(), e.clone()];
+    let incomplete_background = BTreeMap::from([(c.clone(), 1.0)]);
+    assert_eq!(
+        partial_order_backoff_profiles(&pangine, &[], &frame, &target, &incomplete_background, 2.0).unwrap_err(),
+        "candidate background is not a probability distribution over the frame"
+    );
+
+    let valid_background = BTreeMap::from([(c, 0.5), (e, 0.5)]);
+    assert!(partial_order_backoff_profiles(&pangine, &[], &frame, &target, &valid_background, 2.0).unwrap().is_empty());
+}
+
+#[test]
+fn maximal_unordered_subset_contexts_pass_the_accumulation_gate() {
     let mut pangine = Pangine::new();
     let complete_source = must_reference(&mut pangine, "[complete-source]");
-    let complete_root = must_reference(&mut pangine, "{[C]->[A]}*{[B]->[D]}");
-    let question = must_reference(&mut pangine, "{['X']->[A]}*{[B]->[D]}");
-    let general_context = must_reference(&mut pangine, "{['X']->[A]}");
+    let complete_root = must_reference(&mut pangine, "{({[left]->[fixed]}*{[right]->[fixed]})->[C]}");
+    let question = must_reference(&mut pangine, "{({[left]->[fixed]}*{[right]->[fixed]})->['X']}");
+    let general_context = must_reference(&mut pangine, "{{[left]->[fixed]}->['X']}");
     let c = must_reference(&mut pangine, "[C]");
     let e = must_reference(&mut pangine, "[E]");
 
@@ -548,30 +842,132 @@ fn maximal_recursive_contexts_preserve_the_full_vs_partial_crossover() {
     let mut partial_sources = Vec::new();
     for index in 1..=3 {
         let source = must_reference(&mut pangine, &format!("[partial-source-{index}]"));
-        let root = must_reference(&mut pangine, &format!("{{[E]->[A]}}*{{[P{index}]->[Q{index}]}}"));
+        let root = must_reference(&mut pangine, &format!("{{({{[left]->[fixed]}}*{{[noise]->[e-{index}]}})->[E]}}"));
         partial_sources.push(source.clone());
         occurrences.push((source, root));
     }
+    for index in 1..=2 {
+        occurrences.push((
+            must_reference(&mut pangine, &format!("[background-source-{index}]")),
+            must_reference(&mut pangine, &format!("{{{{[noise]->[c-{index}]}}->[C]}}")),
+        ));
+    }
 
     let occurrence_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
-    let observations = collect_context_observations(&pangine, &occurrence_state, &question).unwrap();
-    assert_eq!(candidate_sources(&observations, &c, &question, false).len(), 1);
-    assert_eq!(candidate_sources(&observations, &e, &general_context, false).len(), 3);
-    assert!(encode_support_state(&mut pangine, &observations).is_some());
-
+    let observations = collect_flat_unordered_context_observations(&mut pangine, &occurrence_state, &question).unwrap();
+    assert_eq!(observations.len(), 4);
+    assert_eq!(candidate_sources(&observations, &c, &question).len(), 1);
+    assert_eq!(candidate_sources(&observations, &e, &general_context).len(), 3);
+    assert!(context_subsumes(&pangine, &question, &general_context));
+    assert!(!contains_node(&question, &general_context, &mut BTreeSet::new()));
     let frame = [c.clone(), e.clone()];
-    for count in 1..=3 {
+    let background = BTreeMap::from([(c.clone(), 0.5), (e.clone(), 0.5)]);
+    for count in [1, 3] {
         let selected_sources = partial_sources.iter().take(count).cloned().collect::<BTreeSet<_>>();
         let selected =
             observations.iter().filter(|observation| observation.candidate == c || selected_sources.contains(&observation.source)).cloned().collect::<Vec<_>>();
-        let c_predictive = two_level_single_child_predictive_oracle(&selected, &frame, &c, &general_context, &question, 2.0, 5.0);
-        let e_predictive = two_level_single_child_predictive_oracle(&selected, &frame, &e, &general_context, &question, 2.0, 5.0);
+        let support = encode_support_state(&mut pangine, &selected).unwrap();
+        let decoded = decode_support_state(&support).unwrap();
+        let profiles = partial_order_backoff_profiles(&pangine, &decoded, &frame, &question, &background, 2.0).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].path, vec![general_context.clone(), question.clone()]);
 
-        match count {
-            1 => assert!(c_predictive > e_predictive),
-            2 => assert!((c_predictive - e_predictive).abs() < f64::EPSILON),
-            3 => assert!(e_predictive > c_predictive),
-            _ => unreachable!(),
+        if count == 1 {
+            assert!(profiles[0].predictive[&c] > profiles[0].predictive[&e]);
+        } else {
+            assert!(profiles[0].predictive[&e] > profiles[0].predictive[&c]);
         }
     }
+}
+
+#[test]
+fn maximal_unordered_subset_contexts_resist_many_weak_matches() {
+    let mut pangine = Pangine::new();
+    let target = must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f1]->[fixed]}*{[f2]->[fixed]}*{[f3]->[fixed]}*{[f4]->[fixed]}*{[f5]->[fixed]})->['X']}");
+    let weak_context = must_reference(&mut pangine, "{{[f0]->[fixed]}->['X']}");
+    let close_context = must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f1]->[fixed]}*{[f2]->[fixed]}*{[f3]->[fixed]}*{[f4]->[fixed]})->['X']}");
+    let c = must_reference(&mut pangine, "[C]");
+    let e = must_reference(&mut pangine, "[E]");
+    let mut occurrences = Vec::new();
+    for index in 0..64 {
+        occurrences.push((
+            must_reference(&mut pangine, &format!("[weak-source-{index}]")),
+            must_reference(&mut pangine, &format!("{{({{[f0]->[fixed]}}*{{[noise]->[weak-{index}]}})->[E]}}")),
+        ));
+    }
+    for index in 0..3 {
+        occurrences.push((
+            must_reference(&mut pangine, &format!("[close-source-{index}]")),
+            must_reference(
+                &mut pangine,
+                &format!("{{({{[f0]->[fixed]}}*{{[f1]->[fixed]}}*{{[f2]->[fixed]}}*{{[f3]->[fixed]}}*{{[f4]->[fixed]}}*{{[noise]->[close-{index}]}})->[C]}}"),
+            ),
+        ));
+    }
+
+    let occurrence_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
+    let observations = collect_flat_unordered_context_observations(&mut pangine, &occurrence_state, &target).unwrap();
+    assert_eq!(candidate_sources(&observations, &c, &close_context).len(), 3);
+    assert_eq!(candidate_sources(&observations, &e, &weak_context).len(), 64);
+    assert!(context_subsumes(&pangine, &target, &close_context));
+    assert!(context_subsumes(&pangine, &close_context, &weak_context));
+    assert!(!contains_node(&close_context, &weak_context, &mut BTreeSet::new()));
+    let support = encode_support_state(&mut pangine, &observations).unwrap();
+    let decoded = decode_support_state(&support).unwrap();
+    let background = BTreeMap::from([(c.clone(), 4.0 / 69.0), (e.clone(), 65.0 / 69.0)]);
+    let profiles = partial_order_backoff_profiles(&pangine, &decoded, &[c.clone(), e.clone()], &target, &background, 2.0).unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].path, vec![weak_context, close_context, target]);
+    assert!(profiles[0].predictive[&c] > profiles[0].predictive[&e]);
+}
+
+#[test]
+fn incomparable_unordered_parent_contexts_remain_separate_backoff_profiles() {
+    let mut pangine = Pangine::new();
+    let target = must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f1]->[fixed]}*{[f2]->[fixed]})->['X']}");
+    let parent_a = must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f1]->[fixed]})->['X']}");
+    let parent_b = must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f2]->[fixed]})->['X']}");
+    let c = must_reference(&mut pangine, "[C]");
+    let e = must_reference(&mut pangine, "[E]");
+    let occurrences = [
+        (must_reference(&mut pangine, "[source-a]"), must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f1]->[fixed]}*{[noise]->[a]})->[C]}")),
+        (must_reference(&mut pangine, "[source-b]"), must_reference(&mut pangine, "{({[f0]->[fixed]}*{[f2]->[fixed]}*{[noise]->[b]})->[E]}")),
+    ];
+
+    let occurrence_state = encode_occurrence_state(&mut pangine, &occurrences).unwrap().unwrap();
+    let observations = collect_flat_unordered_context_observations(&mut pangine, &occurrence_state, &target).unwrap();
+    assert!(context_subsumes(&pangine, &target, &parent_a));
+    assert!(context_subsumes(&pangine, &target, &parent_b));
+    assert!(!context_subsumes(&pangine, &parent_a, &parent_b));
+    assert!(!context_subsumes(&pangine, &parent_b, &parent_a));
+    let support = encode_support_state(&mut pangine, &observations).unwrap();
+    let decoded = decode_support_state(&support).unwrap();
+    let background = BTreeMap::from([(c.clone(), 0.5), (e.clone(), 0.5)]);
+    let profiles = partial_order_backoff_profiles(&pangine, &decoded, &[c.clone(), e.clone()], &target, &background, 2.0).unwrap();
+    assert_eq!(profiles.len(), 2);
+
+    let through_a = profiles.iter().find(|profile| profile.path.first() == Some(&parent_a)).unwrap();
+    let through_b = profiles.iter().find(|profile| profile.path.first() == Some(&parent_b)).unwrap();
+    assert_eq!(through_a.path, vec![parent_a, target.clone()]);
+    assert_eq!(through_b.path, vec![parent_b, target]);
+    assert!(through_a.predictive[&c] > through_a.predictive[&e]);
+    assert!(through_b.predictive[&e] > through_b.predictive[&c]);
+}
+
+#[test]
+fn maximal_unordered_subset_extraction_does_not_materialize_a_powerset() {
+    let mut pangine = Pangine::new();
+    let question_facets = (0..20).map(|index| format!("{{[f{index}]->[fixed]}}")).collect::<Vec<_>>();
+    let mut experience_facets = question_facets.iter().take(19).cloned().collect::<Vec<_>>();
+    experience_facets.push("{[noise]->[different]}".to_owned());
+    let question = must_reference(&mut pangine, &format!("{{({})->['X']}}", question_facets.join("*")));
+    let root = must_reference(&mut pangine, &format!("{{({})->[C]}}", experience_facets.join("*")));
+    let source = must_reference(&mut pangine, "[source]");
+    let state = encode_occurrence_state(&mut pangine, &[(source, root)]).unwrap().unwrap();
+    let baseline_count = pangine.concept_count();
+
+    let observations = collect_flat_unordered_context_observations(&mut pangine, &state, &question).unwrap();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(unordered_context_signature(&pangine, &observations[0].context).unwrap().0.len(), 19);
+    assert_eq!(pangine.concept_count() - baseline_count, 2);
 }
