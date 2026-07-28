@@ -107,6 +107,38 @@ fn question_folds_multiple_output_wildcards_into_separate_marginals() {
 }
 
 #[test]
+fn repeated_output_percept_requires_one_shared_binding() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= ?[event-1]:{[A]->[B]}");
+    must_ref(&mut pangine, "['memory'] ~= ?[event-2]:{[A]->[B]}");
+    must_ref(&mut pangine, "['memory'] ~= ?[event-3]:{[C]->[C]}");
+    ask_question(&mut pangine, "['memory'] @ {['X']->['X']}");
+
+    let result = must_ref(&mut pangine, "$['X']");
+    let candidates = named_relevance(&pangine, &result);
+    assert_eq!(candidates[0].1, "C");
+    assert_eq!(candidate_weight(&candidates, "C"), 3.0);
+    assert_eq!(candidate_weight(&candidates, "A"), 2.0);
+    assert_eq!(candidate_weight(&candidates, "B"), 2.0);
+}
+
+#[test]
+fn repeated_output_binding_survives_nested_unordered_matching() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= ?[event-1]:{([A]*[P])->([B]*[Q])}");
+    must_ref(&mut pangine, "['memory'] ~= ?[event-2]:{([A]*[P])->([B]*[Q])}");
+    must_ref(&mut pangine, "['memory'] ~= ?[event-3]:{([C]*[P])->([C]*[Q])}");
+    ask_question(&mut pangine, "['memory'] @ {(['X']*[P])->(['X']*[Q])}");
+
+    let result = must_ref(&mut pangine, "$['X']");
+    let candidates = named_relevance(&pangine, &result);
+    assert!(candidate_weight(&candidates, "C") > candidate_weight(&candidates, "A"));
+    assert!(candidate_weight(&candidates, "C") > candidate_weight(&candidates, "B"));
+}
+
+#[test]
 fn generic_projection_rule_applies_to_observations_too() {
     let mut pangine = Pangine::new();
 

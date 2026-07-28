@@ -152,20 +152,39 @@ fn collect_unordered_alternatives(
     }
 }
 
-fn fold_projection_alternatives(alternatives: &[ProjectionAlternative]) -> ProjectionSummary {
-    let mut summary = ProjectionSummary { total: 0.0, bindings: ProjectionBindingWeights::new() };
+fn fold_projection_alternatives(alternatives: &[ProjectionAlternative], shared_percepts: &BTreeSet<ConceptId>) -> ProjectionSummary {
+    let mut profiles = ProjectionProfiles::new();
     for alternative in alternatives {
-        summary.total += alternative.weight;
+        let mut shared_bindings = ProjectionSharedBindings::new();
+        let mut bindings = ProjectionBindingWeights::new();
+        let mut compatible = true;
         for (percept, candidate) in &alternative.bindings {
-            *summary.bindings.entry(percept.clone()).or_default().entry(candidate.clone()).or_default() += alternative.weight;
+            if shared_percepts.contains(percept) {
+                match shared_bindings.get(percept) {
+                    Some(current) if current != candidate => {
+                        compatible = false;
+                        break;
+                    }
+                    Some(_) => {}
+                    None => {
+                        shared_bindings.insert(percept.clone(), candidate.clone());
+                    }
+                }
+            } else {
+                *bindings.entry(percept.clone()).or_default().entry(candidate.clone()).or_default() += alternative.weight;
+            }
+        }
+        if compatible {
+            ProjectionSummary::accumulate_profile(&mut profiles, shared_bindings, ProjectionProfile { total: alternative.weight, bindings });
         }
     }
-    summary
+    ProjectionSummary::from_profiles(profiles)
 }
 
 fn assert_projection_parity(pangine: &Pangine, experience: &ConceptId, question: &ConceptId) {
-    let expected = pangine.projection_summary(experience, question, &mut ProjectionCache::new());
-    let actual = fold_projection_alternatives(&projection_alternatives(pangine, experience, question));
+    let shared_percepts = pangine.shared_output_percepts(question);
+    let expected = pangine.projection_summary(experience, question, &shared_percepts, &mut ProjectionCache::new());
+    let actual = fold_projection_alternatives(&projection_alternatives(pangine, experience, question), &shared_percepts);
     assert!((actual.total - expected.total).abs() < f64::EPSILON);
     assert_eq!(actual.bindings.keys().collect::<Vec<_>>(), expected.bindings.keys().collect::<Vec<_>>());
 
@@ -539,6 +558,10 @@ fn enumerated_matcher_cells_fold_back_to_the_current_projection_summary() {
         ("{[C]->[A]}*{[B]->[D]}", "{['X']->[A]}*{[B]->[D]}"),
         ("{[E]->[A]}*{[P]->[Q]}", "{['X']->[A]}*{[B]->[D]}"),
         ("x2[A][B]", "['X']*[B]"),
+        ("{[A]->[B]}", "{['X']->['X']}"),
+        ("{([C]*[P])->([C]*[Q])}", "{(['X']*[P])->(['X']*[Q])}"),
+        ("{[A]->[A]}*{[B]->[B]}", "{['X']->['X']}*{['Y']->['Y']}"),
+        ("{[A]->{[A]->[C]}}", "{['X']->{['X']->['Y']}}"),
     ] {
         let experience = must_reference(&mut pangine, experience);
         let question = must_reference(&mut pangine, question);
@@ -576,11 +599,12 @@ fn source_scoped_observations_remove_generic_swamping_without_parallel_state() {
     let mut legacy_generic_weight = 0.0;
     let question = must_reference(&mut pangine, "['X']*[B]");
     let generic = must_reference(&mut pangine, "[B]");
+    let shared_percepts = pangine.shared_output_percepts(&question);
 
     for index in 0..8 {
         let source = must_reference(&mut pangine, &format!("[source-{index}]"));
         let root = must_reference(&mut pangine, &format!("[P{index}]*[B]"));
-        let summary = fold_projection_alternatives(&projection_alternatives(&pangine, &root, &question));
+        let summary = fold_projection_alternatives(&projection_alternatives(&pangine, &root, &question), &shared_percepts);
         legacy_generic_weight += summary.bindings.values().map(|candidates| candidates.get(&generic).copied().unwrap_or_default()).sum::<f64>();
         occurrences.push((source, root));
     }
@@ -606,6 +630,7 @@ fn source_scoped_observations_separate_literal_support_from_a_generic_tie() {
     let a = must_reference(&mut pangine, "[A]");
     let b = must_reference(&mut pangine, "[B]");
     let c = must_reference(&mut pangine, "[C]");
+    let shared_percepts = pangine.shared_output_percepts(&question);
     let occurrences = [
         (must_reference(&mut pangine, "[left-source]"), must_reference(&mut pangine, "[A]*[B]")),
         (must_reference(&mut pangine, "[right-source]"), must_reference(&mut pangine, "[B]*[C]")),
@@ -613,7 +638,7 @@ fn source_scoped_observations_separate_literal_support_from_a_generic_tie() {
 
     let mut legacy_weights = BTreeMap::<ConceptId, f64>::new();
     for (_, root) in &occurrences {
-        let summary = fold_projection_alternatives(&projection_alternatives(&pangine, root, &question));
+        let summary = fold_projection_alternatives(&projection_alternatives(&pangine, root, &question), &shared_percepts);
         for candidates in summary.bindings.values() {
             for (candidate, weight) in candidates {
                 *legacy_weights.entry(candidate.clone()).or_default() += weight;

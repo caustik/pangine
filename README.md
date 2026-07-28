@@ -49,6 +49,8 @@ $['animal']
 
 The first statement experiences a correlation. The second asks which experienced concepts can occupy the left side of that shape. The third evaluates the resulting ranked candidates.
 
+The same output percept keeps one identity throughout a question pattern. For example, `{['same']->['same']}` asks for one Concept that can occupy both positions, while `{['left']->['right']}` allows two independent answers. When a projection would bind repeated occurrences to different Concepts, Pangine discards that projection. Partial projections can still contribute lower-weight possibilities, so this rule preserves the difference between a candidate that fits the whole shared shape and candidates that fit only one part.
+
 Every concept inside an experience is also experienced. Nothing privileges the root or any other level. In theory, this implies every recursive combination of literal and wildcard structure. In practice, that closure is too large to store, so questions fold the compatible projections together when they are needed. These abstraction levels are somewhat like hidden features in a neural network, except they come from the grammar and remain possible to inspect.
 
 The hard part is relevance. Direct evidence, many independent hints at different levels of abstraction, and a generic wildcard possibility should not all have the same weight. The current projection weights are deterministic, but they are not calibrated probabilities and they are not the final answer.
@@ -73,7 +75,7 @@ The current Rust implementation includes:
 - Weakly interned, canonical concept graphs
 - Engine-owned percept state and relevance operations
 - Recursive, observer-scoped experience sets with idempotent replay
-- Lazy recursive wildcard projection and ranked question bindings
+- Lazy recursive wildcard projection, shared repeated-output bindings, and ranked question results
 - An interactive console, a Rust example, and compatibility tests
 
 The relevance model, decision and sampling semantics, persistence, model integration, and language bindings are still open work. Pangine does not currently include an LLM, vector database, llama.cpp integration, or Python package.
