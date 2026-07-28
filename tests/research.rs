@@ -6,6 +6,9 @@
 
 use pangine::Relevance;
 
+#[path = "research/revision_state.rs"]
+mod revision_state;
+
 #[path = "research/unified_concept_state.rs"]
 mod unified_concept_state;
 
