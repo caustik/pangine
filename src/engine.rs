@@ -171,7 +171,6 @@ const DEBUG_CONSOLE_HELP: &str = "\
 Commands:
   help, h        Show this help
   quit, q        Exit
-  @expression    Print the result with percepts evaluated
 
 Concept syntax:
   []                         Null / no concept
@@ -698,14 +697,14 @@ impl Pangine {
 // Canonical presentation and the interactive console.
 impl Pangine {
     /// Formats relevance entries as individual debug-console lines.
-    pub fn debug_console_lines(&self, concept: Option<&ConceptId>, evaluate: bool) -> Vec<String> {
+    pub fn debug_console_lines(&self, concept: Option<&ConceptId>) -> Vec<String> {
         // Historical anchor:
         // 1.x/pangine/src/pangine/common/pae_pangine.cpp:1311
         let Some(entries) = concept.and_then(|concept| self.relevance_entries(concept)) else {
             return vec!["  []".to_owned()];
         };
 
-        entries.into_iter().map(|(relevance, concept)| self.format_debug_console_line(relevance, &concept, evaluate)).collect()
+        entries.into_iter().map(|(relevance, concept)| self.format_debug_console_line(relevance, &concept)).collect()
     }
 
     /// Formats an owned concept as canonical Pangine syntax.
@@ -737,8 +736,7 @@ impl Pangine {
                 break;
             }
 
-            let command = input.trim_end_matches(['\r', '\n']);
-            let (evaluate, script) = command.strip_prefix('@').map_or((false, command), |script| (true, script));
+            let script = input.trim_end_matches(['\r', '\n']);
 
             if script.starts_with('q') {
                 break;
@@ -751,7 +749,7 @@ impl Pangine {
 
             match self.reference_concept(script) {
                 Ok(concept) => {
-                    for line in self.debug_console_lines(concept.as_ref(), evaluate) {
+                    for line in self.debug_console_lines(concept.as_ref()) {
                         println!("{line}");
                     }
                 }
@@ -2141,7 +2139,7 @@ impl Pangine {
         out
     }
 
-    fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId, evaluate: bool) -> String {
+    fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId) -> String {
         let mut out = String::from("  ");
         let add_separator = relevance.probability != 1.0 || (relevance.strength != 1.0 && relevance.strength != -1.0);
 
@@ -2161,7 +2159,7 @@ impl Pangine {
             out.push(' ');
         }
 
-        out.push_str(&self.format_concept(concept, evaluate));
+        out.push_str(&self.format_concept(concept, false));
         out
     }
 }
@@ -2464,6 +2462,7 @@ mod tests {
         assert_eq!(debug_console_help("h"), Some(help));
         assert_eq!(debug_console_help("[help]"), None);
         assert!(help.contains("help, h"));
+        assert!(!help.contains("@expression"));
         assert!(help.contains("[]                         Null"));
         assert!(help.contains("[A]/[B]"));
         assert!(help.contains("?[observer]:[observation]"));

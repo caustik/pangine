@@ -187,15 +187,6 @@ command> $['memory']
 
 The reference remains `['memory']`; evaluating it returns the current value.
 
-The console also accepts `@expression` as a display shortcut that evaluates percepts before printing:
-
-```text
-command> @['memory']
-  {[cat]->[purrs]}
-```
-
-That leading console `@` is only a display command. It is separate from the question operation shown later.
-
 Percepts support the same ordinary state operations:
 
 ```text

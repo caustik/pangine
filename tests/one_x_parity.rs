@@ -290,18 +290,14 @@ fn debug_console_rows_match_1x_display_rules() {
     let mut test = PangineTest::new();
 
     let a = test.concept("[A]");
-    assert_eq!(test.engine().debug_console_lines(Some(&a), false), vec!["  [A]"]);
-    assert_eq!(test.engine().debug_console_lines(None, false), vec!["  []"]);
+    assert_eq!(test.engine().debug_console_lines(Some(&a)), vec!["  [A]"]);
+    assert_eq!(test.engine().debug_console_lines(None), vec!["  []"]);
 
     let relevance = test.concept("50%[A]x2[B]x-1[C]");
-    assert_eq!(test.engine().debug_console_lines(Some(&relevance), false), vec!["  50% [A]", "  x2 [B]", "  ![C]"]);
+    assert_eq!(test.engine().debug_console_lines(Some(&relevance)), vec!["  50% [A]", "  x2 [B]", "  ![C]"]);
 
     let combined_relevance = test.concept("50%x2[a]");
-    assert_eq!(test.engine().debug_console_lines(Some(&combined_relevance), false), vec!["  50%x2 [a]"]);
-
-    test.exec(["['test'] = [A]"]);
-    let percept = test.concept("['test']");
-    assert_eq!(test.engine().debug_console_lines(Some(&percept), true), vec!["  [A]"]);
+    assert_eq!(test.engine().debug_console_lines(Some(&combined_relevance)), vec!["  50%x2 [a]"]);
 }
 
 // Parity anchors:
