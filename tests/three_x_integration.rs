@@ -31,6 +31,18 @@ fn c_style_and_cpp_style_comments_are_ignored() {
     });
 }
 
+#[test]
+fn hash_comments_are_limited_to_legacy_script_input() {
+    let mut test = PangineTest::new();
+    test.assert_invalid(["# comment", "[A] # comment"]);
+
+    PangineTest::assert_script_results(pairs! {
+        "# historical comment\n[A]" => "[A]",
+        "[A] # historical comment\n[B]" => "[B]",
+        "[A]; # historical comment\n[B];" => "[B]",
+    });
+}
+
 // Integration anchor:
 // 3.x/pangine/src/test/common/test_pangine.cpp:546
 #[test]
@@ -95,6 +107,17 @@ fn script_text_accepts_semicolons_and_legacy_line_statements() {
             " => "[A][B]",
         "[A]\n[]" => "[A]",
         "[A];[];" => "[]",
+    });
+}
+
+#[test]
+fn provisional_greedy_choice_uses_the_current_positive_relevance_weight() {
+    let mut test = PangineTest::new();
+
+    test.assert_equivalent(pairs! {
+        "['choice'] = x2[tea]x3[coffee]; ^['choice']" => "[coffee]",
+        "['single'] = [tea]; ^['single']" => "[tea]",
+        "['negative'] = ![tea]![coffee]; ^['negative']" => "![tea]![coffee]",
     });
 }
 

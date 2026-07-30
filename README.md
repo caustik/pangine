@@ -265,14 +265,14 @@ command> $['animal']
 
 The current structural fold found `cat` through two compatible paths, so it has strength `x2`. That number is a deterministic structural coefficient, not a probability.
 
-`^` selects the entry with the greatest positive probability multiplied by strength:
+`^` is the current greedy choice placeholder. It evaluates the percept and returns the entry with the greatest positive Relevance weight:
 
 ```text
 command> ^['animal']
   [cat]
 ```
 
-This is the implemented selection rule. It is not yet a general decision model, and ties currently fall back to allocation order.
+This is similar in shape to greedy or top-1 decoding: choose the candidate with the largest current score. The similarity stops there. Pangine's coefficients are structural values, not model logits or calibrated probabilities, and `^` does not implement temperature, filtering, or random sampling. Ties currently fall back to allocation order, and if nothing has positive weight the complete evaluated value is returned. Those details remain placeholders rather than settled decision semantics.
 
 ### Reuse one output identity
 
@@ -299,7 +299,7 @@ Using two different percept names, such as `{['left']->['right']}`, allows the t
 
 ### Inspect the live ordinary Concepts
 
-The global percept is named `['*']`. Evaluating it creates a transient snapshot of all currently live ordinary Concepts. Here I start a fresh console so the result stays small:
+The global inspection percept is named `['*']`. Evaluating it creates a transient snapshot of all currently live ordinary Concepts. This is the built-in way to inspect the complete ordinary Concept graph retained by the engine. Here I start a fresh console so the result stays small:
 
 ```text
 command> ['one'] = [A]
@@ -312,7 +312,7 @@ command> $['*']
   {[A]->[B]}
 ```
 
-The snapshot is a view of live ordinary Concepts, not persistence or a serialized database.
+The snapshot is read-only and computed when requested. "Live" means retained by a Percept value, another Concept, or an owning host handle. A temporary Concept can disappear after its last handle is released. This view is useful for inspection, but it is not persistence or a serialized database.
 
 ### A deeper example: choosing a build policy
 
@@ -351,7 +351,7 @@ command> ^['reported-route']
   [cli-runner]
 ```
 
-`cli-runner` matches the complete requested relationship. `clippy` survives as a weaker partial structural candidate. Selection chooses `cli-runner`, but the coefficients are still structural weights rather than calibrated certainty.
+`cli-runner` matches the complete requested relationship. `clippy` survives as a weaker partial structural candidate. The provisional greedy choice selects `cli-runner`, but the coefficients are still structural weights rather than calibrated certainty.
 
 Now an older note reports a different route:
 
@@ -366,7 +366,7 @@ command> $['reported-route']
   x2 [cargo]
 ```
 
-Pangine retains both complete reports and their observers. It does not infer that `maintainer` is more authoritative than `legacy-note`, that one report is newer, or that `cli-runner` should overwrite `cargo`. Calling `^` here would merely apply the current numeric rule and its allocation-order tie break. That would not be a justified conflict-resolution policy.
+Pangine retains both complete reports and their observers. It does not infer that `maintainer` is more authoritative than `legacy-note`, that one report is newer, or that `cli-runner` should overwrite `cargo`. Calling `^` here would merely apply the current positive-weight greedy rule and its allocation-order tie break. That would not be a justified conflict-resolution policy.
 
 An application can instead choose one complete policy explicitly. Here it supplies two self-contained policy states:
 
@@ -469,7 +469,7 @@ The current implementation is written in Rust. It includes:
 - Lazy recursive wildcard projection, shared repeated-output bindings, and ranked question results
 - An interactive console, a progressive Pangine-language walkthrough, and compatibility tests
 
-The relevance model, decision and sampling semantics, persistence, model integration, and language bindings are still open work. Pangine does not currently include an LLM, vector database, llama.cpp integration, or Python package.
+The relevance model, decision and sampling semantics beyond the provisional greedy `^` choice, persistence, model integration, and language bindings are still open work. Pangine does not currently include an LLM, vector database, llama.cpp integration, or Python package.
 
 To run the complete verification suite:
 
@@ -495,9 +495,15 @@ cargo test --all-targets --release
 | `<?[observer]:[A], ?[]:[B]>` | Multi-entry Observation state |
 | `50%x2[A]` | Probability and strength relevance on the next operand |
 | `['memory'] = expression` | Assign percept state |
+| `['memory'] += expression` | Add one union operand |
+| `['memory'] -= expression` | Subtract one complete union operand |
+| `['memory'] *= expression` | Flatten and merge into percept state |
+| `['memory'] /= expression` | Flatten and inversely merge into percept state |
 | `['memory'] ~= expression` | Insert an experience and its recursive observations |
 | `['memory'] @ expression` | Bind outputs and return the unresolved question shape |
 | `$operand` | Recursively evaluate every percept in its operand |
+| `^['choice']` | Apply the provisional positive-weight greedy choice |
+| `$['*']` | Inspect all live ordinary Concepts through a read-only computed view |
 
 Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from accepted input syntax; for example, `[A]->[B]` formats as `{[A]->[B]}`.
 

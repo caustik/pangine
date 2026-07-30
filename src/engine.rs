@@ -1,7 +1,7 @@
 use crate::Relevance;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
@@ -176,7 +176,6 @@ Concept syntax:
   []                         Null / no concept
   [name]                     Named concept
   ['name']                   Percept reference
-  [?name]                    Question-namespaced concept, not a binding
   (expression)               Grouping
   [A][B]                     Union
   [A]*[B]                    Flattening merge
@@ -197,7 +196,7 @@ Percept operations:
   ['name'] ~= expression     Experience
   ['name'] @ expression      Bind outputs; repeated names share one binding
   $operand                   Recursively evaluate every percept in the operand
-  $['*']                     Snapshot all live ordinary concepts
+  $['*']                     Inspect all live ordinary concepts
 
 Experience:
   ['memory'] ~= {[cat]->[purrs]}
@@ -211,15 +210,16 @@ Scripts:
   // line comment            C++-style comment
   /* block comment */        C-style comment
 
-Decision:
-  ^['choice'] evaluates the percept and returns the entry with the greatest
-  positive probability * strength.
+Choice placeholder:
+  ^['choice'] evaluates the percept and greedily returns the entry with the
+  greatest positive relevance weight.
 
   ['choice'] = x2[tea]x3[coffee]
   ^['choice']             returns [coffee]
 
-  Ties currently use allocation order. If no entry has positive weight, the
-  complete evaluated value is returned.
+  This is similar to deterministic top-1 selection, not a settled sampling
+  model. Ties currently use allocation order. If no entry has positive weight,
+  the complete evaluated value is returned.
 ";
 
 /// The result of parsing or executing Pangine syntax.
@@ -430,31 +430,9 @@ impl Pangine {
 
     /// Parses and executes a Pangine statement or expression.
     pub fn reference_concept(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
-        self.reference_concept_with_params(script, &[])
-    }
-
-    /// Parses and executes Pangine syntax with positional concept parameters.
-    pub fn reference_concept_with_params(&mut self, script: &str, params: &[ConceptId]) -> ParseResult<Option<ConceptId>> {
-        if params.iter().any(|concept| !self.owns(concept)) {
-            return Err(ParseError::InvalidSyntax);
-        }
-
-        let result = self.parse_statement_text_with_params(script, params);
+        let result = self.parse_statement_text(script);
         self.prune_indexes();
         result
-    }
-
-    /// Converts the names in plain text into an unordered concept.
-    pub fn parse_text(&mut self, text: &str) -> Option<ConceptId> {
-        let mut map = ConceptMap::new();
-
-        for name in text.split(|c| !is_name_char(c, false)).filter(|name| !name.is_empty()) {
-            if let Some(concept) = self.reference_named(name) {
-                self.add_relevance(&mut map, concept, false, Relevance::DEFAULT);
-            }
-        }
-
-        self.reference_map(&map)
     }
 
     /// Parses and executes every statement in a script string.
@@ -738,7 +716,7 @@ impl Pangine {
 
             let script = input.trim_end_matches(['\r', '\n']);
 
-            if script.starts_with('q') {
+            if debug_console_quit(script) {
                 break;
             }
 
@@ -828,11 +806,7 @@ impl Pangine {
     }
 
     fn parse_statement_text(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
-        self.parse_statement_text_with_params(script, &[])
-    }
-
-    fn parse_statement_text_with_params(&mut self, script: &str, params: &[ConceptId]) -> ParseResult<Option<ConceptId>> {
-        let mut parser = Parser::new(script, params);
+        let mut parser = Parser::new(script);
         let concept = self.parse_statements(&mut parser)?;
         parser.skip_ws();
         parser.peek().is_none().then_some(concept).ok_or(ParseError::InvalidSyntax)
@@ -971,20 +945,7 @@ impl Pangine {
             return self.parse_percept_action(parser, percept);
         }
 
-        if parser.consume('%') {
-            let concept = parser.params.pop_front();
-            parser.expect(']')?;
-            return Ok(concept);
-        }
-
-        let is_question = parser.consume('?');
-        parser.consume('&');
-
-        let mut name = parser.parse_name(true);
-        if is_question {
-            name.insert(0, '?');
-        }
-
+        let name = parser.parse_name(true);
         let concept = self.reference_named(&name);
         parser.expect(']')?;
 
@@ -2167,12 +2128,11 @@ impl Pangine {
 struct Parser {
     chars: Vec<char>,
     pos: usize,
-    params: VecDeque<ConceptId>,
 }
 
 impl Parser {
-    fn new(script: &str, params: &[ConceptId]) -> Self {
-        Self { chars: script.chars().collect(), pos: 0, params: params.iter().cloned().collect() }
+    fn new(script: &str) -> Self {
+        Self { chars: script.chars().collect(), pos: 0 }
     }
 
     fn peek(&self) -> Option<char> {
@@ -2219,7 +2179,7 @@ impl Parser {
             }
 
             match (self.peek(), self.peek_next()) {
-                (Some('#'), _) | (Some('/'), Some('/')) => self.skip_line_comment(),
+                (Some('/'), Some('/')) => self.skip_line_comment(),
                 (Some('/'), Some('*')) => {
                     if !self.skip_block_comment() {
                         return;
@@ -2331,8 +2291,12 @@ fn debug_console_help(command: &str) -> Option<&'static str> {
     matches!(command, "h" | "help").then_some(DEBUG_CONSOLE_HELP)
 }
 
+fn debug_console_quit(command: &str) -> bool {
+    matches!(command, "q" | "quit")
+}
+
 fn statement_has_tokens(statement: &str) -> bool {
-    let mut parser = Parser::new(statement, &[]);
+    let mut parser = Parser::new(statement);
     parser.skip_ws();
     parser.peek().is_some()
 }
@@ -2349,6 +2313,7 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
     let mut has_semicolons = false;
     let mut in_block_comment = false;
     let mut in_line_comment = false;
+    let mut split_before_line_comment = false;
     let mut chars = script.char_indices().peekable();
 
     while let Some((index, ch)) = chars.next() {
@@ -2364,15 +2329,22 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
             if ch == '\n' || ch == '\r' {
                 in_line_comment = false;
                 if stack.is_empty() {
-                    statements.push(&script[start..index]);
+                    if !split_before_line_comment {
+                        statements.push(&script[start..index]);
+                    }
                     start = index + ch.len_utf8();
                 }
+                split_before_line_comment = false;
             }
             continue;
         }
 
         match ch {
-            '#' => in_line_comment = true,
+            '#' if stack.is_empty() => {
+                statements.push(&script[start..index]);
+                in_line_comment = true;
+                split_before_line_comment = true;
+            }
             '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
                 chars.next();
                 in_line_comment = true;
@@ -2401,6 +2373,9 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
         }
     }
 
+    if in_line_comment && split_before_line_comment {
+        start = script.len();
+    }
     statements.push(&script[start..]);
     ScriptStatements { items: statements, has_semicolons }
 }
@@ -2463,6 +2438,7 @@ mod tests {
         assert_eq!(debug_console_help("[help]"), None);
         assert!(help.contains("help, h"));
         assert!(!help.contains("@expression"));
+        assert!(!help.contains("[?name]"));
         assert!(help.contains("[]                         Null"));
         assert!(help.contains("[A]/[B]"));
         assert!(help.contains("?[observer]:[observation]"));
@@ -2476,12 +2452,21 @@ mod tests {
         assert!(help.contains("['name'] ~= expression     Experience"));
         assert!(help.contains("['name'] @ expression      Bind outputs; repeated names share one binding"));
         assert!(help.contains("$operand                   Recursively evaluate every percept in the operand"));
+        assert!(help.contains("$['*']                     Inspect all live ordinary concepts"));
         assert!(help.contains("Exact replay changes nothing"));
         assert!(help.contains("wildcard projections lazily"));
         assert!(help.contains("expression; expression"));
         assert!(help.contains("^['choice']"));
-        assert!(help.contains("probability * strength"));
+        assert!(help.contains("similar to deterministic top-1 selection"));
         assert!(help.contains("allocation order"));
+    }
+
+    #[test]
+    fn debug_console_commands_are_exact() {
+        assert!(debug_console_quit("q"));
+        assert!(debug_console_quit("quit"));
+        assert!(!debug_console_quit("query"));
+        assert!(!debug_console_quit("quitting"));
     }
 
     #[test]

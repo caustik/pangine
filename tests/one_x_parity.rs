@@ -21,9 +21,9 @@ fn relevance_add_and_subtract_match_1x() {
 
 // Parity anchors:
 // 1.x/pangine/src/pangine/common/pae_pangine.cpp:137,179
-// 1.x/pangine/src/test/common/test_reference_concept.cpp:28,89,116,137,164,191
+// 1.x/pangine/src/test/common/test_reference_concept.cpp:28,116,137,191
 #[test]
-fn references_namespaces_params_and_parentheses() {
+fn references_names_and_parentheses() {
     let mut test = PangineTest::new();
 
     test.assert_distinct(pairs! {
@@ -32,30 +32,20 @@ fn references_namespaces_params_and_parentheses() {
         "[LONGER_NAME]" => "[LONGER-NAME]",
         "[LONGER-NAME]" => "[EVEN LONGER NAME]",
         "['A']" => "['B']",
-        "[?]" => "[?LONGER_NAME]",
-        "[?LONGER_NAME]" => "[?LONGER-NAME]",
         "[A]" => "['A']",
-        "[A]" => "[?A]",
     });
     test.assert_equivalent(pairs! {
         "     [A]" => "[A]",
         " \t\r\n[B]" => "[B]",
-        "[?]" => "[?]",
         "([A])" => "[A]",
         "(([A]))" => "[A]",
         "(['A'])" => "['A']",
         "((['A']))" => "['A']",
     });
-    test.assert_invalid(["[??BAD_NAME]"]);
+    test.assert_invalid(["[?]", "[?A]", "[&A]", "[%]"]);
 
     let concept_a = test.concept("[A]");
     assert_eq!(test.engine().get_name(&concept_a), Some("A"));
-
-    let test1 = test.concept("[test1]");
-    let test2 = test.concept("[test2]");
-    let with_params = test.engine_mut().reference_concept_with_params("{[test3]->[%]}*[%]", &[test1, test2]).unwrap().unwrap();
-    let without_params = test.concept("{[test3]->[test1]}*[test2]");
-    assert_eq!(with_params, without_params);
 }
 
 // Parity anchors:
@@ -109,8 +99,8 @@ fn correlations_observations_and_relevance_are_canonical() {
     assert_eq!(test.engine().get_correlation_a(&correlation), Some(a.clone()));
     assert_eq!(test.engine().get_correlation_b(&correlation), Some(b_percept));
 
-    let nested = test.concept("{{[A]->['B']}->{[?]->[D]}}");
-    let question_to_d = test.concept("{[?]->[D]}");
+    let nested = test.concept("{{[A]->['B']}->{[Q]->[D]}}");
+    let question_to_d = test.concept("{[Q]->[D]}");
     assert_eq!(test.engine().get_correlation_a(&nested), Some(correlation.clone()));
     assert_eq!(test.engine().get_correlation_b(&nested), Some(question_to_d));
     test.exec(["{{[A]->[B]}->[C]}", "{[C]->{[A]->[B]}}"]);
@@ -185,7 +175,7 @@ fn union_inversion_normalization_and_null_removal_match_1x() {
 // 1.x/pangine/src/pangine/common/pae_pangine.cpp:755,810,852,1226
 // 1.x/pangine/src/test/common/test_reference_concept.cpp:421,448,554,630,674
 #[test]
-fn percept_merge_questions_and_decisions_preserve_1x_while_experience_is_idempotent() {
+fn percept_merge_and_questions_preserve_1x_while_experience_is_idempotent() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
@@ -242,20 +232,6 @@ fn correlation_questions_keep_each_output_binding_separate() {
         "$['1']" => "[A]",
         "$['2']" => "x2[A]",
     });
-}
-
-// Parity anchors:
-// 1.x/pangine/src/pangine/common/pae_pangine.cpp:109
-// 1.x/pangine/src/test/common/test_parse_text.cpp:20
-#[test]
-fn parse_text_matches_1x_word_union_behavior() {
-    let mut test = PangineTest::new();
-    let text1 = test.engine_mut().parse_text("simple parse text test").unwrap();
-    let text2 = test.engine_mut().parse_text("simple text test %%%%% $$parse").unwrap();
-    let expected = test.concept("[simple]*[parse]*[text]*[test]");
-
-    assert_eq!(text1, text2);
-    assert_eq!(text2, expected);
 }
 
 // Parity anchors:

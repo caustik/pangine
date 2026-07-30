@@ -69,7 +69,6 @@ fn owning_handles_cannot_cross_engine_state_boundaries() {
     let foreign = first.reference_concept("[A]").unwrap().unwrap();
     let local_percept = second.reference_percept("memory");
 
-    assert!(matches!(second.reference_concept_with_params("[%]", std::slice::from_ref(&foreign)), Err(ParseError::InvalidSyntax)));
     assert!(!second.set_percept_value(&local_percept, Some(foreign.clone())));
     assert_eq!(second.perform_addition(&local_percept, Some(&foreign)), None);
     assert_eq!(second.concept_count(), 0);
