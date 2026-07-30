@@ -391,7 +391,7 @@ Pangine answers within whichever complete state the caller selected. The names `
 
 This walkthrough covers the Pangine surface available in the interactive console apart from the full `help` text. It demonstrates canonical composition, relevance, percept state, experience, questions, shared output identity, selection, scripts, and snapshots.
 
-It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, an LLM integration, or a production revision API.
+It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, sampler behavior beyond the provisional greedy choice, or a production revision API.
 
 ## Why I built Pangine
 
@@ -399,9 +399,7 @@ I originally came up with Pangine by writing down pieces of information in a sem
 
 Concepts have canonical forms and can be composed without giving their names a built-in ontology. Experiencing a concept recursively exposes everything it contains, at every level. A question uses literal matches and implied wildcard possibilities to produce weighted answers. The hope is that several partial matches can converge on an answer even when no literal fact was stored.
 
-The larger question is whether this can become an inference system in its own right. Pangine's weighted possibilities could be sampled directly, used to guide an LLM, or combined with other systems. It may end up supplementing current LLM technology, or it may develop into an alternative approach to inference. It is too early to know.
-
-Pangine does not assume that a language model has to perform the inference. If an LLM is involved, it could translate information into and out of Pangine while Pangine retains inspectable state and performs its own reasoning.
+The larger question is whether this can become an inference system in its own right. Pangine's weighted possibilities need a real decision operation. Modern LLM implementations already contain useful sampler strategies, but the part relevant to Pangine is only candidate selection: Pangine supplies Concept candidates and scores, and the sampler returns one of those Concepts. This does not require loading a model, generating text, or translating information into or out of Pangine.
 
 ## The core idea
 
@@ -469,7 +467,7 @@ The current implementation is written in Rust. It includes:
 - Lazy recursive wildcard projection, shared repeated-output bindings, and ranked question results
 - An interactive console, a progressive Pangine-language walkthrough, and compatibility tests
 
-The relevance model, decision and sampling semantics beyond the provisional greedy `^` choice, persistence, model integration, and language bindings are still open work. Pangine does not currently include an LLM, vector database, llama.cpp integration, or Python package.
+The relevance model, decision and sampling semantics beyond the provisional greedy `^` choice, persistence, sampler integration, and language bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
 
 To run the complete verification suite:
 
