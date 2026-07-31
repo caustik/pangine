@@ -265,14 +265,45 @@ command> $['animal']
 
 The current structural fold found `cat` through two compatible paths, so it has strength `x2`. That number is a deterministic structural coefficient, not a probability.
 
-`^` is the current greedy choice placeholder. It evaluates the percept and returns the entry with the greatest positive Relevance weight:
+`^` applies Pangine's current deterministic greedy choice. It evaluates the percept and returns the entry with the greatest positive Relevance weight:
 
 ```text
 command> ^['animal']
   [cat]
 ```
 
-This is similar in shape to greedy or top-1 decoding: choose the candidate with the largest current score. The similarity stops there. Pangine's coefficients are structural values, not model logits or calibrated probabilities, and `^` does not implement temperature, filtering, or random sampling. Ties currently fall back to allocation order, and if nothing has positive weight the complete evaluated value is returned. Those details remain placeholders rather than settled decision semantics.
+An exact top-weight tie uses the earliest canonical Concept spelling, regardless of the order in which the Concepts were allocated:
+
+```text
+command> ['tie'] = [tea][coffee]
+  [tea]
+  [coffee]
+command> ^['tie']
+  [coffee]
+```
+
+That spelling rule is only a transparent, repeatable fallback. It does not claim that `coffee` is better than `tea`. If no retained candidate has a finite positive weight, `^` returns the null Concept:
+
+```text
+command> ['opposed'] = ![tea]![coffee]
+  ![tea]
+  ![coffee]
+command> ^['opposed']
+  []
+```
+
+The zero boundary is visible directly:
+
+```text
+command> ['zero-and-opposed'] = 0%[tea]![coffee]
+  ![coffee]
+command> ^['zero-and-opposed']
+  []
+```
+
+The zero-weight `tea` entry contributes nothing and disappears when the Concept is built. Pangine therefore cannot preserve “this remains a candidate with exactly zero weight” while allowing the negative `coffee` entry to win. Forced choice across positive, zero, and negative values would need a separate candidate form that retains zero-valued membership.
+
+This is similar in shape to greedy or top-1 decoding: choose the candidate with the largest current score. The similarity stops there. Pangine's coefficients are structural values, not model logits or calibrated probabilities, and `^` does not implement temperature, configurable sampler filters, or random sampling.
 
 ### Reuse one output identity
 
@@ -351,7 +382,7 @@ command> ^['reported-route']
   [cli-runner]
 ```
 
-`cli-runner` matches the complete requested relationship. `clippy` survives as a weaker partial structural candidate. The provisional greedy choice selects `cli-runner`, but the coefficients are still structural weights rather than calibrated certainty.
+`cli-runner` matches the complete requested relationship. `clippy` survives as a weaker partial structural candidate. The greedy choice selects `cli-runner`, but the coefficients are still structural weights rather than calibrated certainty.
 
 Now an older note reports a different route:
 
@@ -366,7 +397,7 @@ command> $['reported-route']
   x2 [cargo]
 ```
 
-Pangine retains both complete reports and their observers. It does not infer that `maintainer` is more authoritative than `legacy-note`, that one report is newer, or that `cli-runner` should overwrite `cargo`. Calling `^` here would merely apply the current positive-weight greedy rule and its allocation-order tie break. That would not be a justified conflict-resolution policy.
+Pangine retains both complete reports and their observers. It does not infer that `maintainer` is more authoritative than `legacy-note`, that one report is newer, or that `cli-runner` should overwrite `cargo`. Calling `^` here would merely break the equal-weight tie by canonical Concept spelling. That repeatable fallback would not be a justified conflict-resolution policy.
 
 An application can instead choose one complete policy explicitly. Here it supplies two self-contained policy states:
 
@@ -391,7 +422,7 @@ Pangine answers within whichever complete state the caller selected. The names `
 
 This walkthrough covers the Pangine surface available in the interactive console apart from the full `help` text. It demonstrates canonical composition, relevance, percept state, experience, questions, shared output identity, selection, scripts, and snapshots.
 
-It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, sampler behavior beyond the provisional greedy choice, or a production revision API.
+It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, sampler behavior beyond the deterministic greedy choice, or a production revision API.
 
 ## Why I built Pangine
 
@@ -399,7 +430,7 @@ I originally came up with Pangine by writing down pieces of information in a sem
 
 Concepts have canonical forms and can be composed without giving their names a built-in ontology. Experiencing a concept recursively exposes everything it contains, at every level. A question uses literal matches and implied wildcard possibilities to produce weighted answers. The hope is that several partial matches can converge on an answer even when no literal fact was stored.
 
-The larger question is whether this can become an inference system in its own right. Pangine's weighted possibilities need a real decision operation. Modern LLM implementations already contain useful sampler strategies, but the part relevant to Pangine is only candidate selection: Pangine supplies Concept candidates and scores, and the sampler returns one of those Concepts. This does not require loading a model, generating text, or translating information into or out of Pangine.
+The larger question is whether this can become an inference system in its own right. The deterministic `^` rule now gives Pangine a stable baseline for choosing among weighted possibilities. Modern LLM implementations contain richer sampler strategies, but the part relevant to Pangine is only candidate selection: Pangine supplies Concept candidates and scores, and the sampler returns one of those Concepts. This does not require loading a model, generating text, or translating information into or out of Pangine.
 
 ## The core idea
 
@@ -465,9 +496,10 @@ The current implementation is written in Rust. It includes:
 - Engine-owned percept state and relevance operations
 - Recursive, observer-scoped experience sets with idempotent replay
 - Lazy recursive wildcard projection, shared repeated-output bindings, and ranked question results
+- Deterministic positive-weight greedy choice with canonical tie handling
 - An interactive console, a progressive Pangine-language walkthrough, and compatibility tests
 
-The relevance model, decision and sampling semantics beyond the provisional greedy `^` choice, persistence, sampler integration, and language bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
+The relevance model, decision and sampling semantics beyond the deterministic greedy `^` choice, persistence, sampler integration, and language bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
 
 To run the complete verification suite:
 
@@ -500,7 +532,7 @@ cargo test --all-targets --release
 | `['memory'] ~= expression` | Insert an experience and its recursive observations |
 | `['memory'] @ expression` | Bind outputs and return the unresolved question shape |
 | `$operand` | Recursively evaluate every percept in its operand |
-| `^['choice']` | Apply the provisional positive-weight greedy choice |
+| `^['choice']` | Select the greatest positive weight, using canonical spelling for exact ties |
 | `$['*']` | Inspect all live ordinary Concepts through a read-only computed view |
 
 Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from accepted input syntax; for example, `[A]->[B]` formats as `{[A]->[B]}`.

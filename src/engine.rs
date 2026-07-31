@@ -210,16 +210,17 @@ Scripts:
   // line comment            C++-style comment
   /* block comment */        C-style comment
 
-Choice placeholder:
+Choice:
   ^['choice'] evaluates the percept and greedily returns the entry with the
   greatest positive relevance weight.
 
   ['choice'] = x2[tea]x3[coffee]
   ^['choice']             returns [coffee]
 
-  This is similar to deterministic top-1 selection, not a settled sampling
-  model. Ties currently use allocation order. If no entry has positive weight,
-  the complete evaluated value is returned.
+  Exact top-weight ties use the earliest canonical Concept spelling. If no
+  entry has positive weight, ^ returns []. Zero-weight entries disappear when
+  their Concept is built and are not decision candidates. This is a
+  deterministic greedy rule, not a probability model or a random sampler.
 ";
 
 /// The result of parsing or executing Pangine syntax.
@@ -1861,22 +1862,29 @@ impl Pangine {
     }
 
     fn make_decision(&self, concept: &ConceptId) -> Option<ConceptId> {
-        let mut concept = self.get_value(concept)?;
+        let concept = self.get_value(concept)?;
         if !matches!(concept.0.kind, ConceptKind::Relevance) {
             return Some(concept);
         }
 
-        let subconcepts = concept.0.subconcepts.clone();
-        let mut greatest = 0.0;
-        for (candidate, relevance) in subconcepts {
-            let current = relevance.weight();
-            if current > greatest {
-                greatest = current;
-                concept = candidate;
+        let mut selected: Option<(f32, String, ConceptId)> = None;
+        for (candidate, relevance) in &concept.0.subconcepts {
+            let weight = relevance.weight();
+            if !weight.is_finite() || weight <= 0.0 {
+                continue;
+            }
+
+            let canonical = self.format_concept(candidate, false);
+            let replace = match &selected {
+                None => true,
+                Some((greatest, earliest, _)) => weight > *greatest || (weight == *greatest && canonical < *earliest),
+            };
+            if replace {
+                selected = Some((weight, canonical, candidate.clone()));
             }
         }
 
-        Some(concept)
+        selected.map(|(_, _, candidate)| candidate)
     }
 
     fn correlation<'a>(&self, concept: &'a ConceptId) -> Option<(&'a ConceptId, &'a ConceptId)> {
@@ -2457,8 +2465,10 @@ mod tests {
         assert!(help.contains("wildcard projections lazily"));
         assert!(help.contains("expression; expression"));
         assert!(help.contains("^['choice']"));
-        assert!(help.contains("similar to deterministic top-1 selection"));
-        assert!(help.contains("allocation order"));
+        assert!(help.contains("earliest canonical Concept spelling"));
+        assert!(help.contains("entry has positive weight, ^ returns []"));
+        assert!(help.contains("Zero-weight entries disappear"));
+        assert!(help.contains("not a probability model or a random sampler"));
     }
 
     #[test]

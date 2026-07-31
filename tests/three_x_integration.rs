@@ -111,13 +111,29 @@ fn script_text_accepts_semicolons_and_legacy_line_statements() {
 }
 
 #[test]
-fn provisional_greedy_choice_uses_the_current_positive_relevance_weight() {
+fn greedy_choice_selects_the_greatest_positive_relevance_weight() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
         "['choice'] = x2[tea]x3[coffee]; ^['choice']" => "[coffee]",
         "['single'] = [tea]; ^['single']" => "[tea]",
-        "['negative'] = ![tea]![coffee]; ^['negative']" => "![tea]![coffee]",
+        "['mixed'] = x2[tea]![coffee]; ^['mixed']" => "[tea]",
+        "['zero-negative'] = 0%[tea]![coffee]; $['zero-negative']" => "![coffee]",
+    });
+    test.assert_null([
+        "['zero'] = 0%[tea]0%[coffee]; ^['zero']",
+        "['zero-negative'] = 0%[tea]![coffee]; ^['zero-negative']",
+        "['negative'] = ![tea]![coffee]; ^['negative']",
+    ]);
+}
+
+#[test]
+fn greedy_choice_breaks_exact_ties_by_canonical_concept_spelling() {
+    PangineTest::assert_script_results(pairs! {
+        "['keep-a']=[A];['keep-b']=[B];['choice']=$['keep-a']*$['keep-b'];^['choice']" => "[A]",
+        "['keep-b']=[B];['keep-a']=[A];['choice']=$['keep-a']*$['keep-b'];^['choice']" => "[A]",
+        "['a']=[A];['b']=[B];['c']=[C];['left']=$['a']*$['b'];['right']=$['c'];['choice']=$['left']*$['right'];^['choice']" => "[A]",
+        "['c']=[C];['b']=[B];['a']=[A];['right']=$['c'];['left']=$['a']*$['b'];['choice']=$['right']*$['left'];^['choice']" => "[A]",
     });
 }
 
