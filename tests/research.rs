@@ -6,8 +6,23 @@
 
 use pangine::Relevance;
 
+#[path = "research/contextual_relevance.rs"]
+mod contextual_relevance;
+
 #[path = "research/ordinary_concept_revision.rs"]
 mod ordinary_concept_revision;
+
+#[path = "research/question_evidence_boundary.rs"]
+mod question_evidence_boundary;
+
+#[path = "research/relevance_identity.rs"]
+mod relevance_identity;
+
+#[path = "research/recursive_bayesian_evidence.rs"]
+mod recursive_bayesian_evidence;
+
+#[path = "research/recursive_bayesian_policy.rs"]
+mod recursive_bayesian_policy;
 
 #[path = "research/revision_state.rs"]
 mod revision_state;
