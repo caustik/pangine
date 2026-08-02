@@ -3,9 +3,6 @@ mod support;
 use pangine::Relevance;
 use support::{pairs, PangineTest};
 
-// Integration anchors:
-// 2.x/pangine/include/pangine/pae_concept_parser.h:63,74,75
-// 2.x/pangine/src/test/common/test_pangine.cpp:53,249,274,302
 #[test]
 fn implicit_union_syntax_and_star_merge_are_distinct_operations() {
     let mut test = PangineTest::new();
@@ -28,9 +25,6 @@ fn implicit_union_syntax_and_star_merge_are_distinct_operations() {
     test.assert_invalid(["*[A]", "[A]*"]);
 }
 
-// Integration anchors:
-// 2.x/pangine/src/pangine/common/pae_concept.cpp:56,124
-// 2.x/pangine/src/test/common/test_pangine.cpp:279,302
 #[test]
 fn parenthesized_union_operands_remain_composite_until_merge() {
     let mut test = PangineTest::new();
@@ -48,9 +42,6 @@ fn parenthesized_union_operands_remain_composite_until_merge() {
     });
 }
 
-// Integration anchors:
-// 2.x/pangine/include/pangine/pae_concept_parser.h:126,127
-// 2.x/pangine/src/test/common/test_pangine.cpp:59,61,62,64,65,66,68,69,70
 #[test]
 fn richer_numeric_relevance_grammar_preserves_components() {
     let mut test = PangineTest::new();
@@ -91,10 +82,6 @@ fn relevance_prefixes_bind_one_union_operand() {
     });
 }
 
-// Integration anchors:
-// 2.x/pangine/src/pangine/common/pae_relevance.cpp:52
-// 2.x/pangine/src/pangine/common/pae_concept.cpp:56,64
-// 2.x/pangine/src/test/common/test_pangine.cpp:412,413,414,415,416
 #[test]
 fn embedded_relevance_multiplies_when_single_child_bubbles_up() {
     let mut test = PangineTest::new();

@@ -18,49 +18,37 @@ cd pangine
 cargo run --bin pangine-console
 ```
 
-Everything below is an actual transcript from `pangine-console`. Text after `command>` is what I typed. The indented lines are exactly what the console printed. The first part is one continuous session, so each operation builds on what came before it.
+Everything below is an actual `pangine-console` transcript. Text after `command>` is what I typed. The indented lines are exactly what the console printed.
 
-Pangine does not know what names such as `cat`, `maintainer`, or `full-test` mean. They are ordinary names chosen for the examples. Their application meaning comes from the person or program using the language.
+Pangine does not know what names such as `cat`, `Alice`, or `full-test` mean. They are ordinary names chosen for the examples. Their meaning comes from the person or program using the language.
 
 ### Start with nothing
 
 ```text
 command> []
   []
-```
-
-`[]` is the null Concept. It means there is no Concept here. It is not a named Concept whose name happens to be empty.
-
-The smallest non-null Concept is a name:
-
-```text
 command> [cat]
   [cat]
 ```
 
-Pangine treats `cat` as an opaque name. It does not assume that a cat is an animal or that the word refers to anything in particular.
+`[]` is the null Concept. It means there is no Concept here. `[cat]` is a named Concept, and Pangine treats its name as opaque.
 
 ### Put Concepts together
 
-Writing Concepts next to each other makes a union. Null contributes nothing to it:
+Writing Concepts next to each other makes an unordered composition, which the grammar calls a union:
 
 ```text
-command> [cat][]
-  [cat]
 command> [cat][dog]
   [cat]
   [dog]
-```
-
-The console prints the operands of a union on separate lines. Repeating the same operand preserves multiplicity, which canonical output shortens to a strength coefficient:
-
-```text
 command> [cat][cat][dog]
   x2 [cat]
   [dog]
 ```
 
-Parentheses group an expression but do not create a new kind of Concept. Adjacency can preserve a grouped union as one operand, while `*` flattens both sides before merging them:
+Repeating the same unordered member increases its retained strength. Canonical output shortens two copies to `x2`.
+
+Parentheses group an expression but do not create another kind of Concept. Adjacency can retain a complete group as one operand, while `*` flattens before merging:
 
 ```text
 command> ([A][B])([A][B])
@@ -70,28 +58,17 @@ command> ([A][B])*([A][B])
   x2 [B]
 ```
 
-The first result contains two copies of the complete `[A][B]` group. The second contains two copies of `A` and two copies of `B`.
-
-`/` is the inverse form of the flattening merge. It merges the left side with an inverted right side:
+`/` is the inverse form of the flattening merge:
 
 ```text
 command> ([A][B])/([A][C])
   [B]
   ![C]
-```
-
-The positive and inverted copies of `A` cancel. `B` remains positive and `C` remains inverted.
-
-Inversion can also be written directly:
-
-```text
-command> ![cat]
-  ![cat]
 command> [cat]*![cat]
   []
 ```
 
-Inversion is part of Concept composition. Pangine does not automatically interpret it as natural-language negation or as evidence that a statement is false.
+The positive and inverted copies of `A` cancel. Inversion is part of Concept composition. Pangine does not automatically interpret it as natural-language negation.
 
 ### Attach relevance
 
@@ -101,82 +78,40 @@ Relevance coefficients prefix the next union operand:
 command> 50%x2[cat]x3[dog]
   50%x2 [cat]
   x3 [dog]
-```
-
-`50%` is the probability component and `x2` is the strength component attached to `cat`. `x3` applies separately to `dog`. These values participate in deterministic composition and selection. The current values are not calibrated probabilities or confidence claims.
-
-Parentheses matter when one coefficient should apply to a complete group:
-
-```text
 command> x2([cat][dog])
   x2 [cat][dog]
 ```
 
-Here the coefficient belongs to the complete `[cat][dog]` Concept rather than to each name independently.
+`50%` is the probability component and `x2` is the strength component attached to `cat`. `x3` applies separately to `dog`. Parentheses let one coefficient apply to a complete group.
 
-### Describe relationships
+These values currently participate in deterministic composition and selection. They are not calibrated probabilities or confidence claims. The relevance model is still open work.
 
-`->` makes a directed Correlation:
+### Put Concepts in order
+
+`->` makes one ordered composition:
 
 ```text
 command> [cat]->[purrs]
   {[cat]->[purrs]}
+command> [cat]->[purrs]->[soft]
+  {[cat]->[purrs]->[soft]}
+command> ([cat]->[purrs])->[soft]
+  {{[cat]->[purrs]}->[soft]}
 ```
 
 The console adds braces because `{[cat]->[purrs]}` is the canonical form. Canonical output is valid Pangine that parses back into the same Concept.
 
-Correlations associate to the right:
+The three-part chain is flat: it retains `cat`, `purrs`, and `soft` as three ordered occurrences. It is not secretly grouped as either `(cat -> purrs) -> soft` or `cat -> (purrs -> soft)`. If I add parentheses explicitly, as in the last command, the inner ordered composition becomes one component of the outer one. Unlike unordered composition, repeating a component in an ordered composition keeps a separate position.
 
-```text
-command> [cat]->[purrs]->[soft]
-  {[cat]->{[purrs]->[soft]}}
-```
+### Give a Percept mutable state
 
-That structure relates `cat` to the complete inner relationship from `purrs` to `soft`.
-
-### Preserve where something came from
-
-An Observation combines an observer with the complete Concept it observed or asserted:
-
-```text
-command> ?[alice]:{[cat]->[purrs]}
-  ?[alice]:{[cat]->[purrs]}
-```
-
-Both sides are ordinary recursive Concepts. Pangine does not give `alice` built-in authority or reliability.
-
-The null observer represents global scope:
-
-```text
-command> ?[]:{[cat]->[purrs]}
-  ?[]:{[cat]->[purrs]}
-```
-
-Several complete Observations can form one Observation-state Concept:
-
-```text
-command> <?[alice]:[cat], ?[camera]:[purrs]>
-  <?[alice]:[cat], ?[camera]:[purrs]>
-```
-
-This collection is unordered and idempotent. Repeating an equal complete Observation changes nothing. An unequal Observation remains a separate entry.
-
-### Give a percept mutable state
-
-Square brackets with a quoted name refer to a percept:
+A quoted name refers to a Percept:
 
 ```text
 command> ['memory']
   ['memory']
 command> $['memory']
   []
-```
-
-The first command returns the percept reference itself. `$` recursively evaluates percepts, and this percept has no value yet, so evaluation returns null.
-
-Assignment gives it a value:
-
-```text
 command> ['memory'] = {[cat]->[purrs]}
   {[cat]->[purrs]}
 command> ['memory']
@@ -185,9 +120,9 @@ command> $['memory']
   {[cat]->[purrs]}
 ```
 
-The reference remains `['memory']`; evaluating it returns the current value.
+The reference remains `['memory']`. `$` evaluates its current value. Before assignment that value is null.
 
-Percepts support the same ordinary state operations:
+The ordinary mutation operators work on the current materialized value and replace the Percept with one resulting root:
 
 ```text
 command> ['state'] = [A]
@@ -202,135 +137,124 @@ command> ['state'] *= [C]
   [C]
 command> ['state'] /= [C]
   [B]
-command> $['state']
-  [B]
 ```
 
-`+=` adds a union operand, `-=` removes it, `*=` performs a flattening merge, and `/=` performs an inverse merge. The grouped union example above shows where ordinary union addition and flattening merge differ.
+### Turn a Percept into a source of experience
+
+`~=` adds one complete Concept as an exact root owned by the Percept:
+
+```text
+command> ['Alice'] ~= {[cat]->[purrs]}
+  {[cat]->[purrs]}
+command> ['Alice'] ~= {[cat]->[purrs]}
+  {[cat]->[purrs]}
+command> ['Bob'] ~= {[cat]->[meows]}
+  {[cat]->[meows]}
+```
+
+Replaying the same complete root under the same Percept changes nothing. A different root remains distinct. The root stays an ordinary Concept. Pangine does not put it or the Percept into a special experience mode.
+
+This matters because the complete boundary remains available even though a question can inspect the recursive pieces inside it. Pangine derives those pieces when it asks a question. It does not store a second expanded copy of the experience.
+
+`$['Alice']` is a convenient combined view:
+
+```text
+command> $['Alice']
+  {[cat]->[purrs]}
+```
+
+That combined view is not always a lossless account of the roots. One root `[A][B]` and two roots `[A]`, `[B]` can materialize to the same output. The engine API therefore also exposes the exact root set with `get_percept_roots`.
+
+### Ask one source
+
+`@` asks a Percept and binds the Percepts inside the question:
+
+```text
+command> ['Alice'] @ {[cat]->['sound']}
+  {[cat]->['sound']}
+command> $['sound']
+  [purrs]
+```
+
+The immediate result is still the unresolved question shape. `$['sound']` shows the answer candidates that were written into the output Percept.
+
+The fixed `[cat]` must match exactly. `['sound']` is the wildcard position Pangine fills. Ordinary Concepts in a question are never implicit weak wildcards.
+
+A longer ordered root can supply an exact contiguous path without being stored a second time:
+
+```text
+command> ['Sequence'] ~= [cat]->[eats]->[cat_food]
+  {[cat]->[eats]->[cat_food]}
+command> ['Sequence'] @ ['what']->[eats]
+  {['what']->[eats]}
+command> $['what']
+  [cat]
+```
+
+`cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part root remains available as context for later relevance work.
+
+### Ask several sources together
+
+Writing several plain Percepts on the left of `@` selects all of them:
+
+```text
+command> ['Alice']['Bob'] @ {[cat]->['shared-sound']}
+  {[cat]->['shared-sound']}
+command> $['shared-sound']
+  [purrs]
+  [meows]
+command> ^['shared-sound']
+  [meows]
+```
+
+`@` applies after the complete expression on its left. Parentheses are optional, so this is the normal form:
+
+```text
+['Alice']['Bob'] @ {[cat]->['sound']}
+```
+
+`(['Alice']['Bob']) @ ...` means the same thing, but the parentheses are not needed.
+
+The selected Percepts are the sources. An equal root replayed under `Alice` still counts once, while the same root under both `Alice` and `Bob` remains two separate source contributions.
+
+`^` currently selects the greatest positive weight. An exact tie uses the earliest canonical Concept spelling, which is why `meows` wins the tie above. This is a stable fallback, not a claim that `meows` is inherently more likely.
+
+### Reuse one output identity
+
+The same output Percept keeps one identity throughout a question:
+
+```text
+command> ['event-1'] ~= {[review]->[review]}
+  {[review]->[review]}
+command> ['event-2'] ~= {[prepare]->[ship]}
+  {[prepare]->[ship]}
+command> ['event-1']['event-2'] @ {['same']->['same']}
+  {['same']->['same']}
+command> ^['same']
+  [review]
+```
+
+`{['same']->['same']}` asks for one Concept that can occupy both positions. `{['left']->['right']}` would allow independent answers.
 
 ### Use scripts and comments
 
-Several statements may share one line. The value of the last statement is printed:
+Statements may be separated with semicolons. The parser also accepts C++-style line comments and C-style block comments:
 
 ```text
 command> ['steps'] = [draft]; ['steps'] += [review]; $['steps']
   [draft]
   [review]
-```
-
-Line and block comments are ignored:
-
-```text
 command> [cat] // the rest of this line is a comment
   [cat]
 command> /* comments can also sit inside a line */ [dog]
   [dog]
 ```
 
-### Turn input into experience
-
-`~=` experiences a Concept rather than merely assigning it:
-
-```text
-command> ['observations'] ~= ?[alice]:{[cat]->[purrs]}
-  <?[alice]:[cat], ?[alice]:[purrs], ?[alice]:{[cat]->[purrs]}>
-```
-
-The complete Correlation is retained, and its recursively exposed `cat` and `purrs` parts are retained with the same observer. If the input did not have an explicit observer, Pangine would use the null observer.
-
-Replaying the exact same Observation produces the exact same state:
-
-```text
-command> ['observations'] ~= ?[alice]:{[cat]->[purrs]}
-  <?[alice]:[cat], ?[alice]:[purrs], ?[alice]:{[cat]->[purrs]}>
-```
-
-There is no duplicate to clean up later. Replay idempotence belongs to the experience operation itself.
-
-### Ask a question
-
-A percept inside a question pattern is an output position. This asks what can occupy the left side of a Correlation whose right side is `purrs`:
-
-```text
-command> ['observations'] @ {['animal']->[purrs]}
-  {['animal']->[purrs]}
-```
-
-The immediate result is the unresolved question shape. Evaluating the output percept shows its candidates:
-
-```text
-command> $['animal']
-  x2 [cat]
-```
-
-The current structural fold found `cat` through two compatible paths, so it has strength `x2`. That number is a deterministic structural coefficient, not a probability.
-
-`^` applies Pangine's current deterministic greedy choice. It evaluates the percept and returns the entry with the greatest positive Relevance weight:
-
-```text
-command> ^['animal']
-  [cat]
-```
-
-An exact top-weight tie uses the earliest canonical Concept spelling, regardless of the order in which the Concepts were allocated:
-
-```text
-command> ['tie'] = [tea][coffee]
-  [tea]
-  [coffee]
-command> ^['tie']
-  [coffee]
-```
-
-That spelling rule is only a transparent, repeatable fallback. It does not claim that `coffee` is better than `tea`. If no retained candidate has a finite positive weight, `^` returns the null Concept:
-
-```text
-command> ['opposed'] = ![tea]![coffee]
-  ![tea]
-  ![coffee]
-command> ^['opposed']
-  []
-```
-
-The zero boundary is visible directly:
-
-```text
-command> ['zero-and-opposed'] = 0%[tea]![coffee]
-  ![coffee]
-command> ^['zero-and-opposed']
-  []
-```
-
-The zero-weight `tea` entry contributes nothing and disappears when the Concept is built. Pangine therefore cannot preserve “this remains a candidate with exactly zero weight” while allowing the negative `coffee` entry to win. Forced choice across positive, zero, and negative values would need a separate candidate form that retains zero-valued membership.
-
-This is similar in shape to greedy or top-1 decoding: choose the candidate with the largest current score. The similarity stops there. Pangine's coefficients are structural values, not model logits or calibrated probabilities, and `^` does not implement temperature, configurable sampler filters, or random sampling.
-
-### Reuse one output identity
-
-Repeating the same output percept in a question requires one shared answer:
-
-```text
-command> ['pairs'] ~= ?[unequal]:{[prepare]->[ship]}
-  <?[unequal]:[prepare], ?[unequal]:[ship], ?[unequal]:{[prepare]->[ship]}>
-command> ['pairs'] ~= ?[equal]:{[review]->[review]}
-  <?[equal]:[review], ?[equal]:{[review]->[review]}, ?[unequal]:[prepare], ?[unequal]:[ship], ?[unequal]:{[prepare]->[ship]}>
-command> ['pairs'] @ {['same']->['same']}
-  {['same']->['same']}
-command> $['same']
-  x3 [review]
-  [prepare]
-  [ship]
-command> ^['same']
-  [review]
-```
-
-`review` satisfies both positions in one complete path. `prepare` and `ship` remain as weaker partial matches, but Pangine rejects any complete path that would give the two occurrences different answers.
-
-Using two different percept names, such as `{['left']->['right']}`, allows the two positions to bind independently.
-
 ### Inspect the live ordinary Concepts
 
-The global inspection percept is named `['*']`. Evaluating it creates a transient snapshot of all currently live ordinary Concepts. This is the built-in way to inspect the complete ordinary Concept graph retained by the engine. Here I start a fresh console so the result stays small:
+`$['*']` is the global inspection view:
+
+A fresh console keeps this inspection example small:
 
 ```text
 command> ['one'] = [A]
@@ -343,199 +267,123 @@ command> $['*']
   {[A]->[B]}
 ```
 
-The snapshot is read-only and computed when requested. "Live" means retained by a Percept value, another Concept, or an owning host handle. A temporary Concept can disappear after its last handle is released. This view is useful for inspection, but it is not persistence or a serialized database.
+It returns every ordinary Concept currently retained by the engine. It is read-only and computed when requested. It is useful for inspecting a session, but it is not persistence or a serialized database.
 
-### A deeper example: choosing a build policy
+### A deeper example: choosing a build route
 
-This final example starts with another fresh console. It uses only the primitives introduced above.
-
-Suppose a maintainer reports that the full test suite should run through `cli-runner`:
+This example starts with a fresh console. The Percept itself identifies the source:
 
 ```text
-command> ['reports'] ~= ?[maintainer]:{[full-test]->[cli-runner]}
-  <?[maintainer]:[cli-runner], ?[maintainer]:[full-test], ?[maintainer]:{[full-test]->[cli-runner]}>
+command> ['Maintainer'] ~= {[full-test]->[cli-runner]}
+  {[full-test]->[cli-runner]}
+command> ['Maintainer'] ~= {[lint]->[clippy]}
+  {[full-test]->[cli-runner]}
+  {[lint]->[clippy]}
+command> ['Legacy-note'] ~= {[full-test]->[cargo]}
+  {[full-test]->[cargo]}
 ```
 
-Receiving the same report again leaves state unchanged:
+Asking both sources retains the two exact answers. The unrelated lint root does not match the fixed `full-test` Concept:
 
 ```text
-command> ['reports'] ~= ?[maintainer]:{[full-test]->[cli-runner]}
-  <?[maintainer]:[cli-runner], ?[maintainer]:[full-test], ?[maintainer]:{[full-test]->[cli-runner]}>
-```
-
-The maintainer also supplies a lint route:
-
-```text
-command> ['reports'] ~= ?[maintainer]:{[lint]->[clippy]}
-  <?[maintainer]:[cli-runner], ?[maintainer]:[clippy], ?[maintainer]:[full-test], ?[maintainer]:[lint], ?[maintainer]:{[full-test]->[cli-runner]}, ?[maintainer]:{[lint]->[clippy]}>
-```
-
-Now I ask which route belongs on the right side of `full-test`:
-
-```text
-command> ['reports'] @ {[full-test]->['reported-route']}
-  {[full-test]->['reported-route']}
-command> $['reported-route']
-  x2 [cli-runner]
-  [clippy]
-command> ^['reported-route']
+command> ['Maintainer']['Legacy-note'] @ {[full-test]->['route']}
+  {[full-test]->['route']}
+command> $['route']
   [cli-runner]
-```
-
-`cli-runner` matches the complete requested relationship. `clippy` survives as a weaker partial structural candidate. The greedy choice selects `cli-runner`, but the coefficients are still structural weights rather than calibrated certainty.
-
-Now an older note reports a different route:
-
-```text
-command> ['reports'] ~= ?[legacy-note]:{[full-test]->[cargo]}
-  <?[legacy-note]:[cargo], ?[legacy-note]:[full-test], ?[legacy-note]:{[full-test]->[cargo]}, ?[maintainer]:[cli-runner], ?[maintainer]:[clippy], ?[maintainer]:[full-test], ?[maintainer]:[lint], ?[maintainer]:{[full-test]->[cli-runner]}, ?[maintainer]:{[lint]->[clippy]}>
-command> ['reports'] @ {[full-test]->['reported-route']}
-  {[full-test]->['reported-route']}
-command> $['reported-route']
-  x2 [cli-runner]
-  [clippy]
-  x2 [cargo]
-```
-
-Pangine retains both complete reports and their observers. It does not infer that `maintainer` is more authoritative than `legacy-note`, that one report is newer, or that `cli-runner` should overwrite `cargo`. Calling `^` here would merely break the equal-weight tie by canonical Concept spelling. That repeatable fallback would not be a justified conflict-resolution policy.
-
-An application can instead choose one complete policy explicitly. Here it supplies two self-contained policy states:
-
-```text
-command> ['policy-v1'] = <?[maintainer]:{[full-test]->[cargo]}, ?[maintainer]:{[lint]->[clippy]}>
-  <?[maintainer]:{[full-test]->[cargo]}, ?[maintainer]:{[lint]->[clippy]}>
-command> ['policy-v2'] = <?[maintainer]:{[full-test]->[cli-runner]}, ?[maintainer]:{[lint]->[clippy]}>
-  <?[maintainer]:{[full-test]->[cli-runner]}, ?[maintainer]:{[lint]->[clippy]}>
-command> ['policy-v1'] @ {[full-test]->['route-v1']}
-  {[full-test]->['route-v1']}
-command> ^['route-v1']
   [cargo]
-command> ['policy-v2'] @ {[full-test]->['route-v2']}
-  {[full-test]->['route-v2']}
-command> ^['route-v2']
+command> ^['route']
+  [cargo]
+```
+
+Pangine does not infer that the maintainer is more authoritative, that the legacy note is older, or that either route should overwrite the other. `^` only applies the current deterministic tie rule.
+
+The caller can instead choose which source to ask:
+
+```text
+command> ['Maintainer'] @ {[full-test]->['maintainer-route']}
+  {[full-test]->['maintainer-route']}
+command> $['maintainer-route']
+  [cli-runner]
+command> ^['maintainer-route']
   [cli-runner]
 ```
 
-Pangine answers within whichever complete state the caller selected. The names `policy-v1` and `policy-v2` are opaque. Pangine does not compare their spelling, choose a current version, or define a revision system.
+Pangine answers from the selected Percept roots. The source names remain opaque, and source selection is explicit in the question.
 
 ### What this walkthrough does not settle
 
-This walkthrough covers the Pangine surface available in the interactive console apart from the full `help` text. It demonstrates canonical composition, relevance, percept state, experience, questions, shared output identity, selection, scripts, and snapshots.
+This walkthrough covers the current console surface: canonical composition, relevance, Percept state, exact-root experience, one-source and multi-source questions, shared output identity, selection, scripts, and inspection.
 
-It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, sampler behavior beyond the deterministic greedy choice, or a production revision API.
+It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, richer sampler behavior, or a production revision API.
 
 ## Why I built Pangine
 
 I originally came up with Pangine by writing down pieces of information in a semantic shape, asking questions about them, and then reasoning backward from what the grammar should imply. Pangine explores whether experience, retained state, and questions can all use that same small grammar.
 
-Concepts have canonical forms and can be composed without giving their names a built-in ontology. Experiencing a concept recursively exposes everything it contains, at every level. A question uses literal matches and implied wildcard possibilities to produce weighted answers. The hope is that several partial matches can converge on an answer even when no literal fact was stored.
+Concepts have canonical forms and can be composed without giving their names a built-in ontology. A Percept retains exact complete roots. A question can use both those roots and the recursive structure inside them without turning experience into a separate kind of Concept.
 
-The larger question is whether this can become an inference system in its own right. The deterministic `^` rule now gives Pangine a stable baseline for choosing among weighted possibilities. Modern LLM implementations contain richer sampler strategies, but the part relevant to Pangine is only candidate selection: Pangine supplies Concept candidates and scores, and the sampler returns one of those Concepts. This does not require loading a model, generating text, or translating information into or out of Pangine.
-
-## The core idea
-
-A Pangine expression describes a semantic shape. Named concepts can be composed into unions, directed correlations, observations, and deeper structures. Applications decide what those concepts mean.
-
-```text
-{[cat]->[purrs]}
-{{[cat]->[purrs]}->{[sound]->[soft]}}
-```
-
-A correlation describes a relationship in the observed material. An observation can preserve who or what supplied an entire Concept without changing the Concept it contains:
-
-```text
-{[rain]->[wet_ground]}
-?[weather_station]:{[rain]->[wet_ground]}
-?[]:{[rain]->[wet_ground]}
-```
-
-The second expression reads as "the weather station observed or asserted that rain relates to wet ground." Both the observer and the observation may be any recursive Concept. Pangine does not reserve the observer position for particular kinds of Concept. The third form uses the null observer, written `[]`, for a globally scoped observation. Pangine creates that form when an expression is experienced without an explicit observer. The grammar does not imply observer-specific confidence or independence.
-
-When state contains several distinct Observations, angle brackets identify the collection itself:
-
-```text
-<?[weather_station]:[rain], ?[camera]:[wet_ground]>
-```
-
-This is one recursive Concept, not an anonymous union that happens to contain Observations. The collection is unordered and idempotent. Repeating an entry does not change it, while ordinary composition still preserves structural multiplicity. Relevance coefficients attach to the next ordinary union operand, so `[A][A][B]` can be written `x2[A][B]`, and `x2[A]x3[B]` weights two operands independently. Parentheses only group: `x2([A][B])` applies one coefficient to the entire grouped Concept. Braces remain the canonical boundary for Correlation.
-
-A named percept holds state. Assignment stores a value, experience accumulates what has been observed, a question binds output percepts, and evaluation materializes their current values.
-
-```text
-['memory'] ~= {[cat]->[purrs]}
-['memory'] @ {['animal']->[purrs]}
-$['animal']
-```
-
-The first statement experiences a correlation. The second asks which experienced concepts can occupy the left side of that shape. The third evaluates the resulting ranked candidates.
-
-The same output percept keeps one identity throughout a question pattern. For example, `{['same']->['same']}` asks for one Concept that can occupy both positions, while `{['left']->['right']}` allows two independent answers. When a projection would bind repeated occurrences to different Concepts, Pangine discards that projection. Partial projections can still contribute lower-weight possibilities, so this rule preserves the difference between a candidate that fits the whole shared shape and candidates that fit only one part.
-
-Every concept inside an experience is also experienced. Nothing privileges the root or any other level. In theory, this implies every recursive combination of literal and wildcard structure. In practice, that closure is too large to store, so questions fold the compatible projections together when they are needed. These abstraction levels are somewhat like hidden features in a neural network, except they come from the grammar and remain possible to inspect.
-
-The hard part is relevance. Direct evidence, many independent hints at different levels of abstraction, and a generic wildcard possibility should not all have the same weight. The current projection weights are deterministic, but they are not calibrated probabilities and they are not the final answer.
+The larger question is whether this can become an inference system in its own right. The deterministic `^` rule gives Pangine a stable baseline for choosing among weighted possibilities. A future sampler could provide richer candidate selection, but that does not require an LLM to generate or translate Pangine.
 
 ## Scaling direction
 
-When I first thought about scaling Pangine, the model was closer to map/reduce than GPU acceleration. Canonical form gives concepts a stable identity, but no concept needs a permanent machine owner. Distributed entities could each hold a roughly even subset of relevance. A percept operation could unfold across those entities, perform the local work, and then reduce the partial candidate weights.
+When I first thought about scaling Pangine, the model was closer to map/reduce than a central database. Canonical form gives Concepts a stable identity, but no Concept needs a permanent machine owner. Each partition can retain flat exact root edges from Percepts to canonical Concepts.
 
-Changing how relevance is divided should not change the answer. If an entity goes down, Pangine should keep working with less relevance instead of breaking the model. With enough entities and reasonably balanced relevance, that failure becomes a relatively small change in the available evidence. Rare or important evidence may still need replication.
+Those exact roots are authoritative and combine by set union. Replay, arrival order, and grouping do not change the set. If a partition is lost, Pangine should continue from the roots that remain rather than depending on one irreplaceable global index.
 
-I have now tested one small part of this idea. I split observations into different groups, folded each group separately, and combined the resulting Concepts. Every grouping and arrival order produced the same canonical result as folding all of the observations together. This happened inside one Pangine engine, so it is not distributed execution yet.
+An operating server may keep a densely connected in-memory representation or a disposable lookup to make matching fast. That structure is a cache over the flat canonical roots, not another source of truth. It can be rebuilt, dropped, or scoped to one partition.
 
-I do not want a later evidence reducer to repair replay duplication. Replay handling now belongs inside `~=` while the Observation still has an observer and a complete recursive payload. Pangine treats every complete canonical Observation as an element of a set. Adding the same Observation again changes nothing, while a different Observation is retained without `~=` inspecting why its payload differs. The same rule applies when an Observation is a recursive part of a larger experience. An unwrapped experience uses the global/null observer and follows the identical rule. Unlike first-write or last-write replacement, set union produces the same state in every arrival order. The later meaning of compatible, inverted, or conflicting observations remains separate from ingestion.
-
-The recursive closure still has to remain implied. Sending every wildcard permutation over the network would replace a storage problem with a messaging problem. Distributed execution is only a design direction today. GPU acceleration could still be useful inside any of the workers.
+Question evaluation currently derives recursive candidates at question time and feeds them into the existing matcher. For ordered roots it derives only the contiguous path widths requested by the current question, rather than expanding every possible path. Efficient retrieval and the final relevance model remain active research areas.
 
 ## Current status
 
 The current implementation is written in Rust. It includes:
 
 - Parsing and canonical formatting of the grammar
-- Weakly interned, canonical concept graphs
-- Engine-owned percept state and relevance operations
-- Recursive, observer-scoped experience sets with idempotent replay
-- Lazy recursive wildcard projection, shared repeated-output bindings, and ranked question results
+- Weakly interned, canonical Concept graphs
+- Unified Percept state built from exact complete roots
+- Idempotent experience replay over exact Percept roots
+- One-source and unparenthesized multi-source question selection
+- Lazy exact recursive matching with explicit Percept wildcards and shared repeated-output bindings
 - Deterministic positive-weight greedy choice with canonical tie handling
-- An interactive console, a progressive Pangine-language walkthrough, and compatibility tests
+- `$['*']` global inspection
+- An interactive console, focused regression tests, and a browser-local WebAssembly workbench
 
-The relevance model, decision and sampling semantics beyond the deterministic greedy `^` choice, persistence, sampler integration, and language bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
+The relevance model, richer decision and sampling semantics, persistence, distributed execution, and general-purpose application bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
 
 To run the complete verification suite:
 
 ```sh
-cargo test --all-targets --release
+cargo test --workspace --all-targets --release
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 ## Language at a glance
 
 | Form | Meaning |
 | --- | --- |
-| `[]` | Null or no concept |
-| `[name]` | Named concept |
-| `['memory']` | Named percept reference |
+| `[]` | Null or no Concept |
+| `[name]` | Named Concept |
+| `['memory']` | Named Percept reference |
 | `(expression)` | Grouping |
 | `[A][B]` | Union |
 | `[A]*[B]` | Flattening merge |
 | `[A]/[B]` | Merge with an inverted right operand |
 | `![A]` | Inversion |
-| `[A]->[B]` | Directed correlation |
-| `?[observer]:[observation]` | Observation made or asserted by an observer |
-| `?[]:[observation]` | Observation in global scope |
-| `<?[observer]:[A], ?[]:[B]>` | Multi-entry Observation state |
+| `[A]->[B]->[C]` | One flat ordered composition; canonical output includes braces |
 | `50%x2[A]` | Probability and strength relevance on the next operand |
-| `['memory'] = expression` | Assign percept state |
-| `['memory'] += expression` | Add one union operand |
-| `['memory'] -= expression` | Subtract one complete union operand |
-| `['memory'] *= expression` | Flatten and merge into percept state |
-| `['memory'] /= expression` | Flatten and inversely merge into percept state |
-| `['memory'] ~= expression` | Insert an experience and its recursive observations |
-| `['memory'] @ expression` | Bind outputs and return the unresolved question shape |
-| `$operand` | Recursively evaluate every percept in its operand |
+| `['memory'] = expression` | Replace a Percept with zero or one root |
+| `['memory'] += expression` | Add to the materialized value, then retain one result root |
+| `['memory'] -= expression` | Subtract from the materialized value, then retain one result root |
+| `['memory'] *= expression` | Flattening merge, then retain one result root |
+| `['memory'] /= expression` | Inverse merge, then retain one result root |
+| `['memory'] ~= expression` | Insert one exact complete root idempotently |
+| `['memory'] @ expression` | Ask one source and bind output Percepts |
+| `['Alice']['Bob'] @ expression` | Ask several sources together; parentheses are optional |
+| `$operand` | Recursively evaluate every Percept in the operand |
 | `^['choice']` | Select the greatest positive weight, using canonical spelling for exact ties |
 | `$['*']` | Inspect all live ordinary Concepts through a read-only computed view |
 
-Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from accepted input syntax; for example, `[A]->[B]` formats as `{[A]->[B]}`.
+Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from accepted input syntax. For example, `[A]->[B]` formats as `{[A]->[B]}`.
 
 ## Contributing
 

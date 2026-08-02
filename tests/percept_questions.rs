@@ -1,0 +1,399 @@
+use pangine::{ConceptId, Pangine, Relevance};
+use std::collections::BTreeSet;
+
+#[test]
+fn question_rejects_fixed_mismatches_instead_of_treating_them_as_weak_matches() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}");
+    must_ref(&mut pangine, "['memory'] ~= {[B]->[D]}");
+    ask(&mut pangine, "['memory'] @ {['X']->[A]}");
+
+    let candidates = named_value(&mut pangine, "$['X']");
+    assert_eq!(candidates.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
+}
+
+#[test]
+fn question_keeps_ordered_output_bindings_distinct() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
+    let question = must_ref(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->['Y']}");
+    assert_eq!(question, must_ref(&mut pangine, "{['X']->[A]}*{[B]->['Y']}"));
+
+    let x = named_value(&mut pangine, "$['X']");
+    assert_eq!(x.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
+
+    let y = named_value(&mut pangine, "$['Y']");
+    assert_eq!(y.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["D"]);
+}
+
+#[test]
+fn question_uses_the_surrounding_relationship_context() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {([C]*[A])->([B]*[D])}");
+    ask(&mut pangine, "['memory'] @ {(['X']*[A])->([B]*['Y'])}");
+
+    let x = named_value(&mut pangine, "$['X']");
+    assert_eq!(x.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
+
+    let y = named_value(&mut pangine, "$['Y']");
+    assert_eq!(y.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["D"]);
+}
+
+#[test]
+fn evaluation_recursively_resolves_percepts_inside_a_shape() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['A'] = [resolved-a]");
+    must_ref(&mut pangine, "['B'] = ['A']->[resolved-b]");
+
+    assert_eq!(must_ref(&mut pangine, "$({['B']->['A']})"), must_ref(&mut pangine, "{{[resolved-a]->[resolved-b]}->[resolved-a]}"));
+}
+
+#[test]
+fn question_recursively_finds_an_exact_nested_match() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {[C]->{[A]->[Z]}}");
+    must_ref(&mut pangine, "['memory'] ~= {[B]->{[D]->[Y]}}");
+    ask(&mut pangine, "['memory'] @ {['X']->{[A]->[Z]}}");
+
+    let candidates = named_value(&mut pangine, "$['X']");
+    assert_eq!(candidates.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
+}
+
+#[test]
+fn question_writes_each_output_percept_separately() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}");
+    ask(&mut pangine, "['memory'] @ {['X']->['Y']}");
+
+    let x = named_value(&mut pangine, "$['X']");
+    let y = named_value(&mut pangine, "$['Y']");
+    assert_eq!(x[0].1, "C");
+    assert_eq!(y[0].1, "A");
+}
+
+#[test]
+fn repeated_output_percept_uses_one_binding_across_selected_sources() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['event-1'] ~= {[A]->[B]}");
+    must_ref(&mut pangine, "['event-2'] ~= {[A]->[B]}");
+    must_ref(&mut pangine, "['event-3'] ~= {[C]->[C]}");
+    ask(&mut pangine, "['event-1']['event-2']['event-3'] @ {['X']->['X']}");
+
+    let candidates = named_value(&mut pangine, "$['X']");
+    assert_eq!(candidates.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
+}
+
+#[test]
+fn repeated_output_binding_survives_nested_unordered_matching() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['event-1'] ~= {([A]*[P])->([B]*[Q])}");
+    must_ref(&mut pangine, "['event-2'] ~= {([A]*[P])->([B]*[Q])}");
+    must_ref(&mut pangine, "['event-3'] ~= {([C]*[P])->([C]*[Q])}");
+    ask(&mut pangine, "['event-1']['event-2']['event-3'] @ {(['X']*[P])->(['X']*[Q])}");
+
+    let candidates = named_value(&mut pangine, "$['X']");
+    assert!(candidate_weight(&candidates, "C") > candidate_weight(&candidates, "A"));
+    assert!(candidate_weight(&candidates, "C") > candidate_weight(&candidates, "B"));
+}
+
+#[test]
+fn experience_retains_exact_roots_and_replay_is_idempotent() {
+    let mut pangine = Pangine::new();
+    let memory = pangine.reference_percept("memory");
+    let ordered = must_ref(&mut pangine, "{[cat]->[purrs]}");
+
+    must_ref(&mut pangine, "['memory'] ~= {[cat]->[purrs]}");
+    must_ref(&mut pangine, "['memory'] ~= {[cat]->[purrs]}");
+    assert_eq!(pangine.get_percept_roots(&memory), Some(vec![ordered.clone()]));
+    assert_eq!(pangine.get_value(&memory), Some(ordered));
+
+    ask(&mut pangine, "['memory'] @ {[cat]->['sound']}");
+    assert_eq!(must_ref(&mut pangine, "$['sound']"), must_ref(&mut pangine, "[purrs]"));
+}
+
+#[test]
+fn weighted_root_and_replayed_atomic_root_remain_distinct() {
+    let mut pangine = Pangine::new();
+    let memory = pangine.reference_percept("memory");
+
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    must_ref(&mut pangine, "['memory'] ~= x2[A]");
+
+    let roots = pangine.get_percept_roots(&memory).unwrap();
+    assert_eq!(roots.len(), 2);
+    assert_eq!(roots.into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([must_ref(&mut pangine, "[A]"), must_ref(&mut pangine, "x2[A]")]));
+    assert_eq!(pangine.format_concept(&pangine.get_value(&memory).unwrap(), false), "x3[A]");
+}
+
+#[test]
+fn cancelling_materialized_value_does_not_delete_exact_roots() {
+    let mut pangine = Pangine::new();
+    let memory = pangine.reference_percept("memory");
+
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    assert!(pangine.reference_concept("['memory'] ~= ![A]").unwrap().is_none());
+
+    assert!(pangine.get_value(&memory).is_none());
+    assert_eq!(pangine.get_percept_roots(&memory).unwrap().len(), 2);
+}
+
+#[test]
+fn materialized_value_does_not_erase_exact_root_boundaries() {
+    let mut pangine = Pangine::new();
+    let whole = pangine.reference_percept("whole");
+    let split = pangine.reference_percept("split");
+
+    must_ref(&mut pangine, "['whole'] = [A][B]");
+    must_ref(&mut pangine, "['split'] ~= [A]");
+    must_ref(&mut pangine, "['split'] ~= [B]");
+
+    assert_eq!(pangine.get_value(&whole), pangine.get_value(&split));
+    assert_eq!(pangine.get_percept_roots(&whole).unwrap().len(), 1);
+    assert_eq!(pangine.get_percept_roots(&split).unwrap().len(), 2);
+}
+
+#[test]
+fn ordinary_operations_replace_experience_with_one_result_root() {
+    let mut pangine = Pangine::new();
+    let memory = pangine.reference_percept("memory");
+
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    must_ref(&mut pangine, "['memory'] ~= [B]");
+    assert_eq!(pangine.get_percept_roots(&memory).unwrap().len(), 2);
+
+    must_ref(&mut pangine, "['memory'] += [C]");
+    assert_eq!(pangine.get_percept_roots(&memory).unwrap(), vec![must_ref(&mut pangine, "[A][B][C]")]);
+
+    must_ref(&mut pangine, "['memory'] ~= [D]");
+    must_ref(&mut pangine, "['memory'] *= [E]");
+    assert_eq!(pangine.get_percept_roots(&memory).unwrap(), vec![must_ref(&mut pangine, "([A][B][C])[D][E]")]);
+
+    must_ref(&mut pangine, "['memory'] -= [A]");
+    assert_eq!(pangine.get_percept_roots(&memory).unwrap(), vec![must_ref(&mut pangine, "![A]([A][B][C])[D][E]")]);
+}
+
+#[test]
+fn at_binds_after_the_complete_unparenthesized_left_union() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['Alice'] ~= {[cat]->[purr]}");
+    must_ref(&mut pangine, "['Bob'] ~= {[cat]->[meow]}");
+
+    ask(&mut pangine, "['Alice'] @ {[cat]->['alice-sound']}");
+    let alice = named_value(&mut pangine, "$['alice-sound']");
+    assert!(alice.iter().any(|(_, name)| name == "purr"));
+    assert!(!alice.iter().any(|(_, name)| name == "meow"));
+
+    ask(&mut pangine, "['Alice']['Bob'] @ {[cat]->['sound']}");
+    let unparenthesized = must_ref(&mut pangine, "$['sound']");
+    let candidates = named_relevance(&pangine, &unparenthesized);
+    assert!(candidates.iter().any(|(_, name)| name == "purr"));
+    assert!(candidates.iter().any(|(_, name)| name == "meow"));
+
+    ask(&mut pangine, "(['Alice']['Bob']) @ {[cat]->['grouped-sound']}");
+    assert_eq!(must_ref(&mut pangine, "$['grouped-sound']"), unparenthesized);
+}
+
+#[test]
+fn flat_ordered_questions_match_only_exact_contiguous_windows() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['alice'] ~= [cat]->[eats]->[cat_food]");
+
+    ask(&mut pangine, "['alice'] @ ['what']->[eats]");
+    assert_eq!(must_ref(&mut pangine, "$['what']"), must_ref(&mut pangine, "[cat]"));
+
+    ask(&mut pangine, "['alice'] @ [eats]->['what-next']");
+    assert_eq!(must_ref(&mut pangine, "$['what-next']"), must_ref(&mut pangine, "[cat_food]"));
+
+    ask(&mut pangine, "['alice'] @ [cat_food]->['wrong-order']");
+    assert!(pangine.reference_concept("$['wrong-order']").unwrap().is_none());
+}
+
+#[test]
+fn explicit_nesting_preserves_an_ordered_composition_as_one_component() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['left'] ~= ([cat]->[eats])->[food]");
+    must_ref(&mut pangine, "['right'] ~= [cat]->([eats]->[food])");
+
+    ask(&mut pangine, "['left'] @ ['left-answer']->[eats]");
+    assert_eq!(must_ref(&mut pangine, "$['left-answer']"), must_ref(&mut pangine, "[cat]"));
+
+    ask(&mut pangine, "['right'] @ ['right-answer']->[eats]");
+    assert!(pangine.reference_concept("$['right-answer']").unwrap().is_none());
+}
+
+#[test]
+fn repeated_root_under_different_percepts_remains_separate_evidence() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['Alice'] ~= {[cat]->[purr]}");
+    must_ref(&mut pangine, "['Bob'] ~= {[cat]->[purr]}");
+
+    ask(&mut pangine, "['Alice'] @ {[cat]->['one']}");
+    let one = candidate_weight(&named_value(&mut pangine, "$['one']"), "purr");
+
+    ask(&mut pangine, "['Alice']['Bob'] @ {[cat]->['two']}");
+    let two = candidate_weight(&named_value(&mut pangine, "$['two']"), "purr");
+    assert!(two > one);
+}
+
+#[test]
+fn question_selector_requires_plain_mutable_percepts() {
+    let mut pangine = Pangine::new();
+
+    for invalid in ["[Alice] @ ['answer']", "x2['Alice'] @ ['answer']", "['Alice']['Alice'] @ ['answer']", "['*'] @ ['answer']", "!['Alice'] @ ['answer']"] {
+        assert!(pangine.reference_concept(invalid).is_err(), "expected invalid selector: {invalid}");
+    }
+}
+
+#[test]
+fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
+    let mut pangine = Pangine::new();
+    let memory = pangine.reference_percept("memory");
+
+    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
+    for partial in ["{[E]->[A]}*{[P1]->[Q1]}", "{[E]->[A]}*{[P2]->[Q2]}", "{[E]->[A]}*{[P3]->[Q3]}"] {
+        must_ref(&mut pangine, &format!("['memory'] ~= {partial}"));
+    }
+
+    let unseen = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
+    assert!(!pangine.get_percept_roots(&memory).unwrap().contains(&unseen));
+
+    ask(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
+    let candidates = named_value(&mut pangine, "$['X']");
+    assert!(candidates.iter().any(|(_, name)| name == "E"));
+}
+
+#[test]
+fn question_outputs_replace_roots_and_clear_when_unbound() {
+    let mut pangine = Pangine::new();
+    let output = pangine.reference_percept("X");
+
+    must_ref(&mut pangine, "['X'] ~= [old-a]");
+    must_ref(&mut pangine, "['X'] ~= [old-b]");
+    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}");
+    ask(&mut pangine, "['memory'] @ {['X']->[A]}");
+    assert_eq!(pangine.get_percept_roots(&output).unwrap().len(), 1);
+
+    must_ref(&mut pangine, "['memory'] = [atomic]");
+    ask(&mut pangine, "['memory'] @ {['X']->[missing]}");
+    assert!(pangine.get_percept_roots(&output).unwrap().is_empty());
+    assert!(pangine.reference_concept("$['X']").unwrap().is_none());
+}
+
+#[test]
+fn a_selected_source_can_be_replaced_by_its_own_question_output() {
+    let mut pangine = Pangine::new();
+    let alice = pangine.reference_percept("Alice");
+
+    must_ref(&mut pangine, "['Alice'] ~= [A]");
+    must_ref(&mut pangine, "['Alice'] ~= [B]");
+    assert_eq!(pangine.get_percept_roots(&alice).unwrap().len(), 2);
+
+    ask(&mut pangine, "['Alice'] @ ['Alice']");
+    assert_eq!(pangine.get_percept_roots(&alice).unwrap().len(), 1);
+}
+
+#[test]
+fn standalone_wildcard_question_can_bind_an_atomic_root() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]");
+    ask(&mut pangine, "['memory'] @ ['X']");
+    assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "[A]"));
+}
+
+#[test]
+fn unequal_union_question_binds_the_exact_remainder_above_its_parts() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]*[B]*[C]");
+    ask(&mut pangine, "['memory'] @ ['X']*[B]");
+
+    assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[A]*[C]"));
+}
+
+#[test]
+fn unequal_union_question_does_not_bind_a_generic_mismatch() {
+    let mut pangine = Pangine::new();
+
+    must_ref(&mut pangine, "['memory'] ~= [A]*[B]*[C]");
+    must_ref(&mut pangine, "['X'] = [old]");
+    ask(&mut pangine, "['memory'] @ ['X']*[D]");
+    assert!(pangine.reference_concept("$['X']").unwrap().is_none());
+}
+
+#[test]
+fn deep_experience_keeps_one_root_while_question_derives_nested_matches() {
+    let mut pangine = Pangine::new();
+    let memory = pangine.reference_percept("memory");
+    let depth = 20;
+    let mut experience = format!("[N{depth}]");
+    for index in (0..depth).rev() {
+        experience = format!("[N{index}]->({experience})");
+    }
+
+    let root = must_ref(&mut pangine, &format!("['memory'] ~= {experience}"));
+    assert_eq!(pangine.get_percept_roots(&memory), Some(vec![root]));
+
+    ask(&mut pangine, &format!("['memory'] @ [N{depth_minus_one}]->['tail']", depth_minus_one = depth - 1));
+    assert_eq!(must_ref(&mut pangine, "^['tail']"), must_ref(&mut pangine, &format!("[N{depth}]")));
+}
+
+#[test]
+fn wide_question_remains_finite_and_finds_the_expected_answer() {
+    let mut pangine = Pangine::new();
+    let width = 20;
+    let experience = (0..width).map(|index| format!("{{[V{index}]->[K{index}]}}")).collect::<Vec<_>>().join("*");
+    let question =
+        (0..width).map(|index| if index == 0 { "{['X']->[K0]}".to_owned() } else { format!("{{[V{index}]->[K{index}]}}") }).collect::<Vec<_>>().join("*");
+
+    must_ref(&mut pangine, &format!("['memory'] ~= {experience}"));
+    ask(&mut pangine, &format!("['memory'] @ {question}"));
+
+    let candidates = named_value(&mut pangine, "$['X']");
+    assert_eq!(candidates[0].1, "V0");
+    assert!(candidates.iter().all(|(relevance, _)| relevance.weight().is_finite()));
+}
+
+fn candidate_weight(candidates: &[(Relevance, String)], name: &str) -> f32 {
+    candidates.iter().find(|(_, candidate)| candidate == name).unwrap_or_else(|| panic!("missing candidate {name:?}")).0.weight()
+}
+
+fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, String)> {
+    pangine
+        .get_relevance_map(concept)
+        .into_iter()
+        .map(|(relevance, concept)| {
+            let name = pangine.get_name(&concept).unwrap_or_else(|| panic!("expected named candidate, got {concept:?}"));
+            (relevance, name.to_owned())
+        })
+        .collect()
+}
+
+fn named_value(pangine: &mut Pangine, input: &str) -> Vec<(Relevance, String)> {
+    let concept = must_ref(pangine, input);
+    named_relevance(pangine, &concept)
+}
+
+fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {
+    pangine
+        .reference_concept(input)
+        .unwrap_or_else(|error| panic!("failed to parse {input:?}: {error}"))
+        .unwrap_or_else(|| panic!("expected non-null concept for {input:?}"))
+}
+
+fn ask(pangine: &mut Pangine, input: &str) {
+    must_ref(pangine, input);
+}

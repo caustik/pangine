@@ -1,10 +1,8 @@
 mod support;
 
+use pangine::{Pangine, ParseError};
 use support::{pairs, PangineTest};
 
-// Integration anchors:
-// 3.x/pangine/include/pangine/pae_concept_parser.h:69
-// 3.x/pangine/src/test/common/test_pangine.cpp:564,567,568,569
 #[test]
 fn semicolon_separated_input_returns_the_last_statement() {
     let mut test = PangineTest::new();
@@ -16,9 +14,6 @@ fn semicolon_separated_input_returns_the_last_statement() {
     test.assert_null(["[];", "['A'] = [];[C][D];$['A']"]);
 }
 
-// Integration anchors:
-// 3.x/pangine/include/pangine/pae_concept_parser.h:41
-// 3.x/pangine/src/test/common/test_pangine.cpp:575,576,577,583,584,585
 #[test]
 fn c_style_and_cpp_style_comments_are_ignored() {
     let mut test = PangineTest::new();
@@ -43,8 +38,6 @@ fn hash_comments_are_limited_to_legacy_script_input() {
     });
 }
 
-// Integration anchor:
-// 3.x/pangine/src/test/common/test_pangine.cpp:546
 #[test]
 fn multiline_whitespace_remains_union_in_direct_concept_parsing() {
     let mut test = PangineTest::new();
@@ -53,33 +46,37 @@ fn multiline_whitespace_remains_union_in_direct_concept_parsing() {
     });
 }
 
-// Integration anchors:
-// 3.x/pangine/src/test/common/test_pangine.cpp:53,159
 #[test]
-fn direct_semantics_are_right_associative_and_share_legacy_correlation_identity() {
+fn ordered_compositions_are_flat_canonical_and_explicitly_nestable() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
         "[A]->[B]" => "{[A]->[B]}",
+        "[A]->[B]->[C]" => "{[A]->[B]->[C]}",
+        "[A]->[B][C]->[D]" => "{[A]->[B][C]->[D]}",
+    });
+    test.assert_distinct(pairs! {
+        "[A]->[B]->[C]" => "([A]->[B])->[C]",
         "[A]->[B]->[C]" => "[A]->([B]->[C])",
-        "[A]->[B][C]->[D]" => "[A]->([B][C]->[D])",
+        "[A]->[B]->[C]" => "[C]->[B]->[A]",
+        "[A]->[B]->[A]" => "[A]->[B]",
     });
     test.assert_formats(pairs! {
         "[A]->[B]" => "{[A]->[B]}",
+        "[A]->[B]->[C]" => "{[A]->[B]->[C]}",
         "{[a]->[b][c][d]}" => "{[a]->[b][c][d]}",
-        "(?[]:[A])->[target]" => "{(?[]:[A])->[target]}",
-        "x2(?[]:[A])->[target]" => "{(x2?[]:[A])->[target]}",
+        "([A][B])->[target]" => "{[A][B]->[target]}",
+        "x2([A][B])->[target]" => "{x2([A][B])->[target]}",
+        "([A]->[B])->[C]" => "{{[A]->[B]}->[C]}",
+        "[A]->([B]->[C])" => "{[A]->{[B]->[C]}}",
     });
 
     let semantic = test.concept("[A]->[B]");
     let a = test.concept("[A]");
     let b = test.concept("[B]");
-    assert_eq!(test.engine().get_correlation_a(&semantic), Some(a));
-    assert_eq!(test.engine().get_correlation_b(&semantic), Some(b));
+    assert_eq!(test.engine().get_ordered_components(&semantic), Some(vec![a, b]));
 }
 
-// Integration anchors:
-// 3.x/pangine/src/test/common/test_pangine.cpp:602,604,606
 #[test]
 fn canonical_formatting_orders_relevance_shape_and_name_collisions() {
     let mut test = PangineTest::new();
@@ -88,7 +85,7 @@ fn canonical_formatting_orders_relevance_shape_and_name_collisions() {
         "([a]->x2[b])*([a]->x3[c])" => "{[a]->x3[c]}{[a]->x2[b]}",
         "([a]->[b])*([a]->[b][c])" => "{[a]->[b]}{[a]->[b][c]}",
         "['X']([B]->[F])['Y'][X][Y]" => "['X']['Y'][X][Y]{[B]->[F]}",
-        "(?[a]:[b])*({[a]->[b]})" => "(?[a]:[b]){[a]->[b]}",
+        "([a][b])*({[a]->[b]})" => "[a][b]{[a]->[b]}",
     });
 }
 
@@ -137,9 +134,6 @@ fn greedy_choice_breaks_exact_ties_by_canonical_concept_spelling() {
     });
 }
 
-// Integration anchors:
-// 3.x/pangine/include/pangine/pae_concept_parser.h:84,102
-// 3.x/pangine/src/test/common/test_pangine.cpp:97,158,233,234
 #[test]
 fn binary_inverse_merge_inverts_rhs_merge_operands() {
     let mut test = PangineTest::new();
@@ -154,11 +148,8 @@ fn binary_inverse_merge_inverts_rhs_merge_operands() {
     test.assert_invalid(["/[A]", "[A]/"]);
 }
 
-// Integration anchors:
-// 3.x/pangine/include/pangine/pae_concept_parser.h:111,112,113,114,115
-// 3.x/pangine/src/test/common/test_pangine.cpp:453,456,475,476,480,501
 #[test]
-fn explicit_percept_mutation_operators_are_required() {
+fn ordinary_percept_mutation_operators_are_explicit() {
     let mut test = PangineTest::new();
 
     test.assert_invalid(["['A'] + [A]", "['A'] ~ [A]"]);
@@ -168,18 +159,8 @@ fn explicit_percept_mutation_operators_are_required() {
         "['A'] -= [A]" => "[B]",
     });
     test.assert_null(["['A'] -= [B]"]);
-
-    let mut experience = PangineTest::new();
-    experience.assert_equivalent(pairs! {
-        "['A'] ~= [A]" => "?[]:[A]",
-        "['A'] ~= [B]" => "<?[]:[A], ?[]:[B]>",
-        "['A'] ~= ![A]" => "<?[]:[A], ?[]:[B], ?[]:![A]>",
-        "['A'] ~= ![B]" => "<?[]:[A], ?[]:[B], ?[]:![A], ?[]:![B]>",
-    });
 }
 
-// Integration anchors:
-// 3.x/pangine/src/test/common/test_pangine.cpp:484,486,487,488,489,491
 #[test]
 fn percept_addition_preserves_groups_and_merge_flattens() {
     let mut test = PangineTest::new();
@@ -196,4 +177,31 @@ fn percept_addition_preserves_groups_and_merge_flattens() {
         "([A][B])([B][C])" => "[A]*[B]*[B]*[C]",
     });
     test.assert_null(["['A'] -= [A][B]", "['M'] /= [A][B]"]);
+}
+
+#[test]
+fn null_concepts_and_invalid_syntax_have_distinct_results() {
+    let mut pangine = Pangine::new();
+
+    assert_eq!(pangine.reference_concept("[]").unwrap(), None);
+    assert_eq!(pangine.parse_script_text("[A];[];").unwrap(), None);
+
+    assert!(matches!(pangine.reference_concept("[A"), Err(ParseError::InvalidSyntax)));
+    assert!(matches!(pangine.parse_script_text("[A];[B"), Err(ParseError::InvalidSyntax)));
+    for script in ["!", "[A]*", "[A]/", "[A]->"] {
+        assert!(matches!(pangine.reference_concept(script), Err(ParseError::InvalidSyntax)), "expected invalid syntax: {script}");
+    }
+}
+
+#[test]
+fn parse_details_distinguish_invalid_syntax_from_a_null_result() {
+    let mut pangine = Pangine::new();
+    let mut null_details = Vec::new();
+    let mut error_details = Vec::new();
+
+    assert_eq!(pangine.parse_script_text_with_details("[]", &mut null_details).unwrap(), None);
+    assert!(matches!(pangine.parse_script_text_with_details("[A", &mut error_details), Err(ParseError::InvalidSyntax)));
+
+    assert_eq!(String::from_utf8(null_details).unwrap(), "ps> []\nps=   []\n");
+    assert_eq!(String::from_utf8(error_details).unwrap(), "ps> [A\nps!   invalid Pangine syntax\n");
 }

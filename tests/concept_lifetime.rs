@@ -1,9 +1,5 @@
 use pangine::{Pangine, ParseError};
 
-// Historical anchors:
-// 3.x/pangine/include/pangine/pae_pangine.h:25-27
-// 3.x/pangine/include/pangine/pae_shared_concept.h:26-32
-// 3.x/pangine/src/test/common/test_pangine.cpp:705-710
 #[test]
 fn ordinary_concepts_live_as_long_as_owning_handles() {
     let mut pangine = Pangine::new();
@@ -19,8 +15,6 @@ fn ordinary_concepts_live_as_long_as_owning_handles() {
     assert_eq!(pangine.concept_count(), 0);
 }
 
-// Historical anchor:
-// 3.x/pangine/src/libpangine/common/pae_pangine.cpp:344-388
 #[test]
 fn failed_pure_parses_release_transient_concepts() {
     let mut pangine = Pangine::new();
@@ -30,7 +24,7 @@ fn failed_pure_parses_release_transient_concepts() {
 }
 
 #[test]
-fn percept_values_retain_concepts_until_cleared() {
+fn percept_roots_retain_concepts_until_cleared() {
     let mut pangine = Pangine::new();
     let percept = pangine.reference_percept("memory");
     let value = pangine.reference_concept("[A][B]").unwrap().unwrap();
@@ -43,8 +37,6 @@ fn percept_values_retain_concepts_until_cleared() {
     assert_eq!(pangine.concept_count(), 0);
 }
 
-// Percept assignment is eager in the 3.x design as well:
-// 3.x/pangine/src/libpangine/common/pae_pangine.cpp:186-195
 #[test]
 fn parse_failures_do_not_roll_back_prior_percept_mutations() {
     let mut pangine = Pangine::new();
@@ -115,7 +107,7 @@ fn global_snapshot_expands_shared_concepts_instead_of_unlabeled_references() {
     let lines = pangine.debug_console_lines(Some(&snapshot));
 
     assert!(lines.iter().all(|line| !line.contains("[#")));
-    assert_eq!(lines.last().map(String::as_str), Some("  <?[]:[A], ?[]:[B], ?[]:[C], ?[]:[D], ?[]:{[B]->[D]}, ?[]:{[C]->[A]}, ?[]:{[B]->[D]}{[C]->[A]}>"));
+    assert_eq!(lines.last().map(String::as_str), Some("  {[B]->[D]}{[C]->[A]}"));
 }
 
 #[test]
@@ -127,7 +119,7 @@ fn evaluated_formatting_stops_a_percept_cycle_at_its_named_reference() {
 }
 
 #[test]
-fn global_percept_excludes_named_percept_roots() {
+fn global_snapshot_excludes_percept_references() {
     let mut pangine = Pangine::new();
     let global = pangine.global_percept();
     let memory = pangine.reference_percept("memory");
