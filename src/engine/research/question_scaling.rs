@@ -63,6 +63,19 @@ fn scaling_fixtures_preserve_expected_answers() {
         let measurement = measure(corpus, scenario, 1);
         assert!(measurement.work.exact_roots >= 8);
         assert!(measurement.work.shape_candidates >= 8);
+        assert_eq!(measurement.work.match_views, measurement.work.shape_candidates);
+        match scenario {
+            Scenario::Exact => {
+                assert_eq!(measurement.work.source_concepts, 0);
+                assert_eq!(measurement.work.graph_nodes, 0);
+                assert_eq!(measurement.work.graph_steps, 0);
+            }
+            Scenario::Nested | Scenario::Contextual => {
+                assert!(measurement.work.source_concepts > 0);
+                assert!(measurement.work.graph_nodes > 0);
+                assert!(measurement.work.graph_steps > 0);
+            }
+        }
     }
 }
 

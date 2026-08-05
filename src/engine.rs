@@ -1288,12 +1288,31 @@ impl Pangine {
             })
             .collect::<Vec<_>>();
 
+        let mut patterns = BTreeSet::new();
+        let mut contains_percept_cache = BTreeMap::new();
+        self.collect_question_patterns(question, true, &mut patterns, &mut contains_percept_cache);
+        // A root output Percept may bind any recursive view. Every other
+        // pattern can only match its own structural shape.
+        let experience_shapes =
+            (!patterns.iter().any(|pattern| self.is_percept(pattern))).then(|| patterns.iter().map(|pattern| pattern.0.shape()).collect::<BTreeSet<_>>());
+        let needs_context = patterns
+            .iter()
+            .any(|pattern| pattern.0.ordered_components().and_then(|components| components.first()).is_some_and(|origin| self.origin_has_route_seed(origin)));
         let mut ordered_widths = BTreeSet::new();
         self.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
         let mut snapshot = QuestionSnapshot::default();
         for source in sources {
-            self.add_question_experience_rec(&source, &source.root, &ordered_widths, &mut BTreeSet::new(), &mut snapshot.experiences);
-            Self::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
+            self.add_question_experience_rec(
+                &source,
+                &source.root,
+                &ordered_widths,
+                experience_shapes.as_ref(),
+                &mut BTreeSet::new(),
+                &mut snapshot.experiences,
+            );
+            if needs_context {
+                Self::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
+            }
         }
         snapshot
     }
@@ -1322,24 +1341,30 @@ impl Pangine {
         source: &QuestionSource,
         concept: &ConceptId,
         ordered_widths: &BTreeSet<usize>,
+        experience_shapes: Option<&BTreeSet<ConceptShape>>,
         visited: &mut BTreeSet<ConceptId>,
         experiences: &mut BTreeSet<QuestionExperience>,
     ) {
         if !visited.insert(concept.clone()) {
             return;
         }
-        let blocked_memberships = match &concept.0.kind {
-            ConceptKind::Ordered { components } => {
-                (0..components.len()).map(|position| QuestionMembership { parent: concept.clone(), port: QuestionPort::Ordered(position) }).collect()
-            }
-            ConceptKind::Named(_) | ConceptKind::Percept { .. } | ConceptKind::Unordered => BTreeSet::new(),
-        };
-        experiences.insert(QuestionExperience { source: source.clone(), matched: concept.clone(), blocked_memberships });
+        if experience_shapes.is_none_or(|shapes| shapes.contains(&concept.0.shape())) {
+            let blocked_memberships = match &concept.0.kind {
+                ConceptKind::Ordered { components } => {
+                    (0..components.len()).map(|position| QuestionMembership { parent: concept.clone(), port: QuestionPort::Ordered(position) }).collect()
+                }
+                ConceptKind::Named(_) | ConceptKind::Percept { .. } | ConceptKind::Unordered => BTreeSet::new(),
+            };
+            experiences.insert(QuestionExperience { source: source.clone(), matched: concept.clone(), blocked_memberships });
+        }
 
         match &concept.0.kind {
             ConceptKind::Ordered { components } => {
                 let components = components.clone();
                 for &width in ordered_widths.range(2..components.len()) {
+                    if experience_shapes.is_some_and(|shapes| !shapes.contains(&ConceptShape::Ordered(width))) {
+                        continue;
+                    }
                     for (start, window) in components.windows(width).enumerate() {
                         let matched = self.reference_ordered(window.to_vec());
                         let blocked_memberships = (start..start + width)
@@ -1349,14 +1374,17 @@ impl Pangine {
                     }
                 }
                 for child in components {
-                    self.add_question_experience_rec(source, &child, ordered_widths, visited, experiences);
+                    self.add_question_experience_rec(source, &child, ordered_widths, experience_shapes, visited, experiences);
                 }
             }
             ConceptKind::Unordered => {
                 let children = concept.0.subconcepts.clone();
                 for (child, relevance) in children {
-                    if let Some(weighted) = self.reference_map(&ConceptMap::from([(child, relevance)])) {
-                        self.add_question_experience_rec(source, &weighted, ordered_widths, visited, experiences);
+                    // reference_map returns a sole default member directly.
+                    // Avoid global interner cleanup for that common case.
+                    let weighted = if relevance == Relevance::DEFAULT { Some(child) } else { self.reference_map(&ConceptMap::from([(child, relevance)])) };
+                    if let Some(weighted) = weighted {
+                        self.add_question_experience_rec(source, &weighted, ordered_widths, experience_shapes, visited, experiences);
                     }
                 }
             }
@@ -2400,6 +2428,29 @@ mod research;
 mod tests {
     use super::*;
 
+    fn full_question_snapshot(pangine: &mut Pangine, percepts: &[ConceptId], question: &ConceptId) -> QuestionSnapshot {
+        let sources = percepts
+            .iter()
+            .flat_map(|percept| {
+                pangine
+                    .percept_roots
+                    .get(&percept.index())
+                    .into_iter()
+                    .flatten()
+                    .map(|(root, &occurrences)| QuestionSource { percept: percept.clone(), root: root.clone(), occurrences })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut ordered_widths = BTreeSet::new();
+        pangine.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
+        let mut snapshot = QuestionSnapshot::default();
+        for source in sources {
+            pangine.add_question_experience_rec(&source, &source.root, &ordered_widths, None, &mut BTreeSet::new(), &mut snapshot.experiences);
+            Pangine::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
+        }
+        snapshot
+    }
+
     #[test]
     fn debug_console_help_covers_current_language_surface() {
         let help = debug_console_help("help").unwrap();
@@ -2480,5 +2531,54 @@ mod tests {
         pangine.percept_values.remove(&percept.index());
         let restored = pangine.materialize_percept_value(&percept).unwrap();
         assert_eq!(pangine.format_concept(&restored, false), current_text);
+    }
+
+    #[test]
+    fn question_snapshot_drops_only_work_the_question_cannot_use() {
+        let mut pangine = Pangine::new();
+        for root in [
+            "[C]->[bridge]->[E]",
+            "[C]->[sound]->[quiet]",
+            "[E]->[sound]->[loud]",
+            "[C]*[sound]*[calm]",
+            "[C]50%x2[bridge]",
+            "[bridge]![E]",
+            "{[C]->{[A]->[Z]}}",
+        ] {
+            let command = format!("['world'] ~= {root}");
+            assert!(pangine.reference_concept(&command).unwrap().is_some());
+        }
+
+        let source = pangine.reference_percept("world");
+        for question_text in ["[C]*[sound]*['unordered-answer']", "[C]->[sound]->['ordered-answer']", "{['who']->{[A]->[Z]}}", "['anything']"] {
+            let question = pangine.reference_concept(question_text).unwrap().unwrap();
+            let filtered = pangine.question_snapshot(std::slice::from_ref(&source), &question);
+            let full = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &question);
+            assert!(filtered.experiences.is_subset(&full.experiences));
+            assert!(filtered.source_concepts.is_subset(&full.source_concepts));
+
+            let filtered_results = pangine.get_projection_results(&question, &filtered);
+            let full_results = pangine.get_projection_results(&question, &full);
+            assert_eq!(filtered_results, full_results, "question {question_text}");
+        }
+
+        let unordered = pangine.reference_concept("[C]*[sound]*['unordered-answer']").unwrap().unwrap();
+        let unordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &unordered);
+        assert!(unordered_snapshot.experiences.iter().all(|experience| experience.matched.0.shape() == ConceptShape::Unordered));
+        assert!(unordered_snapshot.source_concepts.is_empty());
+        assert!(unordered_snapshot.graph.steps.is_empty());
+
+        let contextual = pangine.reference_concept("[C]->[sound]->['ordered-answer']").unwrap().unwrap();
+        let contextual_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &contextual);
+        assert!(contextual_snapshot.experiences.iter().all(|experience| experience.matched.0.shape() == ConceptShape::Ordered(3)));
+        assert!(!contextual_snapshot.source_concepts.is_empty());
+        assert!(!contextual_snapshot.graph.steps.is_empty());
+
+        let wildcard = pangine.reference_percept("anything");
+        let wildcard_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &wildcard);
+        let full_wildcard = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &wildcard);
+        assert!(wildcard_snapshot.experiences == full_wildcard.experiences);
+        assert!(wildcard_snapshot.source_concepts.is_empty());
+        assert!(wildcard_snapshot.graph.steps.is_empty());
     }
 }
