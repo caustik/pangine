@@ -1,6 +1,6 @@
 mod support;
 
-use pangine::Relevance;
+use pangine::{Pangine, Relevance};
 use support::{pairs, PangineTest};
 
 #[test]
@@ -102,6 +102,24 @@ fn ordered_and_unordered_compositions_are_canonical() {
         "25%([A]*[B])25%([B]*[A])10%{[C]->[D]}10%{[C]->[D]}" => "15%([B]*[A])35%([B]*[A])5%{[C]->[D]}15%{[C]->[D]}",
     });
     test.exec(["{25%[A]25%[B]->[C]}"]);
+}
+
+#[test]
+fn composite_identity_survives_registry_growth_and_cleanup() {
+    let mut pangine = Pangine::new();
+    let ordered = pangine.reference_concept("[target-a]->[target-b]").unwrap().unwrap();
+    let unordered = pangine.reference_concept("[target-a]*[target-b]").unwrap().unwrap();
+
+    let retained = (0..256).map(|index| pangine.reference_concept(&format!("[left{index}]->[right{index}]")).unwrap().unwrap()).collect::<Vec<_>>();
+    assert_eq!(pangine.reference_concept("[target-a]->[target-b]").unwrap(), Some(ordered.clone()));
+    assert_eq!(pangine.reference_concept("[target-b]*[target-a]").unwrap(), Some(unordered.clone()));
+
+    drop(retained);
+    for index in 256..768 {
+        drop(pangine.reference_concept(&format!("[left{index}]->[right{index}]")).unwrap());
+    }
+    assert_eq!(pangine.reference_concept("[target-a]->[target-b]").unwrap(), Some(ordered));
+    assert_eq!(pangine.reference_concept("[target-a]*[target-b]").unwrap(), Some(unordered));
 }
 
 #[test]

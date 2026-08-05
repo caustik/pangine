@@ -1,7 +1,7 @@
 use crate::Relevance;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
@@ -9,7 +9,11 @@ use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
-type ConceptMap = BTreeMap<ConceptId, Relevance>;
+mod concept_map;
+
+use concept_map::ConceptMap;
+
+type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ExperienceRoots = BTreeMap<ConceptId, u64>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
 type ProjectionAssignments = BTreeSet<ProjectionAssignment>;
@@ -327,6 +331,11 @@ pub struct Pangine {
     percept_value_maps: BTreeMap<usize, ConceptMap>,
     percept_values: BTreeMap<usize, ConceptId>,
     composites: Vec<Weak<Concept>>,
+    // Local accelerator for the existing weak canonical registry. Complete
+    // equality, not the fingerprint, still determines Concept identity.
+    composite_lookup: CompositeLookup,
+    // Rebuild the weak indexes only as their stored size grows geometrically.
+    next_index_prune_size: usize,
 }
 
 impl Default for Pangine {
@@ -343,6 +352,8 @@ impl Default for Pangine {
             percept_value_maps: BTreeMap::new(),
             percept_values: BTreeMap::new(),
             composites: Vec::new(),
+            composite_lookup: CompositeLookup::new(),
+            next_index_prune_size: 2,
         }
     }
 }
@@ -366,23 +377,17 @@ impl Pangine {
 
     /// Parses and executes a Pangine statement or expression.
     pub fn reference_concept(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
-        let result = self.parse_statement_text(script);
-        self.prune_indexes();
-        result
+        self.parse_statement_text(script)
     }
 
     /// Parses and executes every statement in a script string.
     pub fn parse_script_text(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
-        let result = self.parse_script_text_impl(script, None);
-        self.prune_indexes();
-        result
+        self.parse_script_text_impl(script, None)
     }
 
     /// Parses a script string while writing each statement and result to `details`.
     pub fn parse_script_text_with_details<W: Write>(&mut self, script: &str, details: &mut W) -> ParseResult<Option<ConceptId>> {
-        let result = self.parse_script_text_impl(script, Some(details));
-        self.prune_indexes();
-        result
+        self.parse_script_text_impl(script, Some(details))
     }
 
     /// Reads, parses, and executes a UTF-8 script file.
@@ -930,6 +935,7 @@ impl Pangine {
 
         let concept = self.alloc(ConceptKind::Named(name.to_owned()), ConceptMap::new());
         self.names.insert(name.to_owned(), Rc::downgrade(&concept.0));
+        self.maybe_prune_indexes();
         Some(concept)
     }
 
@@ -976,8 +982,6 @@ impl Pangine {
     }
 
     fn reference_map(&mut self, map: &ConceptMap) -> Option<ConceptId> {
-        self.prune_indexes();
-
         if map.is_empty() {
             return None;
         }
@@ -1001,17 +1005,50 @@ impl Pangine {
     }
 
     fn reference_composite(&mut self, kind: ConceptKind, subconcepts: ConceptMap) -> ConceptId {
-        self.prune_indexes();
-
-        for concept in self.composites.iter().filter_map(Weak::upgrade) {
-            if concept.kind == kind && concept.subconcepts == subconcepts {
-                return ConceptId(concept);
+        let fingerprint = Self::composite_fingerprint(&kind, &subconcepts);
+        if let Some(bucket) = self.composite_lookup.get_mut(&fingerprint) {
+            let mut existing = None;
+            bucket.retain(|candidate| {
+                let Some(candidate) = candidate.upgrade() else {
+                    return false;
+                };
+                if existing.is_none() && candidate.kind == kind && candidate.subconcepts == subconcepts {
+                    existing = Some(ConceptId(candidate));
+                }
+                true
+            });
+            if let Some(existing) = existing {
+                return existing;
             }
         }
 
         let concept = self.alloc(kind, subconcepts);
-        self.composites.push(Rc::downgrade(&concept.0));
+        let weak = Rc::downgrade(&concept.0);
+        self.composites.push(weak.clone());
+        self.composite_lookup.entry(fingerprint).or_default().push(weak);
+        self.maybe_prune_indexes();
         concept
+    }
+
+    fn composite_fingerprint(kind: &ConceptKind, subconcepts: &ConceptMap) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        match kind {
+            ConceptKind::Named(name) => {
+                0_u8.hash(&mut hasher);
+                name.hash(&mut hasher);
+            }
+            ConceptKind::Percept { name } => {
+                1_u8.hash(&mut hasher);
+                name.hash(&mut hasher);
+            }
+            ConceptKind::Unordered => 2_u8.hash(&mut hasher),
+            ConceptKind::Ordered { components } => {
+                3_u8.hash(&mut hasher);
+                components.hash(&mut hasher);
+            }
+        }
+        subconcepts.hash_lookup_summary(&mut hasher);
+        hasher.finish()
     }
 
     fn alloc(&self, kind: ConceptKind, subconcepts: ConceptMap) -> ConceptId {
@@ -1161,6 +1198,20 @@ impl Pangine {
     fn prune_indexes(&mut self) {
         self.names.retain(|_, concept| concept.strong_count() > 0);
         self.composites.retain(|concept| concept.strong_count() > 0);
+        self.composite_lookup.clear();
+        for concept in self.composites.iter().filter_map(Weak::upgrade) {
+            let fingerprint = Self::composite_fingerprint(&concept.kind, &concept.subconcepts);
+            self.composite_lookup.entry(fingerprint).or_default().push(Rc::downgrade(&concept));
+        }
+
+        let live_size = self.names.len().saturating_add(self.composites.len());
+        self.next_index_prune_size = live_size.checked_next_power_of_two().and_then(|size| size.checked_mul(2)).unwrap_or(usize::MAX).max(2);
+    }
+
+    fn maybe_prune_indexes(&mut self) {
+        if self.names.len().saturating_add(self.composites.len()) >= self.next_index_prune_size {
+            self.prune_indexes();
+        }
     }
 
     fn same_subconcepts_ignoring_relevance(concept: &ConceptId, map: &ConceptMap) -> bool {
@@ -1895,11 +1946,16 @@ impl Pangine {
             }
             Some((existing, true)) => {
                 let existing_relevance = map[&existing];
-                let mut new_map = existing.0.subconcepts.clone();
-
-                for value in new_map.values_mut() {
-                    value.strength *= existing_relevance.strength;
-                }
+                let mut new_map = existing
+                    .0
+                    .subconcepts
+                    .iter()
+                    .map(|(concept, &relevance)| {
+                        let mut relevance = relevance;
+                        relevance.strength *= existing_relevance.strength;
+                        (concept.clone(), relevance)
+                    })
+                    .collect::<ConceptMap>();
 
                 map.remove(&existing);
                 self.add_relevance_map(&mut new_map, concept_subconcepts, Relevance::DEFAULT);
@@ -1909,11 +1965,12 @@ impl Pangine {
                 }
             }
             Some((existing, false)) => {
-                if let Some(current) = map.get_mut(&existing) {
-                    current.add(relevance);
-                    if current.is_empty() {
-                        map.remove(&existing);
-                    }
+                let mut current = map[&existing];
+                current.add(relevance);
+                if current.is_empty() {
+                    map.remove(&existing);
+                } else {
+                    map.insert(existing, current);
                 }
             }
         }
@@ -2497,6 +2554,23 @@ mod tests {
     }
 
     #[test]
+    fn composite_lookup_treats_signed_zero_relevance_as_equal() {
+        let mut pangine = Pangine::new();
+        let member = pangine.reference_named("member").unwrap();
+        let positive_zero = ConceptMap::from([(member.clone(), Relevance::new(0.0, 1.0))]);
+        let negative_zero = ConceptMap::from([(member, Relevance::new(-0.0, 1.0))]);
+
+        assert_eq!(positive_zero, negative_zero);
+        assert_eq!(
+            Pangine::composite_fingerprint(&ConceptKind::Unordered, &positive_zero),
+            Pangine::composite_fingerprint(&ConceptKind::Unordered, &negative_zero)
+        );
+        let first = pangine.reference_composite(ConceptKind::Unordered, positive_zero);
+        let second = pangine.reference_composite(ConceptKind::Unordered, negative_zero);
+        assert_eq!(first, second);
+    }
+
+    #[test]
     fn incremental_experience_materialization_matches_a_full_root_rebuild() {
         let mut pangine = Pangine::new();
         let percept = pangine.reference_percept("memory");
@@ -2531,6 +2605,32 @@ mod tests {
         pangine.percept_values.remove(&percept.index());
         let restored = pangine.materialize_percept_value(&percept).unwrap();
         assert_eq!(pangine.format_concept(&restored, false), current_text);
+    }
+
+    #[test]
+    fn every_retained_experience_return_keeps_its_original_value_and_identity() {
+        let mut pangine = Pangine::new();
+        let percept = pangine.reference_percept("memory");
+        let roots = (0..64)
+            .map(|index| {
+                let item = pangine.reference_named(&format!("item-{index}")).unwrap();
+                let answer = pangine.reference_named(&format!("answer-{index}")).unwrap();
+                pangine.reference_ordered(vec![item, answer])
+            })
+            .collect::<Vec<_>>();
+        let mut returns = Vec::with_capacity(roots.len());
+
+        for root in &roots {
+            pangine.record_experience(&percept, root).unwrap();
+            returns.push(pangine.materialize_percept_value(&percept).unwrap());
+        }
+
+        for (index, returned) in returns.iter().enumerate() {
+            let expected = roots[..=index].iter().cloned().map(|root| (root, Relevance::DEFAULT)).collect::<ConceptMap>();
+            let reconstructed = pangine.reference_map(&expected).unwrap();
+            assert_eq!(&reconstructed, returned);
+            assert_eq!(pangine.format_concept(&reconstructed, false), pangine.format_concept(returned, false));
+        }
     }
 
     #[test]

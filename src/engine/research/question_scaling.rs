@@ -1,11 +1,32 @@
-use super::super::{ConceptId, ConceptKind, ConceptMap, ExperienceRoots, Pangine, QuestionSnapshot};
+use super::super::{ConceptId, ConceptKind, ConceptMap, ExperienceRoots, Pangine, QuestionSnapshot, QuestionSource};
 use crate::Relevance;
+use std::collections::BTreeSet;
 use std::env;
 use std::time::{Duration, Instant};
 
 const DEFAULT_INGEST_SIZES: &str = "100,1000";
+const DEFAULT_PHASE_SIZES: &str = "1000,10000";
 const DEFAULT_QUERY_SIZES: &str = "1000,10000,30000";
 const DEFAULT_SAMPLES: usize = 3;
+
+#[derive(Clone, Copy, Debug)]
+enum IngestShape {
+    Ordered,
+    Unordered,
+    Nested,
+}
+
+impl IngestShape {
+    const ALL: [Self; 3] = [Self::Ordered, Self::Unordered, Self::Nested];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ordered => "ordered",
+            Self::Unordered => "unordered",
+            Self::Nested => "nested",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Scenario {
@@ -45,15 +66,30 @@ struct Corpus {
     cases: usize,
     exact_roots: usize,
     fixture_time: Duration,
+    fixture_concept_time: Duration,
+    fixture_percept_time: Duration,
 }
 
 struct Measurement {
     scenario: Scenario,
     cases: usize,
     fixture_time: Duration,
+    fixture_concept_time: Duration,
+    fixture_percept_time: Duration,
     snapshot_time: Duration,
+    graph_time: Duration,
     projection_time: Duration,
     work: SnapshotWork,
+}
+
+struct IngestPhaseMeasurement {
+    shape: IngestShape,
+    experiences: usize,
+    wall_time: Duration,
+    name_time: Duration,
+    root_time: Duration,
+    record_time: Duration,
+    return_time: Duration,
 }
 
 #[test]
@@ -83,6 +119,7 @@ fn scaling_fixtures_preserve_expected_answers() {
 #[ignore = "manual Release-mode scaling baseline"]
 fn reports_question_scaling_baseline() {
     let ingest_sizes = configured_sizes("PANGINE_SCALING_INGEST_SIZES", DEFAULT_INGEST_SIZES);
+    let phase_sizes = configured_sizes("PANGINE_SCALING_PHASE_SIZES", DEFAULT_PHASE_SIZES);
     let query_sizes = configured_sizes("PANGINE_SCALING_QUERY_SIZES", DEFAULT_QUERY_SIZES);
     let samples = env::var("PANGINE_SCALING_SAMPLES")
         .ok()
@@ -102,19 +139,41 @@ fn reports_question_scaling_baseline() {
         println!("repeat_after_unique,{unique_roots},{:.3}", milliseconds(elapsed));
     }
 
+    println!("ingest_phases,shape,experiences,wall_ms,names_ms,root_ms,record_ms,return_ms,measurement_overhead_ms");
+    for experiences in phase_sizes {
+        for shape in IngestShape::ALL {
+            let measurement = measure_ingest_phases(shape, experiences);
+            let measured = measurement.name_time + measurement.root_time + measurement.record_time + measurement.return_time;
+            println!(
+                "ingest_phases,{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+                measurement.shape.name(),
+                measurement.experiences,
+                milliseconds(measurement.wall_time),
+                milliseconds(measurement.name_time),
+                milliseconds(measurement.root_time),
+                milliseconds(measurement.record_time),
+                milliseconds(measurement.return_time),
+                milliseconds(measurement.wall_time.saturating_sub(measured))
+            );
+        }
+    }
+
     println!(
-        "question,cases,exact_roots,fixture_ms,snapshot_median_ms,projection_median_ms,match_views,source_concepts,graph_nodes,graph_steps,shape_candidates"
+        "question,cases,exact_roots,fixture_ms,fixture_concepts_ms,fixture_percept_ms,snapshot_median_ms,graph_only_median_ms,projection_median_ms,match_views,source_concepts,graph_nodes,graph_steps,shape_candidates"
     );
     for cases in query_sizes {
         for scenario in Scenario::ALL {
             let measurement = measure(build_corpus(scenario, cases), scenario, samples);
             println!(
-                "{},{},{},{:.3},{:.3},{:.3},{},{},{},{},{}",
+                "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{},{}",
                 measurement.scenario.name(),
                 measurement.cases,
                 measurement.work.exact_roots,
                 milliseconds(measurement.fixture_time),
+                milliseconds(measurement.fixture_concept_time),
+                milliseconds(measurement.fixture_percept_time),
                 milliseconds(measurement.snapshot_time),
+                milliseconds(measurement.graph_time),
                 milliseconds(measurement.projection_time),
                 measurement.work.match_views,
                 measurement.work.source_concepts,
@@ -179,8 +238,55 @@ fn measure_repeat_after_unique(unique_roots: usize) -> Duration {
     elapsed
 }
 
+fn measure_ingest_phases(shape: IngestShape, experiences: usize) -> IngestPhaseMeasurement {
+    let wall_start = Instant::now();
+    let mut pangine = Pangine::new();
+    let source = pangine.reference_percept("world");
+    let mut name_time = Duration::ZERO;
+    let mut root_time = Duration::ZERO;
+    let mut record_time = Duration::ZERO;
+    let mut return_time = Duration::ZERO;
+
+    for index in 0..experiences {
+        let item_name = format!("item-{index}");
+        let answer_name = format!("answer-{index}");
+        let relation_name = format!("relation-{index}");
+        let wrapper_name = format!("wrapper-{index}");
+
+        let name_start = Instant::now();
+        let item = named(&mut pangine, &item_name);
+        let answer = named(&mut pangine, &answer_name);
+        let relation = matches!(shape, IngestShape::Nested).then(|| named(&mut pangine, &relation_name));
+        let wrapper = matches!(shape, IngestShape::Nested).then(|| named(&mut pangine, &wrapper_name));
+        name_time += name_start.elapsed();
+
+        let root_start = Instant::now();
+        let root = match shape {
+            IngestShape::Ordered => pangine.reference_ordered(vec![item, answer]),
+            IngestShape::Unordered => pangine.reference_map(&ConceptMap::from([(item, Relevance::DEFAULT), (answer, Relevance::DEFAULT)])).unwrap(),
+            IngestShape::Nested => {
+                let relationship = pangine.reference_ordered(vec![item, relation.unwrap(), answer]);
+                pangine.reference_map(&ConceptMap::from([(wrapper.unwrap(), Relevance::DEFAULT), (relationship, Relevance::DEFAULT)])).unwrap()
+            }
+        };
+        root_time += root_start.elapsed();
+
+        let record_start = Instant::now();
+        pangine.record_experience(&source, &root).expect("scaling root should be accepted as one experience");
+        record_time += record_start.elapsed();
+
+        let return_start = Instant::now();
+        assert!(pangine.materialize_percept_value(&source).is_some());
+        return_time += return_start.elapsed();
+    }
+
+    assert_eq!(pangine.get_percept_roots(&source).map(|roots| roots.len()), Some(experiences));
+    IngestPhaseMeasurement { shape, experiences, wall_time: wall_start.elapsed(), name_time, root_time, record_time, return_time }
+}
+
 fn measure(mut corpus: Corpus, scenario: Scenario, samples: usize) -> Measurement {
     let mut snapshot_times = Vec::with_capacity(samples);
+    let mut graph_times = Vec::with_capacity(samples);
     let mut projection_times = Vec::with_capacity(samples);
     let mut expected_work = None;
 
@@ -196,6 +302,12 @@ fn measure(mut corpus: Corpus, scenario: Scenario, samples: usize) -> Measuremen
             expected_work = Some(work);
         }
 
+        let (graph_time, graph_source_concepts, graph_nodes, graph_steps) = measure_question_graph(&corpus.pangine, &corpus.source, scenario);
+        graph_times.push(graph_time);
+        assert_eq!(graph_source_concepts, snapshot.source_concepts.len());
+        assert_eq!(graph_nodes, snapshot.graph.steps.len());
+        assert_eq!(graph_steps, snapshot.graph.steps.values().map(Vec::len).sum());
+
         let projection_start = Instant::now();
         let results = corpus.pangine.get_projection_results(&corpus.question, &snapshot);
         projection_times.push(projection_start.elapsed());
@@ -206,10 +318,36 @@ fn measure(mut corpus: Corpus, scenario: Scenario, samples: usize) -> Measuremen
         scenario,
         cases: corpus.cases,
         fixture_time: corpus.fixture_time,
+        fixture_concept_time: corpus.fixture_concept_time,
+        fixture_percept_time: corpus.fixture_percept_time,
         snapshot_time: median(snapshot_times),
+        graph_time: median(graph_times),
         projection_time: median(projection_times),
         work: expected_work.unwrap(),
     }
+}
+
+fn measure_question_graph(pangine: &Pangine, percept: &ConceptId, scenario: Scenario) -> (Duration, usize, usize, usize) {
+    if matches!(scenario, Scenario::Exact) {
+        return (Duration::ZERO, 0, 0, 0);
+    }
+
+    let sources = pangine
+        .percept_roots
+        .get(&percept.index())
+        .into_iter()
+        .flatten()
+        .map(|(root, &occurrences)| QuestionSource { percept: percept.clone(), root: root.clone(), occurrences })
+        .collect::<Vec<_>>();
+    let mut snapshot = QuestionSnapshot::default();
+    let start = Instant::now();
+    for source in sources {
+        Pangine::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
+    }
+    let elapsed = start.elapsed();
+    let graph_nodes = snapshot.graph.steps.len();
+    let graph_steps = snapshot.graph.steps.values().map(Vec::len).sum();
+    (elapsed, snapshot.source_concepts.len(), graph_nodes, graph_steps)
 }
 
 fn inspect_snapshot(snapshot: &QuestionSnapshot, question: &ConceptId, exact_roots: usize) -> SnapshotWork {
@@ -269,7 +407,10 @@ fn build_corpus(scenario: Scenario, cases: usize) -> Corpus {
     }
 
     let exact_roots = roots.len();
+    let fixture_concept_time = start.elapsed();
+    let percept_start = Instant::now();
     pangine.set_percept_roots(&source, roots).expect("scaling roots should produce a materialized source value");
+    let fixture_percept_time = percept_start.elapsed();
     let target_first = target_first.unwrap();
     let target_second = target_second.unwrap();
     let expected = expected.unwrap();
@@ -278,7 +419,7 @@ fn build_corpus(scenario: Scenario, cases: usize) -> Corpus {
         Scenario::Nested | Scenario::Contextual => ordered(&pangine, [target_first, target_second, output.clone()]),
     };
 
-    Corpus { pangine, source, question, output, expected, cases, exact_roots, fixture_time: start.elapsed() }
+    Corpus { pangine, source, question, output, expected, cases, exact_roots, fixture_time: start.elapsed(), fixture_concept_time, fixture_percept_time }
 }
 
 fn named(pangine: &mut Pangine, name: &str) -> ConceptId {
