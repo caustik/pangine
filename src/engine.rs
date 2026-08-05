@@ -323,6 +323,8 @@ pub struct Pangine {
     names: BTreeMap<String, Weak<Concept>>,
     percepts: BTreeMap<String, ConceptId>,
     percept_roots: BTreeMap<usize, ExperienceRoots>,
+    // Disposable materialization cache derived from the exact roots.
+    percept_value_maps: BTreeMap<usize, ConceptMap>,
     percept_values: BTreeMap<usize, ConceptId>,
     composites: Vec<Weak<Concept>>,
 }
@@ -338,6 +340,7 @@ impl Default for Pangine {
             names: BTreeMap::new(),
             percepts: BTreeMap::from([(GLOBAL_PERCEPT_NAME.to_owned(), global_percept)]),
             percept_roots: BTreeMap::new(),
+            percept_value_maps: BTreeMap::new(),
             percept_values: BTreeMap::new(),
             composites: Vec::new(),
         }
@@ -502,10 +505,8 @@ impl Pangine {
             return self.get_value(percept);
         };
 
-        let mut roots = self.percept_roots.get(&percept.index()).cloned().unwrap_or_default();
-        let count = roots.entry(experience.clone()).or_default();
-        *count = count.checked_add(1)?;
-        self.set_percept_roots(percept, roots)
+        self.record_experience(percept, experience)?;
+        self.materialize_percept_value(percept)
     }
 
     /// Returns a concept's kind when it belongs to this engine.
@@ -961,12 +962,12 @@ impl Pangine {
         self.reference_map(&map)
     }
 
-    fn reference_experience_roots(&mut self, roots: &ExperienceRoots) -> Option<ConceptId> {
+    fn experience_value_map(&mut self, roots: &ExperienceRoots) -> ConceptMap {
         let mut map = ConceptMap::new();
         for (root, &count) in roots {
             self.add_union_concept(&mut map, root.clone(), false, Relevance::new(1.0, count as f32));
         }
-        self.reference_map(&map)
+        map
     }
 
     fn sole_default_concept(map: &ConceptMap) -> Option<&ConceptId> {
@@ -1058,23 +1059,89 @@ impl Pangine {
             return None;
         }
 
+        let index = percept.index();
+        let value_map = self.experience_value_map(&roots);
         let value = match roots.first_key_value() {
             Some((root, &1)) if roots.len() == 1 => Some(root.clone()),
-            _ => self.reference_experience_roots(&roots),
+            _ => self.reference_map(&value_map),
         };
         if roots.is_empty() {
-            self.percept_roots.remove(&percept.index());
-            self.percept_values.remove(&percept.index());
+            self.percept_roots.remove(&index);
+            self.percept_value_maps.remove(&index);
+            self.percept_values.remove(&index);
         } else {
-            self.percept_roots.insert(percept.index(), roots);
+            self.percept_roots.insert(index, roots);
+            self.percept_value_maps.insert(index, value_map);
             match value.clone() {
                 Some(value) => {
-                    self.percept_values.insert(percept.index(), value);
+                    self.percept_values.insert(index, value);
                 }
                 None => {
-                    self.percept_values.remove(&percept.index());
+                    self.percept_values.remove(&index);
                 }
             }
+        }
+        value
+    }
+
+    fn record_experience(&mut self, percept: &ConceptId, experience: &ConceptId) -> Option<()> {
+        if !self.accepts_percept_input(percept, Some(experience)) {
+            return None;
+        }
+
+        let index = percept.index();
+        let current_count = self.percept_roots.get(&index).and_then(|roots| roots.get(experience)).copied().unwrap_or_default();
+        let next_count = current_count.checked_add(1)?;
+        let incremental_value_map = if current_count == 0 {
+            let mut value_map = self.percept_value_maps.remove(&index).unwrap_or_else(|| {
+                let roots = self.percept_roots.get(&index).cloned().unwrap_or_default();
+                self.experience_value_map(&roots)
+            });
+            self.add_union_concept(&mut value_map, experience.clone(), false, Relevance::DEFAULT);
+            Some(value_map)
+        } else {
+            None
+        };
+        self.percept_roots.entry(index).or_default().insert(experience.clone(), next_count);
+        let value_map = if let Some(value_map) = incremental_value_map {
+            value_map
+        } else {
+            let roots = self.percept_roots[&index].clone();
+            self.experience_value_map(&roots)
+        };
+        self.percept_value_maps.insert(index, value_map);
+        self.percept_values.remove(&index);
+        Some(())
+    }
+
+    fn materialize_percept_value(&mut self, percept: &ConceptId) -> Option<ConceptId> {
+        if !self.is_mutable_percept(percept) {
+            return None;
+        }
+
+        let index = percept.index();
+        if let Some(value) = self.percept_values.get(&index) {
+            return Some(value.clone());
+        }
+
+        let single_root = self.percept_roots.get(&index).and_then(|roots| match roots.first_key_value() {
+            Some((root, &1)) if roots.len() == 1 => Some(root.clone()),
+            _ => None,
+        });
+        let value = if let Some(root) = single_root {
+            Some(root)
+        } else {
+            let value_map = self.percept_value_maps.remove(&index).unwrap_or_else(|| {
+                let roots = self.percept_roots.get(&index).cloned().unwrap_or_default();
+                self.experience_value_map(&roots)
+            });
+            let value = self.reference_map(&value_map);
+            self.percept_value_maps.insert(index, value_map);
+            value
+        };
+
+        if let Some(value) = value.clone() {
+            self.percept_values.insert(index, value);
         }
         value
     }
@@ -1779,18 +1846,18 @@ impl Pangine {
         }
 
         let concept_subconcepts = concept.0.subconcepts.clone();
-        let found = map.keys().cloned().find_map(|candidate| {
-            if candidate == concept {
-                Some((candidate, false))
-            } else if matches!(candidate.0.kind, ConceptKind::Unordered)
-                && matches!(concept.0.kind, ConceptKind::Unordered)
-                && Self::same_subconcepts_ignoring_relevance(&candidate, &concept_subconcepts)
-            {
-                Some((candidate, true))
-            } else {
-                None
-            }
-        });
+        let found = if map.contains_key(&concept) {
+            Some((concept.clone(), false))
+        } else if matches!(concept.0.kind, ConceptKind::Unordered) {
+            map.keys()
+                .find(|candidate| {
+                    matches!(candidate.0.kind, ConceptKind::Unordered) && Self::same_subconcepts_ignoring_relevance(candidate, &concept_subconcepts)
+                })
+                .cloned()
+                .map(|candidate| (candidate, true))
+        } else {
+            None
+        };
 
         match found {
             None => {
@@ -2327,6 +2394,9 @@ fn format_float(value: f32) -> String {
 }
 
 #[cfg(test)]
+mod research;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2373,5 +2443,42 @@ mod tests {
         };
 
         assert!(weak_value.upgrade().is_none());
+    }
+
+    #[test]
+    fn incremental_experience_materialization_matches_a_full_root_rebuild() {
+        let mut pangine = Pangine::new();
+        let percept = pangine.reference_percept("memory");
+        let atomic = pangine.reference_concept("[A]").unwrap().unwrap();
+        let inverse = pangine.reference_concept("![A]").unwrap().unwrap();
+        let pair = pangine.reference_concept("[A][B]").unwrap().unwrap();
+        let weighted_pair = pangine.reference_concept("x2[A][B]").unwrap().unwrap();
+        let sequence = [weighted_pair.clone(), atomic, pair, inverse, weighted_pair];
+
+        for (step, root) in sequence.into_iter().enumerate() {
+            let root_text = pangine.format_concept(&root, false);
+            let value = pangine.perform_experience(&percept, Some(&root));
+            assert_eq!(value, pangine.get_value(&percept));
+
+            let roots = pangine.percept_roots[&percept.index()].clone();
+            let rebuilt = pangine.experience_value_map(&roots);
+            assert_eq!(pangine.percept_value_maps[&percept.index()], rebuilt, "after step {step} experiencing {root_text}");
+        }
+
+        let previous = pangine.get_value(&percept).unwrap();
+        let previous_text = pangine.format_concept(&previous, false);
+        pangine.percept_value_maps.remove(&percept.index());
+        let final_root = pangine.reference_concept("[C]->[D]").unwrap().unwrap();
+        pangine.perform_experience(&percept, Some(&final_root));
+        let roots = pangine.percept_roots[&percept.index()].clone();
+        let rebuilt = pangine.experience_value_map(&roots);
+        assert_eq!(pangine.percept_value_maps[&percept.index()], rebuilt);
+        assert_eq!(pangine.format_concept(&previous, false), previous_text);
+
+        let current_text = pangine.format_concept(&pangine.get_value(&percept).unwrap(), false);
+        pangine.percept_value_maps.remove(&percept.index());
+        pangine.percept_values.remove(&percept.index());
+        let restored = pangine.materialize_percept_value(&percept).unwrap();
+        assert_eq!(pangine.format_concept(&restored, false), current_text);
     }
 }
