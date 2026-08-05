@@ -10,11 +10,14 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 type ConceptMap = BTreeMap<ConceptId, Relevance>;
-type BindingMap = BTreeMap<ConceptId, ConceptMap>;
-type ProjectionBindingWeights = BTreeMap<ConceptId, BTreeMap<ConceptId, f64>>;
-type ProjectionSharedBindings = BTreeMap<ConceptId, ConceptId>;
-type ProjectionProfiles = BTreeMap<ProjectionSharedBindings, ProjectionProfile>;
-type ProjectionCache = BTreeMap<(usize, usize), ProjectionSummary>;
+type ExperienceRoots = BTreeMap<ConceptId, u64>;
+type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
+type ProjectionAssignments = BTreeSet<ProjectionAssignment>;
+type ProjectionCache = BTreeMap<(usize, usize), ProjectionAssignments>;
+// One exact experienced root supports a candidate according to that root's
+// occurrence count. Recursive matches and alternate routes to the same answer
+// within that root collapse here.
+type QuestionCandidateWitnesses = BTreeMap<ConceptId, BTreeMap<ConceptId, BTreeSet<QuestionSource>>>;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ConceptShape {
@@ -25,143 +28,93 @@ enum ConceptShape {
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct QuestionExperience {
+struct QuestionSource {
     percept: ConceptId,
     root: ConceptId,
+    occurrences: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QuestionSeed {
+    source: QuestionSource,
+    concept: ConceptId,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum QuestionPort {
+    Ordered(usize),
+    Unordered(ConceptId),
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QuestionMembership {
+    parent: ConceptId,
+    port: QuestionPort,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QuestionExperience {
+    source: QuestionSource,
     matched: ConceptId,
+    blocked_memberships: BTreeSet<QuestionMembership>,
 }
 
 #[derive(Clone)]
-struct ProjectionProfile {
-    total: f64,
-    bindings: ProjectionBindingWeights,
+struct QuestionStep {
+    destination: ConceptId,
+    source: QuestionSource,
+    membership: QuestionMembership,
 }
 
-#[derive(Clone)]
-struct ProjectionSummary {
-    // Total folded projection mass, including paths that bind no output.
-    total: f64,
-    // Output marginals derived from the conditional profiles below.
-    bindings: ProjectionBindingWeights,
-    // A profile retains only assignments for percepts repeated by the current
-    // question pattern. Other outputs remain compact first-order marginals
-    // conditioned on those shared assignments.
-    profiles: ProjectionProfiles,
+#[derive(Default)]
+struct QuestionGraph {
+    steps: BTreeMap<ConceptId, Vec<QuestionStep>>,
 }
 
-impl ProjectionSummary {
-    fn none() -> Self {
-        Self::from_profiles(ProjectionProfiles::new())
-    }
-
-    fn exact() -> Self {
-        Self::from_marginals(1.0, ProjectionBindingWeights::new())
-    }
-
-    fn variable(percept: ConceptId, candidate: ConceptId, shared: bool) -> Self {
-        if shared {
-            let profiles = ProjectionProfiles::from([(
-                ProjectionSharedBindings::from([(percept, candidate)]),
-                ProjectionProfile { total: 1.0, bindings: ProjectionBindingWeights::new() },
-            )]);
-            Self::from_profiles(profiles)
-        } else {
-            Self::from_marginals(1.0, ProjectionBindingWeights::from([(percept, BTreeMap::from([(candidate, 1.0)]))]))
+impl QuestionGraph {
+    fn add_membership(&mut self, source: &QuestionSource, parent: &ConceptId, child: &ConceptId, port: QuestionPort) {
+        if parent == child {
+            return;
         }
+
+        let membership = QuestionMembership { parent: parent.clone(), port };
+        self.steps.entry(parent.clone()).or_default().push(QuestionStep { destination: child.clone(), source: source.clone(), membership: membership.clone() });
+        self.steps.entry(child.clone()).or_default().push(QuestionStep { destination: parent.clone(), source: source.clone(), membership });
     }
 
-    fn multiply(&self, other: &Self) -> Self {
-        let mut profiles = ProjectionProfiles::new();
-        for (left_bindings, left) in &self.profiles {
-            for (right_bindings, right) in &other.profiles {
-                let Some(shared_bindings) = Self::merge_shared_bindings(left_bindings, right_bindings) else {
-                    continue;
-                };
-
-                let mut profile = ProjectionProfile { total: left.total * right.total, bindings: ProjectionBindingWeights::new() };
-                Self::accumulate_binding_weights(&mut profile.bindings, &left.bindings, right.total);
-                Self::accumulate_binding_weights(&mut profile.bindings, &right.bindings, left.total);
-                Self::accumulate_profile(&mut profiles, shared_bindings, profile);
-            }
+    fn connects(&self, start: &ConceptId, target: &ConceptId, answer: &QuestionExperience) -> bool {
+        if start == target {
+            return true;
         }
-        Self::from_profiles(profiles)
-    }
 
-    fn add(&mut self, other: Self) {
-        for (shared_bindings, profile) in other.profiles {
-            Self::accumulate_profile(&mut self.profiles, shared_bindings, profile);
-        }
-        self.rebuild_marginals();
-    }
-
-    fn scale(&mut self, scale: f64) {
-        for profile in self.profiles.values_mut() {
-            profile.total *= scale;
-            for candidates in profile.bindings.values_mut() {
-                for weight in candidates.values_mut() {
-                    *weight *= scale;
+        let mut frontier = BTreeSet::from([start.clone()]);
+        let mut visited = frontier.clone();
+        while !frontier.is_empty() {
+            let mut next = BTreeSet::new();
+            for concept in frontier {
+                for step in self.steps.get(&concept).into_iter().flatten() {
+                    if step.source == answer.source && answer.blocked_memberships.contains(&step.membership) {
+                        continue;
+                    }
+                    if step.destination == *target {
+                        return true;
+                    }
+                    if visited.insert(step.destination.clone()) {
+                        next.insert(step.destination.clone());
+                    }
                 }
             }
+            frontier = next;
         }
-        self.rebuild_marginals();
+        false
     }
+}
 
-    fn from_marginals(total: f64, bindings: ProjectionBindingWeights) -> Self {
-        Self::from_profiles(ProjectionProfiles::from([(ProjectionSharedBindings::new(), ProjectionProfile { total, bindings })]))
-    }
-
-    fn from_profiles(profiles: ProjectionProfiles) -> Self {
-        let mut summary = Self { total: 0.0, bindings: ProjectionBindingWeights::new(), profiles };
-        summary.rebuild_marginals();
-        summary
-    }
-
-    fn rebuild_marginals(&mut self) {
-        self.total = 0.0;
-        self.bindings.clear();
-        for (shared_bindings, profile) in &self.profiles {
-            self.total += profile.total;
-            Self::accumulate_binding_weights(&mut self.bindings, &profile.bindings, 1.0);
-            for (percept, candidate) in shared_bindings {
-                *self.bindings.entry(percept.clone()).or_default().entry(candidate.clone()).or_default() += profile.total;
-            }
-        }
-    }
-
-    fn accumulate_binding_weights(target: &mut ProjectionBindingWeights, source: &ProjectionBindingWeights, scale: f64) {
-        for (percept, candidates) in source {
-            for (candidate, weight) in candidates {
-                *target.entry(percept.clone()).or_default().entry(candidate.clone()).or_default() += weight * scale;
-            }
-        }
-    }
-
-    fn accumulate_profile(profiles: &mut ProjectionProfiles, shared_bindings: ProjectionSharedBindings, profile: ProjectionProfile) {
-        if let Some(current) = profiles.get_mut(&shared_bindings) {
-            current.total += profile.total;
-            Self::accumulate_binding_weights(&mut current.bindings, &profile.bindings, 1.0);
-        } else {
-            profiles.insert(shared_bindings, profile);
-        }
-    }
-
-    fn merge_shared_bindings(left: &ProjectionSharedBindings, right: &ProjectionSharedBindings) -> Option<ProjectionSharedBindings> {
-        let mut merged = left.clone();
-        for (percept, candidate) in right {
-            if let Some(current) = merged.get(percept) {
-                if current != candidate {
-                    return None;
-                }
-            } else {
-                merged.insert(percept.clone(), candidate.clone());
-            }
-        }
-        Some(merged)
-    }
-
-    fn has_shared_bindings(&self) -> bool {
-        self.profiles.keys().any(|bindings| !bindings.is_empty())
-    }
+#[derive(Default)]
+struct QuestionSnapshot {
+    experiences: BTreeSet<QuestionExperience>,
+    source_concepts: BTreeSet<QuestionSeed>,
+    graph: QuestionGraph,
 }
 
 static NEXT_PANGINE_ID: AtomicUsize = AtomicUsize::new(0);
@@ -200,9 +153,9 @@ Percept operations:
 
 Experience:
   ['memory'] ~= {[cat]->[purrs]}
-  Adds the complete input as one exact root owned by ['memory']. Exact replay
-  changes nothing; unequal roots remain distinct. Questions derive recursive
-  matches from the selected Percept roots without storing those derived parts.
+  Records the complete input as one experience owned by ['memory']. Repeating
+  an equal root increments its occurrence count. Questions derive recursive
+  matches from exact roots without multiplying one experience by match routes.
 
 Scripts:
   expression; expression    Multiple statements
@@ -369,7 +322,7 @@ pub struct Pangine {
     next_concept_id: Cell<usize>,
     names: BTreeMap<String, Weak<Concept>>,
     percepts: BTreeMap<String, ConceptId>,
-    percept_roots: BTreeMap<usize, BTreeSet<ConceptId>>,
+    percept_roots: BTreeMap<usize, ExperienceRoots>,
     percept_values: BTreeMap<usize, ConceptId>,
     composites: Vec<Weak<Concept>>,
 }
@@ -539,7 +492,7 @@ impl Pangine {
         value
     }
 
-    /// Inserts one exact complete root into a mutable percept's experience.
+    /// Records one occurrence of an exact complete root under a mutable Percept.
     pub fn perform_experience(&mut self, percept: &ConceptId, experience: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, experience) {
             return None;
@@ -550,7 +503,8 @@ impl Pangine {
         };
 
         let mut roots = self.percept_roots.get(&percept.index()).cloned().unwrap_or_default();
-        roots.insert(experience.clone());
+        let count = roots.entry(experience.clone()).or_default();
+        *count = count.checked_add(1)?;
         self.set_percept_roots(percept, roots)
     }
 
@@ -584,15 +538,24 @@ impl Pangine {
         self.percept_values.get(&concept.index()).cloned()
     }
 
-    /// Returns a mutable Percept's exact complete experience roots in canonical order.
+    /// Returns a mutable Percept's unique exact experience roots in canonical order.
     pub fn get_percept_roots(&self, percept: &ConceptId) -> Option<Vec<ConceptId>> {
         if !self.is_mutable_percept(percept) {
             return None;
         }
 
-        let mut roots = self.percept_roots.get(&percept.index()).cloned().unwrap_or_default().into_iter().collect::<Vec<_>>();
+        let mut roots = self.percept_roots.get(&percept.index()).into_iter().flatten().map(|(root, _)| root.clone()).collect::<Vec<_>>();
         roots.sort_by(|left, right| self.compare_concepts(left, right));
         Some(roots)
+    }
+
+    /// Returns how many times an exact root was experienced under a mutable Percept.
+    pub fn get_percept_root_count(&self, percept: &ConceptId, root: &ConceptId) -> Option<u64> {
+        if !self.is_mutable_percept(percept) || !self.owns(root) {
+            return None;
+        }
+
+        Some(self.percept_roots.get(&percept.index()).and_then(|roots| roots.get(root)).copied().unwrap_or_default())
     }
 
     /// Replaces a mutable percept's value, returning whether the input was valid.
@@ -601,7 +564,7 @@ impl Pangine {
             return false;
         }
 
-        let roots = value.into_iter().collect();
+        let roots = value.into_iter().map(|root| (root, 1)).collect();
         self.set_percept_roots(percept, roots);
         true
     }
@@ -998,6 +961,14 @@ impl Pangine {
         self.reference_map(&map)
     }
 
+    fn reference_experience_roots(&mut self, roots: &ExperienceRoots) -> Option<ConceptId> {
+        let mut map = ConceptMap::new();
+        for (root, &count) in roots {
+            self.add_union_concept(&mut map, root.clone(), false, Relevance::new(1.0, count as f32));
+        }
+        self.reference_map(&map)
+    }
+
     fn sole_default_concept(map: &ConceptMap) -> Option<&ConceptId> {
         let (concept, relevance) = map.first_key_value()?;
         (map.len() == 1 && *relevance == Relevance::DEFAULT).then_some(concept)
@@ -1082,12 +1053,15 @@ impl Pangine {
         self.reference_transient_map(map)
     }
 
-    fn set_percept_roots(&mut self, percept: &ConceptId, roots: BTreeSet<ConceptId>) -> Option<ConceptId> {
-        if !self.is_mutable_percept(percept) || roots.iter().any(|root| !self.owns(root)) {
+    fn set_percept_roots(&mut self, percept: &ConceptId, roots: ExperienceRoots) -> Option<ConceptId> {
+        if !self.is_mutable_percept(percept) || roots.iter().any(|(root, &count)| !self.owns(root) || count == 0) {
             return None;
         }
 
-        let value = if roots.len() == 1 { roots.first().cloned() } else { self.reference_union(&roots.iter().cloned().collect::<Vec<_>>()) };
+        let value = match roots.first_key_value() {
+            Some((root, &1)) if roots.len() == 1 => Some(root.clone()),
+            _ => self.reference_experience_roots(&roots),
+        };
         if roots.is_empty() {
             self.percept_roots.remove(&percept.index());
             self.percept_values.remove(&percept.index());
@@ -1174,7 +1148,7 @@ impl Pangine {
         }
 
         let value = self.reference_map(&map);
-        let stored = self.percept_union_stored_value(&map, value.clone());
+        let stored = self.preserve_unordered_entry_boundary(&map, value.clone());
         Some((value, stored))
     }
 
@@ -1206,7 +1180,10 @@ impl Pangine {
         Some(map)
     }
 
-    fn percept_union_stored_value(&mut self, map: &ConceptMap, value: Option<ConceptId>) -> Option<ConceptId> {
+    fn preserve_unordered_entry_boundary(&mut self, map: &ConceptMap, value: Option<ConceptId>) -> Option<ConceptId> {
+        // Normalization ordinarily collapses a sole default-relevance member.
+        // Preserve this boundary when that member is itself unordered so ^
+        // chooses the complete member instead of choosing one of its parts.
         if let Some(concept) = Self::sole_default_concept(map) {
             if matches!(concept.0.kind, ConceptKind::Unordered) {
                 let stored = self.alloc(ConceptKind::Unordered, map.clone());
@@ -1220,9 +1197,9 @@ impl Pangine {
 
     fn answer_question(&mut self, percepts: &[ConceptId], question: Option<ConceptId>) -> Option<ConceptId> {
         let question = question?;
-        let experiences = self.question_experience_map(percepts, &question);
+        let snapshot = self.question_snapshot(percepts, &question);
 
-        let projection_results = self.get_projection_results(&question, &experiences);
+        let projection_results = self.get_projection_results(&question, &snapshot);
 
         for (percept, binding_result) in projection_results {
             self.set_percept_value(&percept, binding_result);
@@ -1231,27 +1208,27 @@ impl Pangine {
         Some(question)
     }
 
-    fn question_experience_map(&mut self, percepts: &[ConceptId], question: &ConceptId) -> ConceptMap {
-        let roots = percepts
+    fn question_snapshot(&mut self, percepts: &[ConceptId], question: &ConceptId) -> QuestionSnapshot {
+        let sources = percepts
             .iter()
-            .flat_map(|percept| self.percept_roots.get(&percept.index()).into_iter().flatten().cloned().map(|root| (percept.clone(), root)).collect::<Vec<_>>())
+            .flat_map(|percept| {
+                self.percept_roots
+                    .get(&percept.index())
+                    .into_iter()
+                    .flatten()
+                    .map(|(root, &occurrences)| QuestionSource { percept: percept.clone(), root: root.clone(), occurrences })
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
 
         let mut ordered_widths = BTreeSet::new();
         self.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
-        let mut routed = BTreeSet::new();
-        for (percept, root) in roots {
-            self.add_question_experience_rec(&percept, &root, &root, &ordered_widths, &mut BTreeSet::new(), &mut routed);
+        let mut snapshot = QuestionSnapshot::default();
+        for source in sources {
+            self.add_question_experience_rec(&source, &source.root, &ordered_widths, &mut BTreeSet::new(), &mut snapshot.experiences);
+            Self::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
         }
-
-        let mut flattened = ConceptMap::new();
-        let mut included = BTreeSet::new();
-        for experience in routed {
-            if included.insert((experience.percept, experience.matched.clone())) {
-                self.add_relevance(&mut flattened, experience.matched, false, Relevance::DEFAULT);
-            }
-        }
-        flattened
+        snapshot
     }
 
     fn collect_ordered_question_widths(
@@ -1275,8 +1252,7 @@ impl Pangine {
 
     fn add_question_experience_rec(
         &mut self,
-        percept: &ConceptId,
-        root: &ConceptId,
+        source: &QuestionSource,
         concept: &ConceptId,
         ordered_widths: &BTreeSet<usize>,
         visited: &mut BTreeSet<ConceptId>,
@@ -1285,27 +1261,65 @@ impl Pangine {
         if !visited.insert(concept.clone()) {
             return;
         }
-        experiences.insert(QuestionExperience { percept: percept.clone(), root: root.clone(), matched: concept.clone() });
+        let blocked_memberships = match &concept.0.kind {
+            ConceptKind::Ordered { components } => {
+                (0..components.len()).map(|position| QuestionMembership { parent: concept.clone(), port: QuestionPort::Ordered(position) }).collect()
+            }
+            ConceptKind::Named(_) | ConceptKind::Percept { .. } | ConceptKind::Unordered => BTreeSet::new(),
+        };
+        experiences.insert(QuestionExperience { source: source.clone(), matched: concept.clone(), blocked_memberships });
 
         match &concept.0.kind {
             ConceptKind::Ordered { components } => {
                 let components = components.clone();
                 for &width in ordered_widths.range(2..components.len()) {
-                    for window in components.windows(width) {
+                    for (start, window) in components.windows(width).enumerate() {
                         let matched = self.reference_ordered(window.to_vec());
-                        experiences.insert(QuestionExperience { percept: percept.clone(), root: root.clone(), matched });
+                        let blocked_memberships = (start..start + width)
+                            .map(|position| QuestionMembership { parent: concept.clone(), port: QuestionPort::Ordered(position) })
+                            .collect();
+                        experiences.insert(QuestionExperience { source: source.clone(), matched, blocked_memberships });
                     }
                 }
                 for child in components {
-                    self.add_question_experience_rec(percept, root, &child, ordered_widths, visited, experiences);
+                    self.add_question_experience_rec(source, &child, ordered_widths, visited, experiences);
                 }
             }
             ConceptKind::Unordered => {
                 let children = concept.0.subconcepts.clone();
                 for (child, relevance) in children {
                     if let Some(weighted) = self.reference_map(&ConceptMap::from([(child, relevance)])) {
-                        self.add_question_experience_rec(percept, root, &weighted, ordered_widths, visited, experiences);
+                        self.add_question_experience_rec(source, &weighted, ordered_widths, visited, experiences);
                     }
+                }
+            }
+            ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
+        }
+    }
+
+    fn add_question_graph_rec(
+        source: &QuestionSource,
+        concept: &ConceptId,
+        visited: &mut BTreeSet<ConceptId>,
+        source_concepts: &mut BTreeSet<QuestionSeed>,
+        graph: &mut QuestionGraph,
+    ) {
+        if !visited.insert(concept.clone()) {
+            return;
+        }
+        source_concepts.insert(QuestionSeed { source: source.clone(), concept: concept.clone() });
+
+        match &concept.0.kind {
+            ConceptKind::Ordered { components } => {
+                for (position, child) in components.iter().enumerate() {
+                    graph.add_membership(source, concept, child, QuestionPort::Ordered(position));
+                    Self::add_question_graph_rec(source, child, visited, source_concepts, graph);
+                }
+            }
+            ConceptKind::Unordered => {
+                for child in concept.0.subconcepts.keys() {
+                    graph.add_membership(source, concept, child, QuestionPort::Unordered(child.clone()));
+                    Self::add_question_graph_rec(source, child, visited, source_concepts, graph);
                 }
             }
             ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
@@ -1371,50 +1385,159 @@ impl Pangine {
 
 // Experience/question projection.
 impl Pangine {
-    fn get_projection_results(&mut self, question: &ConceptId, experiences: &ConceptMap) -> BTreeMap<ConceptId, Option<ConceptId>> {
-        let mut questions = ConceptMap::new();
+    fn get_projection_results(&mut self, question: &ConceptId, snapshot: &QuestionSnapshot) -> BTreeMap<ConceptId, Option<ConceptId>> {
+        let mut questions = BTreeSet::new();
         let mut contains_percept_cache = BTreeMap::new();
-        self.collect_question_patterns(question, Relevance::DEFAULT, true, &mut questions, &mut contains_percept_cache);
+        self.collect_question_patterns(question, true, &mut questions, &mut contains_percept_cache);
 
         let mut output_percepts = BTreeSet::new();
         self.collect_output_percepts(question, &mut output_percepts);
-        let mut bindings = output_percepts.into_iter().map(|percept| (percept, ConceptMap::new())).collect::<BindingMap>();
-        let mut experience_index = BTreeMap::<ConceptShape, Vec<_>>::new();
-        for experience in experiences {
-            let (concept, _) = experience;
-            experience_index.entry(concept.0.shape()).or_default().push(experience);
+        let mut witnesses = output_percepts.iter().cloned().map(|percept| (percept, BTreeMap::new())).collect::<QuestionCandidateWitnesses>();
+        let mut experience_index = BTreeMap::<ConceptShape, Vec<&QuestionExperience>>::new();
+        for experience in &snapshot.experiences {
+            experience_index.entry(experience.matched.0.shape()).or_default().push(experience);
         }
-        let mut caches = BTreeMap::<BTreeSet<ConceptId>, ProjectionCache>::new();
+        let mut cache = ProjectionCache::new();
 
-        for (question, &question_relevance) in &questions {
-            let shared_percepts = self.shared_output_percepts(question);
-            let cache = caches.entry(shared_percepts.clone()).or_default();
+        for question in &questions {
             let matching_experiences = if self.is_percept(question) {
-                experiences.iter().collect::<Vec<_>>()
+                snapshot.experiences.iter().collect::<Vec<_>>()
             } else {
                 experience_index.get(&question.0.shape()).into_iter().flatten().copied().collect::<Vec<_>>()
             };
 
-            for (experience, &experience_relevance) in matching_experiences {
-                let remainder_bindings = self.unordered_remainder_bindings(experience, question);
-                for (percept, candidates) in remainder_bindings {
-                    for (candidate, weight) in candidates {
-                        let relevance = projection_relevance(experience_relevance, question_relevance, weight);
-                        self.add_relevance(bindings.entry(percept.clone()).or_default(), candidate, false, relevance);
-                    }
+            for experience in matching_experiences {
+                if let Some(assignment) = self.unordered_remainder_assignment(&experience.matched, question) {
+                    Self::add_question_assignment(&experience.source, &assignment, &output_percepts, &mut witnesses);
                 }
 
-                let summary = self.projection_summary(experience, question, &shared_percepts, cache);
-                for (percept, candidates) in summary.bindings {
-                    for (candidate, weight) in candidates {
-                        let relevance = projection_relevance(experience_relevance, question_relevance, weight);
-                        self.add_relevance(bindings.entry(percept.clone()).or_default(), candidate, false, relevance);
-                    }
-                }
+                let assignments = self.projection_assignments(&experience.matched, question, &mut cache);
+                Self::add_projection_witnesses(&experience.source, &assignments, &output_percepts, &mut witnesses);
             }
+
+            self.add_contextual_projection_witnesses(question, &output_percepts, &mut cache, snapshot, &mut witnesses);
         }
 
-        bindings.into_iter().map(|(percept, candidates)| (percept, self.reference_map(&candidates))).collect()
+        self.materialize_question_witnesses(output_percepts, witnesses)
+    }
+
+    fn add_projection_witnesses(
+        source: &QuestionSource,
+        assignments: &ProjectionAssignments,
+        output_percepts: &BTreeSet<ConceptId>,
+        witnesses: &mut QuestionCandidateWitnesses,
+    ) {
+        for assignment in assignments {
+            Self::add_question_assignment(source, assignment, output_percepts, witnesses);
+        }
+    }
+
+    fn add_question_assignment(
+        source: &QuestionSource,
+        assignment: &ProjectionAssignment,
+        output_percepts: &BTreeSet<ConceptId>,
+        witnesses: &mut QuestionCandidateWitnesses,
+    ) {
+        if output_percepts.iter().any(|percept| !assignment.contains_key(percept)) {
+            return;
+        }
+
+        for output in output_percepts {
+            let candidate = assignment[output].clone();
+            witnesses.entry(output.clone()).or_default().entry(candidate).or_default().insert(source.clone());
+        }
+    }
+
+    fn materialize_question_witnesses(
+        &mut self,
+        output_percepts: BTreeSet<ConceptId>,
+        mut witnesses: QuestionCandidateWitnesses,
+    ) -> BTreeMap<ConceptId, Option<ConceptId>> {
+        let mut results = BTreeMap::new();
+        for output in output_percepts {
+            let mut candidates = ConceptMap::new();
+            for (candidate, candidate_witnesses) in witnesses.remove(&output).unwrap_or_default() {
+                // Question strength is a support count for deterministic
+                // choice, not a calibrated probability.
+                let support = candidate_witnesses.iter().map(|source| u128::from(source.occurrences)).sum::<u128>();
+                self.add_relevance(&mut candidates, candidate, false, Relevance::new(1.0, support as f32));
+            }
+            let value = self.reference_map(&candidates);
+            results.insert(output, self.preserve_unordered_entry_boundary(&candidates, value));
+        }
+        results
+    }
+
+    fn add_contextual_projection_witnesses(
+        &mut self,
+        question: &ConceptId,
+        output_percepts: &BTreeSet<ConceptId>,
+        cache: &mut ProjectionCache,
+        snapshot: &QuestionSnapshot,
+        witnesses: &mut QuestionCandidateWitnesses,
+    ) {
+        let Some(question_components) = question.0.ordered_components() else {
+            return;
+        };
+        let Some(origin_pattern) = question_components.first() else {
+            return;
+        };
+        if !self.origin_has_route_seed(origin_pattern) {
+            return;
+        }
+
+        let mut origin_cache = ProjectionCache::new();
+        let origins = snapshot
+            .source_concepts
+            .iter()
+            .map(|seed| &seed.concept)
+            .filter(|concept| !self.projection_assignments(concept, origin_pattern, &mut origin_cache).is_empty())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if origins.is_empty() {
+            return;
+        }
+
+        for answer in &snapshot.experiences {
+            let Some(answer_components) = answer.matched.0.ordered_components() else {
+                continue;
+            };
+            if answer_components.len() != question_components.len() {
+                continue;
+            }
+            let Some(answer_origin) = answer_components.first() else {
+                continue;
+            };
+
+            for origin in &origins {
+                if origin == answer_origin || !snapshot.graph.connects(origin, answer_origin, answer) {
+                    continue;
+                }
+
+                let mut routed_components = answer_components.to_vec();
+                routed_components[0] = origin.clone();
+                let routed = self.reference_ordered(routed_components);
+                let assignments = self.projection_assignments(&routed, question, cache);
+                if assignments.is_empty() {
+                    continue;
+                }
+                Self::add_projection_witnesses(&answer.source, &assignments, output_percepts, witnesses);
+            }
+        }
+    }
+
+    fn origin_has_route_seed(&self, concept: &ConceptId) -> bool {
+        match &concept.0.kind {
+            ConceptKind::Named(_) => true,
+            ConceptKind::Percept { .. } => false,
+            ConceptKind::Ordered { components } => components.first().is_some_and(|component| self.origin_has_route_seed(component)),
+            ConceptKind::Unordered => concept.0.subconcepts.keys().any(|member| self.contains_fixed_question_concept(member)),
+        }
+    }
+
+    fn contains_fixed_question_concept(&self, concept: &ConceptId) -> bool {
+        !self.is_percept(concept)
+            && (matches!(concept.0.kind, ConceptKind::Named(_)) || concept.0.children().any(|(child, _)| self.contains_fixed_question_concept(child)))
     }
 
     fn collect_output_percepts(&self, concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {
@@ -1428,29 +1551,11 @@ impl Pangine {
         }
     }
 
-    fn shared_output_percepts(&self, concept: &ConceptId) -> BTreeSet<ConceptId> {
-        let mut occurrences = BTreeMap::new();
-        self.collect_output_percept_occurrences(concept, &mut occurrences);
-        occurrences.into_iter().filter_map(|(percept, count)| (count > 1).then_some(percept)).collect()
-    }
-
-    fn collect_output_percept_occurrences(&self, concept: &ConceptId, occurrences: &mut BTreeMap<ConceptId, usize>) {
-        if self.is_percept(concept) {
-            *occurrences.entry(concept.clone()).or_default() += 1;
-            return;
-        }
-
-        for (child, _) in concept.0.children() {
-            self.collect_output_percept_occurrences(child, occurrences);
-        }
-    }
-
     fn collect_question_patterns(
         &self,
         question: &ConceptId,
-        relevance: Relevance,
         is_root: bool,
-        patterns: &mut ConceptMap,
+        patterns: &mut BTreeSet<ConceptId>,
         contains_percept_cache: &mut BTreeMap<usize, bool>,
     ) {
         if !self.contains_percept(question, contains_percept_cache) {
@@ -1458,11 +1563,15 @@ impl Pangine {
         }
 
         if is_root || !self.is_percept(question) {
-            patterns.entry(question.clone()).and_modify(|current| current.add(relevance)).or_insert(relevance);
+            patterns.insert(question.clone());
         }
 
-        for (child, child_relevance) in question.0.children() {
-            self.collect_question_patterns(child, multiply_relevance(relevance, child_relevance), false, patterns, contains_percept_cache);
+        if matches!(question.0.kind, ConceptKind::Ordered { .. }) {
+            return;
+        }
+
+        for (child, _) in question.0.children() {
+            self.collect_question_patterns(child, false, patterns, contains_percept_cache);
         }
     }
 
@@ -1476,56 +1585,80 @@ impl Pangine {
         contains
     }
 
-    fn projection_summary(
-        &self,
-        experience: &ConceptId,
-        question: &ConceptId,
-        shared_percepts: &BTreeSet<ConceptId>,
-        cache: &mut ProjectionCache,
-    ) -> ProjectionSummary {
+    fn projection_assignments(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> ProjectionAssignments {
         let key = (experience.index(), question.index());
-        if let Some(summary) = cache.get(&key) {
-            return summary.clone();
+        if let Some(assignments) = cache.get(&key) {
+            return assignments.clone();
         }
 
-        if self.is_percept(question) {
-            let summary = ProjectionSummary::variable(question.clone(), experience.clone(), shared_percepts.contains(question));
-            cache.insert(key, summary.clone());
-            return summary;
-        }
-
-        let mut summary = ProjectionSummary::none();
-        let preserved = if let (ConceptKind::Named(experience_name), ConceptKind::Named(question_name)) = (&experience.0.kind, &question.0.kind) {
-            (experience_name == question_name).then(ProjectionSummary::exact)
+        let assignments = if self.is_percept(question) {
+            ProjectionAssignments::from([ProjectionAssignment::from([(question.clone(), experience.clone())])])
+        } else if let (ConceptKind::Named(experience_name), ConceptKind::Named(question_name)) = (&experience.0.kind, &question.0.kind) {
+            if experience_name == question_name {
+                Self::exact_projection_assignments()
+            } else {
+                ProjectionAssignments::new()
+            }
         } else if let (Some(experience_components), Some(question_components)) = (experience.0.ordered_components(), question.0.ordered_components()) {
             if experience_components.len() != question_components.len() {
-                None
+                ProjectionAssignments::new()
             } else {
-                let mut ordered = ProjectionSummary::exact();
+                let mut ordered = Self::exact_projection_assignments();
                 for (experience_component, question_component) in experience_components.iter().zip(question_components) {
-                    ordered = ordered.multiply(&self.projection_summary(experience_component, question_component, shared_percepts, cache));
+                    let component = self.projection_assignments(experience_component, question_component, cache);
+                    ordered = Self::multiply_projection_assignments(&ordered, &component);
+                    if ordered.is_empty() {
+                        break;
+                    }
                 }
-                Some(ordered)
+                ordered
             }
         } else if experience.0.shape() == question.0.shape() && matches!(experience.0.shape(), ConceptShape::Unordered) {
-            self.unordered_projection_summary(experience, question, shared_percepts, cache)
+            self.unordered_projection_assignments(experience, question, cache)
         } else {
-            None
+            ProjectionAssignments::new()
         };
 
-        if let Some(preserved) = preserved {
-            summary.add(preserved);
-        }
-        cache.insert(key, summary.clone());
-        summary
+        cache.insert(key, assignments.clone());
+        assignments
     }
 
-    // Unequal unions currently bind only one direct output against an exact,
-    // default-relevance subset. Relevance-aware and partial subset matching
-    // remain separate oracle questions.
-    fn unordered_remainder_bindings(&mut self, experience: &ConceptId, question: &ConceptId) -> ProjectionBindingWeights {
+    fn exact_projection_assignments() -> ProjectionAssignments {
+        ProjectionAssignments::from([ProjectionAssignment::new()])
+    }
+
+    fn multiply_projection_assignments(left: &ProjectionAssignments, right: &ProjectionAssignments) -> ProjectionAssignments {
+        let mut products = ProjectionAssignments::new();
+        for left in left {
+            for right in right {
+                if let Some(product) = Self::merge_projection_assignments(left, right) {
+                    products.insert(product);
+                }
+            }
+        }
+        products
+    }
+
+    fn merge_projection_assignments(left: &ProjectionAssignment, right: &ProjectionAssignment) -> Option<ProjectionAssignment> {
+        let mut merged = left.clone();
+        for (percept, candidate) in right {
+            if let Some(current) = merged.get(percept) {
+                if current != candidate {
+                    return None;
+                }
+            } else {
+                merged.insert(percept.clone(), candidate.clone());
+            }
+        }
+        Some(merged)
+    }
+
+    // Unequal unions currently bind one direct output to the complete remainder
+    // left by an exact, default-relevance subset. Relevance-aware and partial
+    // subset matching remain open questions.
+    fn unordered_remainder_assignment(&mut self, experience: &ConceptId, question: &ConceptId) -> Option<ProjectionAssignment> {
         if experience.0.shape() != ConceptShape::Unordered || question.0.shape() != ConceptShape::Unordered {
-            return ProjectionBindingWeights::new();
+            return None;
         }
 
         let experiences = experience.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
@@ -1534,38 +1667,27 @@ impl Pangine {
             || Self::has_non_default_relevance(experience, &mut BTreeSet::new())
             || Self::has_non_default_relevance(question, &mut BTreeSet::new())
         {
-            return ProjectionBindingWeights::new();
+            return None;
         }
 
         let outputs = questions.iter().filter(|(concept, _)| self.is_percept(concept)).collect::<Vec<_>>();
         if outputs.len() != 1 {
-            return ProjectionBindingWeights::new();
+            return None;
         }
-        let (output, output_relevance) = outputs[0];
+        let (output, _) = outputs[0];
         let fixed_questions = questions.iter().filter(|(concept, _)| concept != output).collect::<Vec<_>>();
         let mut contains_percept_cache = BTreeMap::new();
         if fixed_questions.is_empty()
             || fixed_questions.iter().any(|(concept, _)| self.contains_percept(concept, &mut contains_percept_cache))
             || fixed_questions.iter().any(|(question, _)| !experience.0.subconcepts.contains_key(question))
         {
-            return ProjectionBindingWeights::new();
+            return None;
         }
 
         let fixed_concepts = fixed_questions.iter().map(|(concept, _)| concept).collect::<BTreeSet<_>>();
         let remainder = experiences.into_iter().filter(|(concept, _)| !fixed_concepts.contains(concept)).collect::<ConceptMap>();
-        let Some(remainder) = self.reference_map(&remainder) else {
-            return ProjectionBindingWeights::new();
-        };
-
-        let mut candidates = BTreeMap::new();
-        let output_scale = f64::from(output_relevance.weight());
-        let root_weight = fixed_questions.iter().fold(output_scale, |weight, _| weight * 2.0);
-        if root_weight.is_finite() {
-            candidates.insert(remainder.clone(), root_weight);
-            self.accumulate_exact_descendant_weights(&remainder, output_scale, &mut candidates);
-        }
-
-        ProjectionBindingWeights::from([(output.clone(), candidates)])
+        let remainder = self.reference_map(&remainder)?;
+        Some(ProjectionAssignment::from([(output.clone(), remainder)]))
     }
 
     fn has_non_default_relevance(concept: &ConceptId, visited: &mut BTreeSet<ConceptId>) -> bool {
@@ -1577,129 +1699,45 @@ impl Pangine {
             || concept.0.children().any(|(child, _)| Self::has_non_default_relevance(child, visited))
     }
 
-    fn accumulate_exact_descendant_weights(&self, concept: &ConceptId, scale: f64, candidates: &mut BTreeMap<ConceptId, f64>) {
-        if let Some(components) = concept.0.ordered_components() {
-            for component in components {
-                self.accumulate_exact_node_weight(component, scale, candidates);
-            }
-        }
-
-        for child in concept.0.subconcepts.keys() {
-            self.accumulate_exact_node_weight(child, scale, candidates);
-        }
-    }
-
-    fn accumulate_exact_node_weight(&self, concept: &ConceptId, scale: f64, candidates: &mut BTreeMap<ConceptId, f64>) {
-        if concept.0.subconcepts.len() != 1 {
-            *candidates.entry(concept.clone()).or_default() += scale;
-        }
-        self.accumulate_exact_descendant_weights(concept, scale, candidates);
-    }
-
-    fn unordered_projection_summary(
-        &self,
-        experience: &ConceptId,
-        question: &ConceptId,
-        shared_percepts: &BTreeSet<ConceptId>,
-        cache: &mut ProjectionCache,
-    ) -> Option<ProjectionSummary> {
+    fn unordered_projection_assignments(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> ProjectionAssignments {
         let experiences = experience.0.subconcepts.iter().collect::<Vec<_>>();
         let questions = question.0.subconcepts.iter().collect::<Vec<_>>();
         if experiences.len() != questions.len() {
-            return None;
+            return ProjectionAssignments::new();
         }
 
-        let state_count = 1usize.checked_shl(experiences.len() as u32)?;
+        let Some(state_count) = 1usize.checked_shl(experiences.len() as u32) else {
+            return ProjectionAssignments::new();
+        };
         let edges = questions
             .iter()
-            .map(|(question, question_relevance)| {
-                experiences
-                    .iter()
-                    .map(|(experience, experience_relevance)| {
-                        let mut edge = self.projection_summary(experience, question, shared_percepts, cache);
-                        edge.scale(f64::from(experience_relevance.weight() * question_relevance.weight()));
-                        edge
-                    })
-                    .collect::<Vec<_>>()
-            })
+            .map(|(question, _)| experiences.iter().map(|(experience, _)| self.projection_assignments(experience, question, cache)).collect::<Vec<_>>())
             .collect::<Vec<_>>();
 
-        if edges.iter().flatten().any(ProjectionSummary::has_shared_bindings) {
-            let mut forward = vec![None; state_count];
-            forward[0] = Some(ProjectionSummary::exact());
-            for mask in 0..state_count {
-                let question_index = mask.count_ones() as usize;
-                if question_index == questions.len() {
-                    continue;
-                }
-                let Some(current) = forward[mask].clone() else {
-                    continue;
-                };
-
-                for (experience_index, edge) in edges[question_index].iter().enumerate() {
-                    let bit = 1usize << experience_index;
-                    if mask & bit != 0 {
-                        continue;
-                    }
-
-                    let next = mask | bit;
-                    let product = current.multiply(edge);
-                    if let Some(summary) = &mut forward[next] {
-                        summary.add(product);
-                    } else {
-                        forward[next] = Some(product);
-                    }
-                }
-            }
-            return forward.pop().flatten();
-        }
-
-        let mut forward = vec![0.0; state_count];
-        forward[0] = 1.0;
-        // This subset DP computes the weighted permanent without enumerating
-        // every child assignment.
+        let mut forward = vec![ProjectionAssignments::new(); state_count];
+        forward[0] = Self::exact_projection_assignments();
         for mask in 0..state_count {
             let question_index = mask.count_ones() as usize;
             if question_index == questions.len() {
                 continue;
             }
-
-            for (experience_index, edge) in edges[question_index].iter().enumerate() {
-                let bit = 1usize << experience_index;
-                if mask & bit == 0 {
-                    forward[mask | bit] += forward[mask] * edge.total;
-                }
+            let current = forward[mask].clone();
+            if current.is_empty() {
+                continue;
             }
-        }
 
-        let mut reverse = vec![0.0; state_count];
-        let mut derivatives = vec![vec![0.0; experiences.len()]; questions.len()];
-        reverse[state_count - 1] = 1.0;
-        // Reverse-mode derivatives give every edge's contribution to the
-        // permanent, which turns edge-local bindings into output marginals.
-        for mask in (0..state_count - 1).rev() {
-            let question_index = mask.count_ones() as usize;
             for (experience_index, edge) in edges[question_index].iter().enumerate() {
                 let bit = 1usize << experience_index;
                 if mask & bit != 0 {
                     continue;
                 }
 
-                let next = mask | bit;
-                reverse[mask] += reverse[next] * edge.total;
-                derivatives[question_index][experience_index] += reverse[next] * forward[mask];
+                let products = Self::multiply_projection_assignments(&current, edge);
+                forward[mask | bit].extend(products);
             }
         }
 
-        let mut bindings = ProjectionBindingWeights::new();
-        for (question_index, row) in edges.into_iter().enumerate() {
-            for (experience_index, edge) in row.into_iter().enumerate() {
-                let derivative = derivatives[question_index][experience_index];
-                ProjectionSummary::accumulate_binding_weights(&mut bindings, &edge.bindings, derivative);
-            }
-        }
-
-        Some(ProjectionSummary::from_marginals(forward[state_count - 1], bindings))
+        forward.pop().unwrap_or_default()
     }
 }
 
@@ -2252,10 +2290,6 @@ fn multiply_relevance(left: Relevance, right: Relevance) -> Relevance {
     Relevance::new(left.probability * right.probability, left.strength * right.strength)
 }
 
-fn projection_relevance(experience: Relevance, question: Relevance, score: f64) -> Relevance {
-    Relevance::new(experience.probability * question.probability, experience.strength * question.strength * score as f32)
-}
-
 fn compare_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
     right
         .probability
@@ -2309,6 +2343,7 @@ mod tests {
             "['source'] @ expression    Ask one Percept",
             "['a']['b'] @ expression   Ask several Percepts together",
             "$['*']                     Inspect all live ordinary concepts",
+            "increments its occurrence count",
             "^['choice']",
         ] {
             assert!(help.contains(expected), "missing help entry: {expected}");

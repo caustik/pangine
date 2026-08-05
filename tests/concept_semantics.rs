@@ -70,7 +70,8 @@ fn public_api_mutations_update_the_unified_percept_state() {
     let experienced = test.engine_mut().perform_experience(&memory, Some(&experience));
     assert_eq!(experienced, Some(experience.clone()));
     assert_eq!(test.engine().get_value(&memory), Some(experience.clone()));
-    assert_eq!(test.engine().get_percept_roots(&memory), Some(vec![experience]));
+    assert_eq!(test.engine().get_percept_roots(&memory), Some(vec![experience.clone()]));
+    assert_eq!(test.engine().get_percept_root_count(&memory, &experience), Some(1));
 
     let left = test.engine_mut().reference_percept("left");
     let right = test.engine_mut().reference_percept("right");

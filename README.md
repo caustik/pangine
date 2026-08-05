@@ -84,7 +84,7 @@ command> x2([cat][dog])
 
 `50%` is the probability component and `x2` is the strength component attached to `cat`. `x3` applies separately to `dog`. Parentheses let one coefficient apply to a complete group.
 
-These values currently participate in deterministic composition and selection. They are not calibrated probabilities or confidence claims. The relevance model is still open work.
+These values currently participate in deterministic composition and selection. Question answers use the experience-backed support rule explained below instead of treating these coefficients as evidence. They are not calibrated probabilities or confidence claims, and the richer relevance model is still open work.
 
 ### Put Concepts in order
 
@@ -146,13 +146,11 @@ command> ['state'] /= [C]
 ```text
 command> ['Alice'] ~= {[cat]->[purrs]}
   {[cat]->[purrs]}
-command> ['Alice'] ~= {[cat]->[purrs]}
-  {[cat]->[purrs]}
 command> ['Bob'] ~= {[cat]->[meows]}
   {[cat]->[meows]}
 ```
 
-Replaying the same complete root under the same Percept changes nothing. A different root remains distinct. The root stays an ordinary Concept. Pangine does not put it or the Percept into a special experience mode.
+Each `~=` command is one experience. The complete input is its exact root, so I do not need to invent an event name just to preserve that boundary. Repeating an equal root increments its occurrence count. The root stays an ordinary Concept. Pangine does not put it or the Percept into a special experience mode.
 
 This matters because the complete boundary remains available even though a question can inspect the recursive pieces inside it. Pangine derives those pieces when it asks a question. It does not store a second expanded copy of the experience.
 
@@ -163,7 +161,7 @@ command> $['Alice']
   {[cat]->[purrs]}
 ```
 
-That combined view is not always a lossless account of the roots. One root `[A][B]` and two roots `[A]`, `[B]` can materialize to the same output. The engine API therefore also exposes the exact root set with `get_percept_roots`.
+That combined view is not always a lossless account of the roots. One root `[A][B]` and two roots `[A]`, `[B]` can materialize to the same output. The engine API therefore exposes the unique exact roots with `get_percept_roots` and the occurrence count of each root with `get_percept_root_count`.
 
 ### Ask one source
 
@@ -193,6 +191,62 @@ command> $['what']
 
 `cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part root remains available as context for later relevance work.
 
+### Let represented context widen an answer
+
+A fresh console keeps this example separate from the earlier Alice and Bob state:
+
+```text
+command> ['Room'] ~= [kitchen]->[connected-to]->[living-room]
+  {[kitchen]->[connected-to]->[living-room]}
+command> ['Room'] ~= [kitchen]->[sound]->[fridge-hum]
+  {[kitchen]->[connected-to]->[living-room]}
+  {[kitchen]->[sound]->[fridge-hum]}
+command> ['Room'] ~= [living-room]->[sound]->[music]
+  {[kitchen]->[connected-to]->[living-room]}
+  {[kitchen]->[sound]->[fridge-hum]}
+  {[living-room]->[sound]->[music]}
+command> ['Room'] @ [kitchen]->[sound]->['answer']
+  {[kitchen]->[sound]->['answer']}
+command> $['answer']
+  [fridge-hum]
+  [music]
+```
+
+`fridge-hum` is the direct answer. `music` is an additional candidate because the selected experience contains a represented path from `kitchen` to `living-room`, and `living-room -> sound -> music` otherwise matches the question exactly.
+
+The starting `kitchen` Concept is the only part that may follow that context. The later fixed `sound` Concept must still match exactly. A possible answer cannot use its own sound relationship to create the route that makes itself possible, and only roots selected on the left of `@` participate.
+
+This does not mean Pangine has decided that `music` is the right answer. It means Pangine can retain a potentially relevant indirect answer instead of discarding it. Directness, shorter routes, more routes, and more matching surroundings do not add support by themselves. Both answers have one supporting experience root here, so `^` still uses its deterministic tie rule.
+
+### Let experience counts change the choice
+
+Every `~=` command already represents one experience. If the same thing is experienced twice, I can simply say it twice:
+
+```text
+command> ['world'] ~= [morning]*[birds]
+  [morning]
+  [birds]
+command> ['world'] ~= [morning]*[birds]
+  x2 [birds][morning]
+command> ['world'] ~= [morning]*[traffic]
+  x2 [birds][morning]
+  [morning][traffic]
+command> ['world'] @ [morning]*['answer']
+  [morning]
+  ['answer']
+command> $['answer']
+  x2 [birds]
+  [traffic]
+command> ^['answer']
+  [birds]
+```
+
+The complete root is the implicit experience boundary. The first two commands therefore give `birds` two units of support, while the third gives `traffic` one. I do not need to add `event-1` and `event-2` Concepts unless those event identities are meaningful to the information itself.
+
+The selected Percept and exact root stay attached to each match. Repeating one exact root increases its stored count. Two unequal roots under the same Percept are two experiences, and equal roots under `Alice` and `Bob` are also separate source contributions. Finding the same answer several times inside one exact root, including through its recursive pieces or context routes, still uses that root only once.
+
+`x2` is a count of supporting experience occurrences. It is useful to the current `^` choice, but it is not a claim that birds are twice as true or have a two-thirds real-world probability. A richer interpretation still needs explicit input describing reliability, dependence, and counterevidence.
+
 ### Ask several sources together
 
 Writing several plain Percepts on the left of `@` selects all of them:
@@ -215,7 +269,7 @@ command> ^['shared-sound']
 
 `(['Alice']['Bob']) @ ...` means the same thing, but the parentheses are not needed.
 
-The selected Percepts are the sources. An equal root replayed under `Alice` still counts once, while the same root under both `Alice` and `Bob` remains two separate source contributions.
+The selected Percepts are the sources. Experiencing an equal root twice under `Alice` contributes twice. Experiencing it once under both `Alice` and `Bob` also contributes twice.
 
 `^` currently selects the greatest positive weight. An exact tie uses the earliest canonical Concept spelling, which is why `meows` wins the tie above. This is a stable fallback, not a claim that `meows` is inherently more likely.
 
@@ -224,11 +278,11 @@ The selected Percepts are the sources. An equal root replayed under `Alice` stil
 The same output Percept keeps one identity throughout a question:
 
 ```text
-command> ['event-1'] ~= {[review]->[review]}
+command> ['reviewer'] ~= {[review]->[review]}
   {[review]->[review]}
-command> ['event-2'] ~= {[prepare]->[ship]}
+command> ['shipper'] ~= {[prepare]->[ship]}
   {[prepare]->[ship]}
-command> ['event-1']['event-2'] @ {['same']->['same']}
+command> ['reviewer']['shipper'] @ {['same']->['same']}
   {['same']->['same']}
 command> ^['same']
   [review]
@@ -312,7 +366,7 @@ Pangine answers from the selected Percept roots. The source names remain opaque,
 
 ### What this walkthrough does not settle
 
-This walkthrough covers the current console surface: canonical composition, relevance, Percept state, exact-root experience, one-source and multi-source questions, shared output identity, selection, scripts, and inspection.
+This walkthrough covers the current console surface: canonical composition, relevance, Percept state, exact-root experience, direct and contextual questions, one-source and multi-source selection, shared output identity, decision, scripts, and inspection.
 
 It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, richer sampler behavior, or a production revision API.
 
@@ -328,11 +382,13 @@ The larger question is whether this can become an inference system in its own ri
 
 When I first thought about scaling Pangine, the model was closer to map/reduce than a central database. Canonical form gives Concepts a stable identity, but no Concept needs a permanent machine owner. Each partition can retain flat exact root edges from Percepts to canonical Concepts.
 
-Those exact roots are authoritative and combine by set union. Replay, arrival order, and grouping do not change the set. If a partition is lost, Pangine should continue from the roots that remain rather than depending on one irreplaceable global index.
+Those exact roots and their occurrence counts are authoritative. A canonical Concept is routed to one member rather than broadcast to every member, so a repeated experience is counted where that Concept lives. A question member can return local candidate totals and reduction can add them. It does not need event IDs or cross-member duplicate tracking. If a partition is lost, Pangine should continue from the roots that remain.
 
 An operating server may keep a densely connected in-memory representation or a disposable lookup to make matching fast. That structure is a cache over the flat canonical roots, not another source of truth. It can be rebuilt, dropped, or scoped to one partition.
 
-Question evaluation currently derives recursive candidates at question time and feeds them into the existing matcher. For ordered roots it derives only the contiguous path widths requested by the current question, rather than expanding every possible path. Efficient retrieval and the final relevance model remain active research areas.
+Question evaluation snapshots the selected exact roots and their counts before writing any outputs. It derives only the recursive match views needed by the current question and builds disposable in-memory connections from the retained Concept structure. A finite search can then discover an indirect ordered answer without making that temporary structure authoritative or storing it as another kind of experience. Cycles terminate, and several matcher routes through one root do not multiply its count.
+
+This first production implementation rebuilds those connections from the selected roots for each question. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Efficient caching, partitioned execution, and the final relevance model remain active research areas.
 
 ## Current status
 
@@ -341,14 +397,16 @@ The current implementation is written in Rust. It includes:
 - Parsing and canonical formatting of the grammar
 - Weakly interned, canonical Concept graphs
 - Unified Percept state built from exact complete roots
-- Idempotent experience replay over exact Percept roots
+- Counted experience occurrences over unique exact Percept roots
 - One-source and unparenthesized multi-source question selection
 - Lazy exact recursive matching with explicit Percept wildcards and shared repeated-output bindings
+- Source-backed contextual candidate discovery for ordered questions across nested, ordered, unordered, weighted, negative, cyclic, and multi-source Concept structure
+- Exact-root-backed question scoring with recursive and contextual route deduplication
 - Deterministic positive-weight greedy choice with canonical tie handling
 - `$['*']` global inspection
 - An interactive console, focused regression tests, and a browser-local WebAssembly workbench
 
-The relevance model, richer decision and sampling semantics, persistence, distributed execution, and general-purpose application bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
+Context changes which candidates Pangine can find, and supporting experience occurrences can now change which candidate wins. Graph shape alone still does not create a preference. A richer relevance model, decision and sampling semantics, scalable retrieval, persistence, distributed execution, and general-purpose application bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
 
 To run the complete verification suite:
 
@@ -376,7 +434,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 | `['memory'] -= expression` | Subtract from the materialized value, then retain one result root |
 | `['memory'] *= expression` | Flattening merge, then retain one result root |
 | `['memory'] /= expression` | Inverse merge, then retain one result root |
-| `['memory'] ~= expression` | Insert one exact complete root idempotently |
+| `['memory'] ~= expression` | Record one experience of an exact complete root |
 | `['memory'] @ expression` | Ask one source and bind output Percepts |
 | `['Alice']['Bob'] @ expression` | Ask several sources together; parentheses are optional |
 | `$operand` | Recursively evaluate every Percept in the operand |

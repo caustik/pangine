@@ -81,31 +81,30 @@ fn question_writes_each_output_percept_separately() {
 fn repeated_output_percept_uses_one_binding_across_selected_sources() {
     let mut pangine = Pangine::new();
 
-    must_ref(&mut pangine, "['event-1'] ~= {[A]->[B]}");
-    must_ref(&mut pangine, "['event-2'] ~= {[A]->[B]}");
-    must_ref(&mut pangine, "['event-3'] ~= {[C]->[C]}");
-    ask(&mut pangine, "['event-1']['event-2']['event-3'] @ {['X']->['X']}");
+    must_ref(&mut pangine, "['Alice'] ~= {[A]->[B]}");
+    must_ref(&mut pangine, "['Bob'] ~= {[A]->[B]}");
+    must_ref(&mut pangine, "['Carol'] ~= {[C]->[C]}");
+    ask(&mut pangine, "['Alice']['Bob']['Carol'] @ {['X']->['X']}");
 
     let candidates = named_value(&mut pangine, "$['X']");
     assert_eq!(candidates.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
 }
 
 #[test]
-fn repeated_output_binding_survives_nested_unordered_matching() {
+fn repeated_output_binding_stays_consistent_across_one_ordered_question() {
     let mut pangine = Pangine::new();
 
-    must_ref(&mut pangine, "['event-1'] ~= {([A]*[P])->([B]*[Q])}");
-    must_ref(&mut pangine, "['event-2'] ~= {([A]*[P])->([B]*[Q])}");
-    must_ref(&mut pangine, "['event-3'] ~= {([C]*[P])->([C]*[Q])}");
-    ask(&mut pangine, "['event-1']['event-2']['event-3'] @ {(['X']*[P])->(['X']*[Q])}");
+    must_ref(&mut pangine, "['Alice'] ~= {([A]*[P])->([B]*[Q])}");
+    must_ref(&mut pangine, "['Bob'] ~= {([A]*[P])->([B]*[Q])}");
+    must_ref(&mut pangine, "['Carol'] ~= {([C]*[P])->([C]*[Q])}");
+    ask(&mut pangine, "['Alice']['Bob']['Carol'] @ {(['X']*[P])->(['X']*[Q])}");
 
     let candidates = named_value(&mut pangine, "$['X']");
-    assert!(candidate_weight(&candidates, "C") > candidate_weight(&candidates, "A"));
-    assert!(candidate_weight(&candidates, "C") > candidate_weight(&candidates, "B"));
+    assert_eq!(candidates.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
 }
 
 #[test]
-fn experience_retains_exact_roots_and_replay_is_idempotent() {
+fn repeated_experience_increments_the_exact_root_count() {
     let mut pangine = Pangine::new();
     let memory = pangine.reference_percept("memory");
     let ordered = must_ref(&mut pangine, "{[cat]->[purrs]}");
@@ -113,14 +112,16 @@ fn experience_retains_exact_roots_and_replay_is_idempotent() {
     must_ref(&mut pangine, "['memory'] ~= {[cat]->[purrs]}");
     must_ref(&mut pangine, "['memory'] ~= {[cat]->[purrs]}");
     assert_eq!(pangine.get_percept_roots(&memory), Some(vec![ordered.clone()]));
-    assert_eq!(pangine.get_value(&memory), Some(ordered));
+    assert_eq!(pangine.get_percept_root_count(&memory, &ordered), Some(2));
+    assert_eq!(pangine.format_concept(&pangine.get_value(&memory).unwrap(), false), "x2{[cat]->[purrs]}");
 
     ask(&mut pangine, "['memory'] @ {[cat]->['sound']}");
-    assert_eq!(must_ref(&mut pangine, "$['sound']"), must_ref(&mut pangine, "[purrs]"));
+    let candidates = named_value(&mut pangine, "$['sound']");
+    assert_eq!(candidate_weight(&candidates, "purrs"), 2.0);
 }
 
 #[test]
-fn weighted_root_and_replayed_atomic_root_remain_distinct() {
+fn weighted_root_and_repeated_atomic_root_remain_distinct() {
     let mut pangine = Pangine::new();
     let memory = pangine.reference_percept("memory");
 
@@ -131,7 +132,11 @@ fn weighted_root_and_replayed_atomic_root_remain_distinct() {
     let roots = pangine.get_percept_roots(&memory).unwrap();
     assert_eq!(roots.len(), 2);
     assert_eq!(roots.into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([must_ref(&mut pangine, "[A]"), must_ref(&mut pangine, "x2[A]")]));
-    assert_eq!(pangine.format_concept(&pangine.get_value(&memory).unwrap(), false), "x3[A]");
+    let atomic = must_ref(&mut pangine, "[A]");
+    let weighted = must_ref(&mut pangine, "x2[A]");
+    assert_eq!(pangine.get_percept_root_count(&memory, &atomic), Some(2));
+    assert_eq!(pangine.get_percept_root_count(&memory, &weighted), Some(1));
+    assert_eq!(pangine.format_concept(&pangine.get_value(&memory).unwrap(), false), "x4[A]");
 }
 
 #[test]
@@ -234,7 +239,7 @@ fn explicit_nesting_preserves_an_ordered_composition_as_one_component() {
 }
 
 #[test]
-fn repeated_root_under_different_percepts_remains_separate_evidence() {
+fn repeated_root_under_different_percepts_remains_separate_support() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['Alice'] ~= {[cat]->[purr]}");
