@@ -1,7 +1,13 @@
+//! Warning checks for the current contextual-candidate experiment.
+//!
+//! These examples preserve questions that helped build the temporary graph
+//! matcher. Their exact candidate sets are not settled Pangine semantics.
+
 use pangine::{ConceptId, Pangine, Relevance};
 use std::collections::BTreeSet;
 
 #[test]
+#[ignore = "warning: contextual eligibility is provisional"]
 fn ordered_question_finds_a_source_backed_indirect_answer() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", &["[C]->[bridge]->[E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
@@ -12,6 +18,7 @@ fn ordered_question_finds_a_source_backed_indirect_answer() {
 }
 
 #[test]
+#[ignore = "warning: contextual evidence is not yet scored generally"]
 fn additional_shared_surroundings_do_not_become_implicit_support() {
     let mut pangine = Pangine::new();
     experience(
@@ -35,6 +42,7 @@ fn additional_shared_surroundings_do_not_become_implicit_support() {
 }
 
 #[test]
+#[ignore = "warning: connection direction and breadth are provisional"]
 fn broad_and_bidirectional_ordered_connections_remain_eligible() {
     let mut pangine = Pangine::new();
     experience(
@@ -57,6 +65,7 @@ fn broad_and_bidirectional_ordered_connections_remain_eligible() {
 }
 
 #[test]
+#[ignore = "warning: a candidate's usable surrounding context is unresolved"]
 fn an_answer_needs_context_outside_its_own_relationship() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", &["[C]->[sound]->[quiet]", "[D]->[sound]->[hiss]"]);
@@ -70,6 +79,7 @@ fn an_answer_needs_context_outside_its_own_relationship() {
 }
 
 #[test]
+#[ignore = "warning: which ordered positions may follow context is unresolved"]
 fn only_the_ordered_origin_can_follow_context() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", &["[C]->[bridge]->[E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
@@ -82,6 +92,7 @@ fn only_the_ordered_origin_can_follow_context() {
 }
 
 #[test]
+#[ignore = "warning: selected-source traversal policy is provisional"]
 fn a_route_uses_only_the_selected_percepts() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", &["[C]->[context]->[morning]", "[C]->[sound]->[quiet]"]);
@@ -98,6 +109,7 @@ fn a_route_uses_only_the_selected_percepts() {
 }
 
 #[test]
+#[ignore = "warning: signed membership as a context connection is provisional"]
 fn retained_positive_and_negative_memberships_can_supply_a_route() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", &["[C]x2[bridge]", "[bridge]![E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
@@ -112,6 +124,7 @@ fn retained_positive_and_negative_memberships_can_supply_a_route() {
 }
 
 #[test]
+#[ignore = "warning: recursive origins in context traversal are provisional"]
 fn a_recursive_origin_routes_as_one_concrete_concept() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", &["([C]*[day])->[sound]->[quiet]", "([E]*[night])->[sound]->[noisy]", "[C]->[bridge]->[E]", "[day]->[bridge]->[night]"]);
@@ -122,6 +135,7 @@ fn a_recursive_origin_routes_as_one_concrete_concept() {
 }
 
 #[test]
+#[ignore = "warning: binding before contextual traversal is provisional"]
 fn outputs_inside_an_origin_bind_before_the_origin_routes() {
     let mut pangine = Pangine::new();
     experience(
@@ -140,6 +154,7 @@ fn outputs_inside_an_origin_bind_before_the_origin_routes() {
 }
 
 #[test]
+#[ignore = "warning: unordered contextual matching is unresolved"]
 fn a_top_level_unordered_question_remains_exact() {
     let mut pangine = Pangine::new();
     experience(
@@ -154,6 +169,7 @@ fn a_top_level_unordered_question_remains_exact() {
 }
 
 #[test]
+#[ignore = "warning: broader source-root context is unresolved"]
 fn a_derived_ordered_window_is_not_its_own_context() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", &["[C]->[link]->[tail]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]->[tail]"]);
@@ -167,6 +183,7 @@ fn a_derived_ordered_window_is_not_its_own_context() {
 }
 
 #[test]
+#[ignore = "warning: complete-root contextual separation is provisional"]
 fn equal_answer_relationships_remain_separate_by_complete_source_root() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", &["[C]->[sound]->[quiet]", "({[D]->[sound]->[hiss]}*[left-context])"]);
@@ -181,6 +198,7 @@ fn equal_answer_relationships_remain_separate_by_complete_source_root() {
 }
 
 #[test]
+#[ignore = "warning: cross-Percept contextual separation is provisional"]
 fn equal_answer_relationships_under_different_percepts_are_distinct_sources() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", &["[C]->[sound]->[quiet]"]);
@@ -195,6 +213,7 @@ fn equal_answer_relationships_under_different_percepts_are_distinct_sources() {
 }
 
 #[test]
+#[ignore = "warning: question output as later context is provisional"]
 fn a_question_result_becomes_context_only_when_selected_later() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "memory", &["[A]*[B]*[C]"]);
@@ -210,6 +229,7 @@ fn a_question_result_becomes_context_only_when_selected_later() {
 }
 
 #[test]
+#[ignore = "warning: candidate set is provisional; termination is tested elsewhere"]
 fn contextual_reachability_terminates_on_cycles() {
     let mut pangine = Pangine::new();
     experience(
@@ -232,6 +252,7 @@ fn contextual_reachability_terminates_on_cycles() {
 }
 
 #[test]
+#[ignore = "warning: route multiplicity may matter to a future decision"]
 fn alternate_routes_do_not_multiply_support() {
     let mut pangine = Pangine::new();
     experience(

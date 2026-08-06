@@ -22,6 +22,8 @@ Everything below is an actual `pangine-console` transcript. Text after `command>
 
 Pangine does not know what names such as `cat`, `Alice`, or `full-test` mean. They are ordinary names chosen for the examples. Their meaning comes from the person or program using the language.
 
+This walkthrough describes the current prototype, not a finished language specification. The parser and output are real. The detailed rules used by contextual questions, answer totals, and `^` are experiments that I expect to revisit as the larger design becomes clearer.
+
 ### Start with nothing
 
 ```text
@@ -62,7 +64,7 @@ command> ([A][B])*([A][B])
   x2 [B]
 ```
 
-`*` currently reaches the same unordered normal form as adjacency. It remains accepted syntax while I audit whether it has an independent job left.
+`*` currently reaches the same unordered normal form as adjacency. It remains available while I audit whether it has an independent job left.
 
 A different surrounding Concept kind still retains the union as one position:
 
@@ -98,7 +100,7 @@ command> x2([cat][dog])
 
 `x2[cat]` is the same Concept as `[cat][cat]`. The prefix applies to the next union operand, so `x3` applies separately to `dog`. Parentheses make the outer `x2` apply to the complete input group, then unordered normalization multiplies it into each member. Inversion is the negative form: `x-1[cat]` formats as `![cat]`.
 
-Experience retains exact roots and occurrence counts rather than continuously updating a probability attached to a Concept. Any richer calculation from that accumulated evidence belongs at decision time. The current `^` implementation only supplies the simple positive-support baseline explained below.
+The current engine retains exact roots and occurrence counts when it records experience. What a later decision should calculate from that accumulated information remains open. The current `^` implementation only supplies the simple deterministic placeholder explained below.
 
 ### Put Concepts in order
 
@@ -190,7 +192,7 @@ command> $['sound']
 
 The immediate result is still the unresolved question shape. `$['sound']` shows the answer candidates that were written into the output Percept.
 
-The fixed `[cat]` must match exactly. `['sound']` is the wildcard position Pangine fills. Ordinary Concepts in a question are never implicit weak wildcards.
+In the current matcher, the fixed `[cat]` must match exactly. `['sound']` is the wildcard position Pangine fills. Ordinary Concepts are not treated as implicit weak wildcards.
 
 A longer ordered root can supply an exact contiguous path without being stored a second time:
 
@@ -228,9 +230,9 @@ command> $['answer']
 
 `fridge-hum` is the direct answer. `music` is an additional candidate because the selected experience contains a represented path from `kitchen` to `living-room`, and `living-room -> sound -> music` otherwise matches the question exactly.
 
-The starting `kitchen` Concept is the only part that may follow that context. The later fixed `sound` Concept must still match exactly. A possible answer cannot use its own sound relationship to create the route that makes itself possible, and only roots selected on the left of `@` participate.
+The current contextual experiment lets the starting `kitchen` Concept follow that path while the later fixed `sound` Concept still matches exactly. It also blocks a possible answer from using its own sound relationship as the route that admits it, and it searches only the roots selected on the left of `@`. These are current algorithm choices, not settled limits on what Pangine may eventually consider.
 
-This does not mean Pangine has decided that `music` is the right answer. It means Pangine can retain a potentially relevant indirect answer instead of discarding it. Directness, shorter routes, more routes, and more matching surroundings do not add support by themselves. Both answers have one supporting experience root here, so `^` still uses its deterministic tie rule.
+This does not mean Pangine has decided that `music` is the right answer. It means the prototype can retain a potentially relevant indirect answer instead of discarding it. Its current projection gives each answer one root occurrence and does not add anything for directness, path length, alternate routes, or shared surroundings. That reduction is provisional because the wider context may eventually be exactly what should inform the decision.
 
 ### Let experience counts change the choice
 
@@ -257,11 +259,11 @@ command> ^['answer']
   [birds]
 ```
 
-The complete root is the implicit experience boundary. The first two commands therefore give `birds` two units of support, while the third gives `traffic` one. I do not need to add `event-1` and `event-2` Concepts unless those event identities are meaningful to the information itself.
+In this prototype, each complete `~=` input acts as one experience boundary. The current answer projection therefore gives `birds` a total of two and `traffic` a total of one. I do not need to add `event-1` and `event-2` Concepts unless those event identities are meaningful to the information itself.
 
-The selected Percept and exact root stay attached to each match. Repeating one exact root increases its stored count. Two unequal roots under the same Percept are two experiences, and equal roots under `Alice` and `Bob` are also separate source contributions. Finding the same answer several times inside one exact root, including through its recursive pieces or context routes, still uses that root only once.
+The current implementation keeps the selected Percept and exact root attached to each match. Repeating one exact root increases its stored count. It presently adds unequal roots and equal roots under different Percepts separately, while repeated routes inside one root contribute that root only once. Those details preserve useful evidence boundaries, but they are not yet a general account of how all evidence should matter.
 
-The `x2` on the answer is a count of supporting experience occurrences. It is useful to the current `^` choice, but it is not a general truth score. Any richer interpretation still needs ordinary Pangine input that justifies it.
+The `x2` on the answer is how this prototype exposes that current total. It is useful to the placeholder `^` choice, but it is not a definition of relevance or a general truth score.
 
 ### Ask several sources together
 
@@ -384,7 +386,7 @@ Pangine answers from the selected Percept roots. The source names remain opaque,
 
 This walkthrough covers the current console surface: canonical composition, explicit multiplicity, Percept state, exact-root experience, direct and contextual questions, one-source and multi-source selection, shared output identity, decision, scripts, and inspection.
 
-It does not establish how a later decision rule should turn accumulated evidence into probabilities or other preferences. Persistence, distributed execution, numeric or temporal domain grammar, and richer sampling behavior also remain open.
+It does not establish how a later decision rule should use accumulated evidence. Persistence, distributed execution, numeric or temporal domain grammar, and richer sampling behavior also remain open. The current `x` storage is itself temporary: it uses a floating-point value and cannot preserve arbitrarily large integer totals exactly.
 
 ## Why I built Pangine
 
@@ -392,21 +394,21 @@ I originally came up with Pangine by writing down pieces of information in a sem
 
 Concepts have canonical forms and can be composed without giving their names a built-in ontology. A Percept retains exact complete roots. A question can use both those roots and the recursive structure inside them without turning experience into a separate kind of Concept.
 
-The larger question is whether this can become an inference system in its own right. Experience now accumulates exact roots and counts without trying to keep a running probability on every Concept. The deterministic `^` rule gives Pangine a stable baseline for choosing among answer candidates. A richer rule can eventually calculate from the available evidence at that point without changing what experience stored.
+The larger question is whether this can become an inference system in its own right. Experience now accumulates exact roots and counts without committing to a finished relevance model. The deterministic `^` rule gives Pangine a repeatable placeholder for choosing among answer candidates while I work toward a better understanding of what information the decision should use.
 
 ## Scaling direction
 
 When I first thought about scaling Pangine, the model was closer to map/reduce than a central database. Canonical form gives Concepts a stable identity, but no Concept needs a permanent machine owner. Each partition can retain flat exact root edges from Percepts to canonical Concepts.
 
-Those exact roots and their occurrence counts are authoritative. A canonical Concept is routed to one member rather than broadcast to every member, so a repeated experience is counted where that Concept lives. A question member can return local candidate totals and reduction can add them. It does not need event IDs or cross-member duplicate tracking. If a partition is lost, Pangine should continue from the roots that remain.
+The current prototype treats those exact roots and their occurrence counts as its stored form. The intended distributed direction routes a canonical Concept to one member rather than broadcasting it to every member, so a repeated experience can be counted where that Concept lives. A question member could return local results for reduction without user-written event IDs or cross-member duplicate tracking. This is a design direction, not an implemented distributed protocol.
 
 An operating server may keep a densely connected in-memory representation or a disposable lookup to make matching fast. That structure is a cache over the flat canonical roots, not another source of truth. It can be rebuilt, dropped, or scoped to one partition.
 
-Question evaluation snapshots the selected exact roots and their counts before writing any outputs. It derives only the recursive match views needed by the current question and builds disposable in-memory connections from the retained Concept structure. A finite search can then discover an indirect ordered answer without making that temporary structure authoritative or storing it as another kind of experience. Cycles terminate, and several matcher routes through one root do not multiply its count.
+Question evaluation currently snapshots the selected exact roots and their counts before writing outputs. It derives recursive match views and builds disposable in-memory connections from the retained Concept structure. This lets the prototype discover an indirect ordered answer without storing another kind of experience. Cycle termination is an implementation safety property; the current route-deduplication policy remains a research choice.
 
 This first production implementation rebuilds those connections from the selected roots for each question. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Efficient caching, partitioned execution, and richer answer scoring remain active research areas.
 
-## Current status
+## Current prototype status
 
 The current implementation is written in Rust. It includes:
 
@@ -417,12 +419,12 @@ The current implementation is written in Rust. It includes:
 - One-source and unparenthesized multi-source question selection
 - Lazy exact recursive matching with explicit Percept wildcards and shared repeated-output bindings
 - Source-backed contextual candidate discovery for ordered questions across nested, ordered, unordered, inverted, cyclic, and multi-source Concept structure
-- Exact-root-backed question scoring with recursive and contextual route deduplication
-- Deterministic positive-weight greedy choice with canonical tie handling
+- A provisional projection of exact-root occurrences onto answer coefficients
+- A deterministic placeholder choice rule behind `^`
 - `$['*']` global inspection
-- An interactive console, focused regression tests, and a browser-local WebAssembly workbench
+- An interactive console, current-behavior tests, explicitly ignored research warnings, and a browser-local WebAssembly workbench
 
-Context changes which candidates Pangine can find, and supporting experience occurrences can now change which candidate wins. Graph shape alone still does not create a preference. A richer decision-time calculation from accumulated evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and general-purpose application bindings are still open work.
+Context changes which candidates the prototype can find, and experience occurrences can currently change which candidate `^` returns. The implementation does not yet make use of the wider graph when choosing among candidates. The meaning and representation of decision evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and general-purpose application bindings are all open work.
 
 To run the complete verification suite:
 
@@ -430,6 +432,14 @@ To run the complete verification suite:
 cargo test --workspace --all-targets --release
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
+
+Detailed checks for provisional contextual, scoring, and decision behavior are compiled but ignored by that run. To inspect the current research expectations explicitly:
+
+```sh
+cargo test --test research --release -- --ignored
+```
+
+Those warnings preserve useful examples; they are not compatibility promises.
 
 ## Language at a glance
 
@@ -454,10 +464,10 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 | `['memory'] @ expression` | Ask one source and bind output Percepts |
 | `['Alice']['Bob'] @ expression` | Ask several sources together; parentheses are optional |
 | `$operand` | Recursively evaluate every Percept in the operand |
-| `^['choice']` | Select the greatest positive weight, using canonical spelling for exact ties |
+| `^['choice']` | Run the current deterministic choice placeholder |
 | `$['*']` | Inspect all live ordinary Concepts through a read-only computed view |
 
-Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from accepted input syntax. For example, `[A]->[B]` formats as `{[A]->[B]}`.
+Statements may be separated with semicolons. C-style block comments and C++-style line comments are ignored. Canonical output may differ from valid input syntax. For example, `[A]->[B]` formats as `{[A]->[B]}`.
 
 ## Contributing
 

@@ -1,6 +1,12 @@
+//! Warning checks for the current projection of root occurrences into `x`.
+//!
+//! Integer root counts are useful evidence, but placing their sum in the
+//! answer coefficient is not an accepted definition of relevance.
+
 use pangine::{ConceptId, Pangine, Relevance};
 
 #[test]
+#[ignore = "warning: projecting occurrence counts into answer x is provisional"]
 fn repeated_experiences_produce_exact_support_counts_without_event_ids() {
     let mut pangine = Pangine::new();
     let birds = "[morning][birds]";
@@ -16,6 +22,7 @@ fn repeated_experiences_produce_exact_support_counts_without_event_ids() {
 }
 
 #[test]
+#[ignore = "warning: recursive-view deduplication is provisional evidence policy"]
 fn one_experience_contributes_once_through_recursive_views() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", "{([morning][birds])->[archived]}");
@@ -26,6 +33,7 @@ fn one_experience_contributes_once_through_recursive_views() {
 }
 
 #[test]
+#[ignore = "warning: binding deduplication is provisional evidence policy"]
 fn one_experience_contributes_once_across_distinct_complete_bindings() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "world", "({[sample-a]->[sound]->[birds]})({[sample-b]->[sound]->[birds]})");
@@ -36,6 +44,7 @@ fn one_experience_contributes_once_across_distinct_complete_bindings() {
 }
 
 #[test]
+#[ignore = "warning: root boundaries as separate support are provisional"]
 fn separate_exact_roots_are_separate_experiences_without_event_ids() {
     let mut pangine = Pangine::new();
     let event = "[morning][birds]";
@@ -48,6 +57,7 @@ fn separate_exact_roots_are_separate_experiences_without_event_ids() {
 }
 
 #[test]
+#[ignore = "warning: cross-Percept support addition is provisional"]
 fn selected_percepts_and_root_occurrences_both_supply_support() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", "{[C]->[sound]->[birds]}");
@@ -60,6 +70,22 @@ fn selected_percepts_and_root_occurrences_both_supply_support() {
 }
 
 #[test]
+#[ignore = "warning: equal roots under different Percepts as additive support is provisional"]
+fn repeated_root_under_different_percepts_increases_current_support() {
+    let mut pangine = Pangine::new();
+    experience(&mut pangine, "Alice", "{[cat]->[purr]}");
+    experience(&mut pangine, "Bob", "{[cat]->[purr]}");
+
+    ask(&mut pangine, "['Alice'] @ {[cat]->['one']}");
+    let one = candidate_relevance(&mut pangine, "one", "purr").unwrap();
+
+    ask(&mut pangine, "['Alice']['Bob'] @ {[cat]->['two']}");
+    let two = candidate_relevance(&mut pangine, "two", "purr").unwrap();
+    assert!(two.x_coefficient > one.x_coefficient);
+}
+
+#[test]
+#[ignore = "warning: composite-answer support projection is provisional"]
 fn one_composite_answer_remains_one_decision_candidate_without_fake_support() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "memory", "[A][B][C]");

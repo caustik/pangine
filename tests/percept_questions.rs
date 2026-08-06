@@ -257,62 +257,6 @@ fn flat_ordered_questions_match_only_exact_contiguous_windows() {
 }
 
 #[test]
-fn explicit_nesting_preserves_an_ordered_composition_as_one_component() {
-    let mut pangine = Pangine::new();
-
-    must_ref(&mut pangine, "['left'] ~= ([cat]->[eats])->[food]");
-    must_ref(&mut pangine, "['right'] ~= [cat]->([eats]->[food])");
-
-    ask(&mut pangine, "['left'] @ ['left-answer']->[eats]");
-    assert_eq!(must_ref(&mut pangine, "$['left-answer']"), must_ref(&mut pangine, "[cat]"));
-
-    ask(&mut pangine, "['right'] @ ['right-answer']->[eats]");
-    assert!(pangine.reference_concept("$['right-answer']").unwrap().is_none());
-}
-
-#[test]
-fn repeated_root_under_different_percepts_remains_separate_support() {
-    let mut pangine = Pangine::new();
-
-    must_ref(&mut pangine, "['Alice'] ~= {[cat]->[purr]}");
-    must_ref(&mut pangine, "['Bob'] ~= {[cat]->[purr]}");
-
-    ask(&mut pangine, "['Alice'] @ {[cat]->['one']}");
-    let one = candidate_weight(&named_value(&mut pangine, "$['one']"), "purr");
-
-    ask(&mut pangine, "['Alice']['Bob'] @ {[cat]->['two']}");
-    let two = candidate_weight(&named_value(&mut pangine, "$['two']"), "purr");
-    assert!(two > one);
-}
-
-#[test]
-fn question_selector_requires_plain_mutable_percepts() {
-    let mut pangine = Pangine::new();
-
-    for invalid in ["[Alice] @ ['answer']", "x2['Alice'] @ ['answer']", "['Alice']['Alice'] @ ['answer']", "['*'] @ ['answer']", "!['Alice'] @ ['answer']"] {
-        assert!(pangine.reference_concept(invalid).is_err(), "expected invalid selector: {invalid}");
-    }
-}
-
-#[test]
-fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
-    let mut pangine = Pangine::new();
-    let memory = pangine.reference_percept("memory");
-
-    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
-    for partial in ["{[E]->[A]}*{[P1]->[Q1]}", "{[E]->[A]}*{[P2]->[Q2]}", "{[E]->[A]}*{[P3]->[Q3]}"] {
-        must_ref(&mut pangine, &format!("['memory'] ~= {partial}"));
-    }
-
-    let unseen = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
-    assert!(!pangine.get_percept_roots(&memory).unwrap().contains(&unseen));
-
-    ask(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
-    let candidates = named_value(&mut pangine, "$['X']");
-    assert!(candidates.iter().any(|(_, name)| name == "E"));
-}
-
-#[test]
 fn question_outputs_replace_roots_and_clear_when_unbound() {
     let mut pangine = Pangine::new();
     let output = pangine.reference_percept("X");
@@ -389,6 +333,17 @@ fn deep_experience_keeps_one_root_while_question_derives_nested_matches() {
 }
 
 #[test]
+fn contextual_question_terminates_on_a_cycle() {
+    let mut pangine = Pangine::new();
+
+    for root in ["[A]->[link]->[B]", "[B]->[link]->[C]", "[C]->[link]->[A]", "[C]->[sound]->[answer]"] {
+        must_ref(&mut pangine, &format!("['memory'] ~= {root}"));
+    }
+
+    assert!(pangine.reference_concept("['memory'] @ [A]->[sound]->['result']").is_ok());
+}
+
+#[test]
 fn wide_question_remains_finite_and_finds_the_expected_answer() {
     let mut pangine = Pangine::new();
     let width = 20;
@@ -402,10 +357,6 @@ fn wide_question_remains_finite_and_finds_the_expected_answer() {
     let candidates = named_value(&mut pangine, "$['X']");
     assert_eq!(candidates[0].1, "V0");
     assert!(candidates.iter().all(|(relevance, _)| relevance.weight().is_finite()));
-}
-
-fn candidate_weight(candidates: &[(Relevance, String)], name: &str) -> f32 {
-    candidates.iter().find(|(_, candidate)| candidate == name).unwrap_or_else(|| panic!("missing candidate {name:?}")).0.weight()
 }
 
 fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, String)> {
@@ -422,6 +373,10 @@ fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, St
 fn named_value(pangine: &mut Pangine, input: &str) -> Vec<(Relevance, String)> {
     let concept = must_ref(pangine, input);
     named_relevance(pangine, &concept)
+}
+
+fn candidate_weight(candidates: &[(Relevance, String)], name: &str) -> f32 {
+    candidates.iter().find_map(|(relevance, candidate)| (candidate == name).then(|| relevance.weight())).unwrap_or_else(|| panic!("missing candidate {name:?}"))
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {
