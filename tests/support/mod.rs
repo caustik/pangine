@@ -123,7 +123,7 @@ impl PangineTest {
 
             let actual = map[0].0;
             assert!(
-                (actual.probability - expected.probability).abs() < 0.0001 && (actual.strength - expected.strength).abs() < 0.0001,
+                (actual.x_coefficient - expected.x_coefficient).abs() < 0.0001,
                 "relevance case {index} failed for {source}: expected {expected:?}, got {actual:?}"
             );
         }

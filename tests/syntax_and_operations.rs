@@ -66,7 +66,7 @@ fn ordered_compositions_are_flat_canonical_and_explicitly_nestable() {
         "[A]->[B]->[C]" => "{[A]->[B]->[C]}",
         "{[a]->[b][c][d]}" => "{[a]->[b][c][d]}",
         "([A][B])->[target]" => "{[A][B]->[target]}",
-        "x2([A][B])->[target]" => "{x2([A][B])->[target]}",
+        "x2([A][B])->[target]" => "{x2[A]x2[B]->[target]}",
         "([A]->[B])->[C]" => "{{[A]->[B]}->[C]}",
         "[A]->([B]->[C])" => "{[A]->{[B]->[C]}}",
     });
@@ -115,11 +115,11 @@ fn greedy_choice_selects_the_greatest_positive_relevance_weight() {
         "['choice'] = x2[tea]x3[coffee]; ^['choice']" => "[coffee]",
         "['single'] = [tea]; ^['single']" => "[tea]",
         "['mixed'] = x2[tea]![coffee]; ^['mixed']" => "[tea]",
-        "['zero-negative'] = 0%[tea]![coffee]; $['zero-negative']" => "![coffee]",
+        "['zero-negative'] = x0[tea]![coffee]; $['zero-negative']" => "![coffee]",
     });
     test.assert_null([
-        "['zero'] = 0%[tea]0%[coffee]; ^['zero']",
-        "['zero-negative'] = 0%[tea]![coffee]; ^['zero-negative']",
+        "['zero'] = x0[tea]x0[coffee]; ^['zero']",
+        "['zero-negative'] = x0[tea]![coffee]; ^['zero-negative']",
         "['negative'] = ![tea]![coffee]; ^['negative']",
     ]);
 }
@@ -162,19 +162,16 @@ fn ordinary_percept_mutation_operators_are_explicit() {
 }
 
 #[test]
-fn percept_addition_preserves_groups_and_merge_flattens() {
+fn percept_addition_and_merge_use_the_same_normalized_union() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
         "['A'] += [A][B]" => "[A][B]",
         "['M'] *= [A][B]" => "[A][B]",
-        "['A'] += [B][C]" => "([A][B])([B][C])",
-        "['M'] *= [B][C]" => "[A]*[B]*[B]*[C]",
+        "['A'] += [B][C]" => "[A][B][B][C]",
+        "['M'] *= [B][C]" => "[A][B][B][C]",
         "['A'] -= [B][C]" => "[A][B]",
         "['M'] /= [B][C]" => "[A][B]",
-    });
-    test.assert_distinct(pairs! {
-        "([A][B])([B][C])" => "[A]*[B]*[B]*[C]",
     });
     test.assert_null(["['A'] -= [A][B]", "['M'] /= [A][B]"]);
 }

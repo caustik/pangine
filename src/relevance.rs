@@ -1,48 +1,37 @@
-/// The probability and signed strength assigned to a concept.
+/// The signed `x` coefficient attached to an unordered member.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Relevance {
-    /// The probability of the concept, normally between zero and one.
-    pub probability: f32,
-    /// The signed amount of evidence supporting the probability.
-    pub strength: f32,
+    /// The signed coefficient written with `x` syntax.
+    pub x_coefficient: f32,
 }
 
 impl Relevance {
-    /// Default relevance: fully probable with one unit of strength.
-    pub const DEFAULT: Self = Self::new(1.0, 1.0);
+    /// The default coefficient used when no prefix is written.
+    pub const DEFAULT: Self = Self::new(1.0);
 
-    /// Creates a relevance value from its probability and signed strength.
-    pub const fn new(probability: f32, strength: f32) -> Self {
-        Self { probability, strength }
+    /// Creates a value from a signed `x` coefficient.
+    pub const fn new(x_coefficient: f32) -> Self {
+        Self { x_coefficient }
     }
 
-    /// Accumulates supporting or opposing relevance.
+    /// Adds another coefficient.
     pub fn add(&mut self, adder: Self) {
-        self.combine(adder, 1.0);
+        self.x_coefficient += adder.x_coefficient;
     }
 
-    /// Removes supporting or opposing relevance.
+    /// Subtracts another coefficient.
     pub fn sub(&mut self, subber: Self) {
-        self.combine(subber, -1.0);
+        self.x_coefficient -= subber.x_coefficient;
     }
 
-    fn combine(&mut self, other: Self, sign: f32) {
-        let x = self.probability * self.strength + sign * other.probability * other.strength;
-        let y = (1.0 - self.probability) * self.strength + sign * (1.0 - other.probability) * other.strength;
-
-        let strength = x.abs() + y.abs();
-        self.strength = if x > 0.0 { strength } else { -strength };
-        self.probability = if self.strength == 0.0 { 0.0 } else { x / self.strength };
-    }
-
-    /// Returns the probability weighted by signed strength.
+    /// Returns the coefficient used by the current deterministic selection rule.
     pub fn weight(self) -> f32 {
-        self.probability * self.strength
+        self.x_coefficient
     }
 
-    /// Returns whether the relevance contributes no weighted evidence.
+    /// Returns whether the coefficient contributes no member.
     pub fn is_empty(self) -> bool {
-        self.probability == 0.0 || self.strength == 0.0
+        self.x_coefficient == 0.0
     }
 }
 

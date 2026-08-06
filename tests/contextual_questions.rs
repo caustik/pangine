@@ -98,15 +98,15 @@ fn a_route_uses_only_the_selected_percepts() {
 }
 
 #[test]
-fn retained_weighted_and_negative_memberships_can_supply_a_route() {
+fn retained_positive_and_negative_memberships_can_supply_a_route() {
     let mut pangine = Pangine::new();
-    experience(&mut pangine, "world", &["[C]50%x2[bridge]", "[bridge]![E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
+    experience(&mut pangine, "world", &["[C]x2[bridge]", "[bridge]![E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
 
     ask(&mut pangine, "['world'] @ [C]->[sound]->['answer']");
     assert_candidates(&mut pangine, "answer", &["loud", "quiet"]);
 
     let mut zero = Pangine::new();
-    experience(&mut zero, "world", &["[C]0%[bridge]", "[bridge][E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
+    experience(&mut zero, "world", &["[C]x0[bridge]", "[bridge][E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]"]);
     ask(&mut zero, "['world'] @ [C]->[sound]->['answer']");
     assert_candidates(&mut zero, "answer", &["quiet"]);
 }

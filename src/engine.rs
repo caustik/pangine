@@ -132,28 +132,28 @@ Commands:
   quit, q        Exit
 
 Concept syntax:
-  []                         Null / no concept
-  [name]                     Named concept
+  []                         Null / no Concept
+  [name]                     Named Concept
   ['name']                   Percept reference
   (expression)               Grouping
   [A][B]                     Union
-  [A]*[B]                    Flattening merge
+  [A]*[B]                    Explicit union merge
   [A]/[B]                    Merge with inverted [B]
   ![A]                       Inversion
   [A]->[B]->[C]              Ordered composition
-  50%x2[A]x3[B]              Relevance
+  x2[A]x3[B]                 Signed coefficients
 
 Percept operations:
   ['name'] = expression      Assign
   ['name'] += expression     Union addition
   ['name'] -= expression     Union subtraction
-  ['name'] *= expression     Flattening merge
+  ['name'] *= expression     Explicit union merge
   ['name'] /= expression     Inverse merge
   ['name'] ~= expression     Experience
   ['source'] @ expression    Ask one Percept; bind outputs in the question
   ['a']['b'] @ expression   Ask several Percepts together
-  $operand                   Recursively evaluate every percept in the operand
-  $['*']                     Inspect all live ordinary concepts
+  $operand                   Recursively evaluate every Percept in the operand
+  $['*']                     Inspect all live ordinary Concepts
 
 Experience:
   ['memory'] ~= {[cat]->[purrs]}
@@ -168,7 +168,7 @@ Scripts:
 
 Choice:
   ^['choice'] evaluates the percept and greedily returns the entry with the
-  greatest positive relevance weight.
+  greatest positive current weight.
 
   ['choice'] = x2[tea]x3[coffee]
   ^['choice']             returns [coffee]
@@ -176,7 +176,7 @@ Choice:
   Exact top-weight ties use the earliest canonical Concept spelling. If no
   entry has positive weight, ^ returns []. Zero-weight entries disappear when
   their Concept is built and are not decision candidates. This is a
-  deterministic greedy rule, not a probability model or a random sampler.
+  deterministic baseline rule. Richer sampling behavior remains open.
 ";
 
 /// The result of parsing or executing Pangine syntax.
@@ -277,7 +277,7 @@ pub enum ConceptKind {
         /// The percept name.
         name: String,
     },
-    /// An unordered composition whose member edges carry Relevance.
+    /// An unordered composition whose member edges carry signed `x` coefficients.
     Unordered,
     /// An ordered composition whose component occurrences retain their positions.
     Ordered {
@@ -478,7 +478,7 @@ impl Pangine {
         value
     }
 
-    /// Flattens `merge` into a mutable percept and returns its updated value.
+    /// Explicitly merges `merge` into a mutable percept and returns its updated value.
     pub fn perform_merge(&mut self, percept: &ConceptId, merge: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, merge) {
             return None;
@@ -489,7 +489,7 @@ impl Pangine {
         value
     }
 
-    /// Flattens the inverse of `merge` into a mutable percept and returns its updated value.
+    /// Explicitly merges the inverse of `merge` into a mutable percept and returns its updated value.
     pub fn perform_inverse_merge(&mut self, percept: &ConceptId, merge: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, merge) {
             return None;
@@ -589,15 +589,15 @@ impl Pangine {
         self.is_percept(concept).then(|| concept.clone())
     }
 
-    /// Returns relevance entries ordered by descending weight and Concept identity.
+    /// Returns entries ordered by descending `x`, then canonical Concept order.
     ///
     /// An unordered composition returns its member edges. Any other Concept is
-    /// treated as a single default-relevance entry.
+    /// treated as a single default-coefficient entry.
     pub fn get_relevance_map(&self, concept: &ConceptId) -> Vec<(Relevance, ConceptId)> {
         let mut map = self.relevance_entries(concept).unwrap_or_default();
 
         map.sort_by(|(left_rel, left_concept), (right_rel, right_concept)| {
-            compare_relevance_desc(*left_rel, *right_rel).then_with(|| left_concept.cmp(right_concept))
+            compare_coefficients_desc(*left_rel, *right_rel).then_with(|| self.compare_concepts(left_concept, right_concept))
         });
         map
     }
@@ -609,10 +609,11 @@ impl Pangine {
     pub fn debug_console_lines(&self, concept: Option<&ConceptId>) -> Vec<String> {
         // Historical anchor:
         // 1.x/pangine/src/pangine/common/pae_pangine.cpp:1311
-        let Some(entries) = concept.and_then(|concept| self.relevance_entries(concept)) else {
+        let Some(concept) = concept.filter(|concept| self.owns(concept)) else {
             return vec!["  []".to_owned()];
         };
 
+        let entries = self.get_relevance_map(concept);
         entries.into_iter().map(|(relevance, concept)| self.format_debug_console_line(relevance, &concept)).collect()
     }
 
@@ -790,14 +791,11 @@ impl Pangine {
     fn parse_union_operand(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.skip_ws();
 
-        let relevance_start = parser.pos;
-        let probability = parser.parse_probability();
-        let strength = if parser.consume('x') { parser.parse_float() } else { 1.0 };
-
-        if parser.pos != relevance_start {
+        if parser.consume('x') {
+            let x_coefficient = parser.parse_float();
             let term = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
             let mut map = ConceptMap::new();
-            self.add_union_concept(&mut map, term, false, Relevance::new(probability, strength));
+            self.add_union_concept(&mut map, term, false, Relevance::new(x_coefficient));
             return Ok(self.reference_map(&map));
         }
 
@@ -959,6 +957,10 @@ impl Pangine {
     }
 
     fn reference_union(&mut self, concepts: &[ConceptId]) -> Option<ConceptId> {
+        if concepts.len() == 1 {
+            return concepts.first().cloned();
+        }
+
         let mut map = ConceptMap::new();
 
         for concept in concepts.iter().cloned() {
@@ -971,7 +973,7 @@ impl Pangine {
     fn experience_value_map(&mut self, roots: &ExperienceRoots) -> ConceptMap {
         let mut map = ConceptMap::new();
         for (root, &count) in roots {
-            self.add_union_concept(&mut map, root.clone(), false, Relevance::new(1.0, count as f32));
+            self.add_union_concept(&mut map, root.clone(), false, Relevance::new(count as f32));
         }
         map
     }
@@ -986,7 +988,7 @@ impl Pangine {
             return None;
         }
 
-        // 3.x returns a sole default-relevance concept directly before interning:
+        // 3.x returns a sole default-coefficient Concept directly before interning:
         // 3.x/pangine/src/libpangine/common/pae_pangine.cpp:314-328
         if let Some(concept) = Self::sole_default_concept(map) {
             return Some(concept.clone());
@@ -1213,19 +1215,6 @@ impl Pangine {
             self.prune_indexes();
         }
     }
-
-    fn same_subconcepts_ignoring_relevance(concept: &ConceptId, map: &ConceptMap) -> bool {
-        if map.is_empty() {
-            return false;
-        }
-
-        if Self::sole_default_concept(map) == Some(concept) {
-            return true;
-        }
-
-        let subconcepts = &concept.0.subconcepts;
-        map.len() == subconcepts.len() && map.keys().all(|concept| subconcepts.contains_key(concept))
-    }
 }
 
 // Percept updates and recursive evaluation.
@@ -1299,7 +1288,7 @@ impl Pangine {
     }
 
     fn preserve_unordered_entry_boundary(&mut self, map: &ConceptMap, value: Option<ConceptId>) -> Option<ConceptId> {
-        // Normalization ordinarily collapses a sole default-relevance member.
+        // Normalization ordinarily collapses a sole default-coefficient member.
         // Preserve this boundary when that member is itself unordered so ^
         // chooses the complete member instead of choosing one of its parts.
         if let Some(concept) = Self::sole_default_concept(map) {
@@ -1433,9 +1422,10 @@ impl Pangine {
                 for (child, relevance) in children {
                     // reference_map returns a sole default member directly.
                     // Avoid global interner cleanup for that common case.
-                    let weighted = if relevance == Relevance::DEFAULT { Some(child) } else { self.reference_map(&ConceptMap::from([(child, relevance)])) };
-                    if let Some(weighted) = weighted {
-                        self.add_question_experience_rec(source, &weighted, ordered_widths, experience_shapes, visited, experiences);
+                    let coefficient_concept =
+                        if relevance == Relevance::DEFAULT { Some(child) } else { self.reference_map(&ConceptMap::from([(child, relevance)])) };
+                    if let Some(coefficient_concept) = coefficient_concept {
+                        self.add_question_experience_rec(source, &coefficient_concept, ordered_widths, experience_shapes, visited, experiences);
                     }
                 }
             }
@@ -1603,10 +1593,10 @@ impl Pangine {
         for output in output_percepts {
             let mut candidates = ConceptMap::new();
             for (candidate, candidate_witnesses) in witnesses.remove(&output).unwrap_or_default() {
-                // Question strength is a support count for deterministic
-                // choice, not a calibrated probability.
+                // The output x coefficient is a support count for deterministic
+                // choice, not a wider judgment about the candidate.
                 let support = candidate_witnesses.iter().map(|source| u128::from(source.occurrences)).sum::<u128>();
-                self.add_relevance(&mut candidates, candidate, false, Relevance::new(1.0, support as f32));
+                self.add_relevance(&mut candidates, candidate, false, Relevance::new(support as f32));
             }
             let value = self.reference_map(&candidates);
             results.insert(output, self.preserve_unordered_entry_boundary(&candidates, value));
@@ -1800,7 +1790,7 @@ impl Pangine {
     }
 
     // Unequal unions currently bind one direct output to the complete remainder
-    // left by an exact, default-relevance subset. Relevance-aware and partial
+    // left by an exact, default-coefficient subset. Coefficient-bearing and partial
     // subset matching remain open questions.
     fn unordered_remainder_assignment(&mut self, experience: &ConceptId, question: &ConceptId) -> Option<ProjectionAssignment> {
         if experience.0.shape() != ConceptShape::Unordered || question.0.shape() != ConceptShape::Unordered {
@@ -1810,8 +1800,8 @@ impl Pangine {
         let experiences = experience.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
         let questions = question.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
         if experiences.len() <= questions.len()
-            || Self::has_non_default_relevance(experience, &mut BTreeSet::new())
-            || Self::has_non_default_relevance(question, &mut BTreeSet::new())
+            || Self::has_non_default_coefficients(experience, &mut BTreeSet::new())
+            || Self::has_non_default_coefficients(question, &mut BTreeSet::new())
         {
             return None;
         }
@@ -1836,13 +1826,13 @@ impl Pangine {
         Some(ProjectionAssignment::from([(output.clone(), remainder)]))
     }
 
-    fn has_non_default_relevance(concept: &ConceptId, visited: &mut BTreeSet<ConceptId>) -> bool {
+    fn has_non_default_coefficients(concept: &ConceptId, visited: &mut BTreeSet<ConceptId>) -> bool {
         if !visited.insert(concept.clone()) {
             return false;
         }
 
         concept.0.subconcepts.values().any(|&relevance| relevance != Relevance::DEFAULT)
-            || concept.0.children().any(|(child, _)| Self::has_non_default_relevance(child, visited))
+            || concept.0.children().any(|(child, _)| Self::has_non_default_coefficients(child, visited))
     }
 
     fn unordered_projection_assignments(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> ProjectionAssignments {
@@ -1890,89 +1880,35 @@ impl Pangine {
 // Relevance accumulation and structural access.
 impl Pangine {
     fn add_merge_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
+        self.add_union_concept(map, concept, inversion, relevance);
+    }
+
+    fn add_union_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
         let subconcepts = concept.0.subconcepts.clone();
         if matches!(concept.0.kind, ConceptKind::Unordered) {
             for (child, child_relevance) in subconcepts {
                 self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance));
             }
         } else {
-            self.add_union_concept(map, concept, inversion, relevance);
-        }
-    }
-
-    fn add_union_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
-        let subconcepts = concept.0.subconcepts.clone();
-        if matches!(concept.0.kind, ConceptKind::Unordered) && subconcepts.len() == 1 {
-            let (child, child_relevance) = subconcepts.into_iter().next().unwrap();
-            self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance));
-        } else {
             self.add_relevance(map, concept, inversion, relevance);
-        }
-    }
-
-    fn add_relevance_map(&mut self, target: &mut ConceptMap, source: ConceptMap, relevance: Relevance) {
-        for (concept, source_relevance) in source {
-            let mut current = relevance;
-            current.probability = source_relevance.probability;
-            current.strength *= source_relevance.strength;
-            self.add_relevance(target, concept, false, current);
         }
     }
 
     fn add_relevance(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, mut relevance: Relevance) {
         if inversion {
-            relevance.strength = -relevance.strength;
+            relevance.x_coefficient = -relevance.x_coefficient;
         }
 
-        let concept_subconcepts = concept.0.subconcepts.clone();
-        let found = if map.contains_key(&concept) {
-            Some((concept.clone(), false))
-        } else if matches!(concept.0.kind, ConceptKind::Unordered) {
-            map.keys()
-                .find(|candidate| {
-                    matches!(candidate.0.kind, ConceptKind::Unordered) && Self::same_subconcepts_ignoring_relevance(candidate, &concept_subconcepts)
-                })
-                .cloned()
-                .map(|candidate| (candidate, true))
-        } else {
-            None
-        };
-
-        match found {
-            None => {
-                if !relevance.is_empty() {
-                    map.insert(concept, relevance);
-                }
+        if map.contains_key(&concept) {
+            let mut current = map[&concept];
+            current.add(relevance);
+            if current.is_empty() {
+                map.remove(&concept);
+            } else {
+                map.insert(concept, current);
             }
-            Some((existing, true)) => {
-                let existing_relevance = map[&existing];
-                let mut new_map = existing
-                    .0
-                    .subconcepts
-                    .iter()
-                    .map(|(concept, &relevance)| {
-                        let mut relevance = relevance;
-                        relevance.strength *= existing_relevance.strength;
-                        (concept.clone(), relevance)
-                    })
-                    .collect::<ConceptMap>();
-
-                map.remove(&existing);
-                self.add_relevance_map(&mut new_map, concept_subconcepts, Relevance::DEFAULT);
-
-                if let Some(result) = self.reference_map(&new_map) {
-                    self.add_relevance(map, result, inversion, relevance);
-                }
-            }
-            Some((existing, false)) => {
-                let mut current = map[&existing];
-                current.add(relevance);
-                if current.is_empty() {
-                    map.remove(&existing);
-                } else {
-                    map.insert(existing, current);
-                }
-            }
+        } else if !relevance.is_empty() {
+            map.insert(concept, relevance);
         }
     }
 
@@ -2057,7 +1993,7 @@ impl Pangine {
         let mut entries: Vec<_> = map.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect();
 
         entries.sort_by(|(left_concept, left_relevance), (right_concept, right_relevance)| {
-            compare_canonical_relevance_desc(*left_relevance, *right_relevance).then_with(|| self.compare_concepts(left_concept, right_concept))
+            compare_canonical_coefficients_desc(*left_relevance, *right_relevance).then_with(|| self.compare_concepts(left_concept, right_concept))
         });
         entries
     }
@@ -2105,7 +2041,7 @@ impl Pangine {
         for ((left_concept, left_relevance), (right_concept, right_relevance)) in
             self.canonical_entries(left_subconcepts).into_iter().zip(self.canonical_entries(right_subconcepts))
         {
-            let order = compare_canonical_relevance_desc(left_relevance, right_relevance);
+            let order = compare_canonical_coefficients_desc(left_relevance, right_relevance);
             if order != Ordering::Equal {
                 return order;
             }
@@ -2141,11 +2077,7 @@ impl Pangine {
         let mut out = String::new();
 
         for (concept, relevance) in self.canonical_entries(map) {
-            if relevance.probability != 1.0 {
-                out.push_str(&format_relevance_probability(relevance));
-            }
-
-            out.push_str(&format_relevance_strength(relevance));
+            out.push_str(&format_x_coefficient(relevance));
             let wrap_concept = matches!(concept.0.kind, ConceptKind::Unordered);
             if wrap_concept {
                 out.push('(');
@@ -2161,18 +2093,14 @@ impl Pangine {
 
     fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId) -> String {
         let mut out = String::from("  ");
-        let add_separator = relevance.probability != 1.0 || (relevance.strength != 1.0 && relevance.strength != -1.0);
+        let add_separator = relevance.x_coefficient != 1.0 && relevance.x_coefficient != -1.0;
 
-        if relevance.strength == -1.0 {
+        if relevance.x_coefficient == -1.0 {
             out.push('!');
         }
 
-        if relevance.probability != 1.0 {
-            out.push_str(&format_relevance_probability(relevance));
-        }
-
-        if relevance.strength != 1.0 && relevance.strength != -1.0 {
-            out.push_str(&format_relevance_strength(relevance));
+        if relevance.x_coefficient != 1.0 && relevance.x_coefficient != -1.0 {
+            out.push_str(&format_x_coefficient(relevance));
         }
 
         if add_separator {
@@ -2279,32 +2207,12 @@ impl Parser {
         self.chars[start..self.pos].iter().collect()
     }
 
-    fn parse_probability(&mut self) -> f32 {
-        let start = self.pos;
-        if let Some(value) = self.parse_number() {
-            if self.consume('%') {
-                return value / 100.0;
-            }
-        }
-
-        self.pos = start;
-        1.0
-    }
-
     fn parse_float(&mut self) -> f32 {
         self.parse_number().unwrap_or(0.0)
     }
 
     fn starts_union_operand(&mut self) -> bool {
-        if self.peek().is_some_and(|c| matches!(c, '(' | '[' | '{' | '$' | '^' | '!' | 'x')) {
-            return true;
-        }
-
-        let start = self.pos;
-        self.parse_probability();
-        let starts = self.pos != start;
-        self.pos = start;
-        starts
+        self.peek().is_some_and(|c| matches!(c, '(' | '[' | '{' | '$' | '^' | '!' | 'x'))
     }
 
     fn parse_number(&mut self) -> Option<f32> {
@@ -2439,38 +2347,30 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
 }
 
 fn multiply_relevance(left: Relevance, right: Relevance) -> Relevance {
-    Relevance::new(left.probability * right.probability, left.strength * right.strength)
+    Relevance::new(left.x_coefficient * right.x_coefficient)
 }
 
-fn compare_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
+fn compare_coefficients_desc(left: Relevance, right: Relevance) -> Ordering {
+    right.x_coefficient.partial_cmp(&left.x_coefficient).unwrap_or(Ordering::Equal)
+}
+
+fn compare_canonical_coefficients_desc(left: Relevance, right: Relevance) -> Ordering {
+    // Canonical text groups larger magnitudes first while retaining the sign
+    // as a deterministic tie-breaker.
     right
-        .probability
-        .partial_cmp(&left.probability)
+        .x_coefficient
+        .abs()
+        .partial_cmp(&left.x_coefficient.abs())
         .unwrap_or(Ordering::Equal)
-        .then_with(|| right.strength.partial_cmp(&left.strength).unwrap_or(Ordering::Equal))
+        .then_with(|| right.x_coefficient.partial_cmp(&left.x_coefficient).unwrap_or(Ordering::Equal))
 }
 
-fn compare_canonical_relevance_desc(left: Relevance, right: Relevance) -> Ordering {
-    // Preserve the public 1.x/2.x relevance-map ordering above while using
-    // 3.x-style magnitude ordering for canonical text output.
-    right
-        .probability
-        .partial_cmp(&left.probability)
-        .unwrap_or(Ordering::Equal)
-        .then_with(|| right.strength.abs().partial_cmp(&left.strength.abs()).unwrap_or(Ordering::Equal))
-        .then_with(|| right.strength.partial_cmp(&left.strength).unwrap_or(Ordering::Equal))
-}
-
-fn format_relevance_strength(relevance: Relevance) -> String {
-    match relevance.strength {
+fn format_x_coefficient(relevance: Relevance) -> String {
+    match relevance.x_coefficient {
         1.0 => String::new(),
         -1.0 => "!".to_owned(),
-        strength => format!("x{}", format_float(strength)),
+        x_coefficient => format!("x{}", format_float(x_coefficient)),
     }
-}
-
-fn format_relevance_probability(relevance: Relevance) -> String {
-    format!("{}%", format_float(relevance.probability * 100.0))
 }
 
 fn format_float(value: f32) -> String {
@@ -2516,11 +2416,11 @@ mod tests {
         for expected in [
             "[]                         Null",
             "[A]/[B]",
-            "50%x2[A]x3[B]              Relevance",
+            "x2[A]x3[B]                 Signed coefficients",
             "['name'] ~= expression     Experience",
             "['source'] @ expression    Ask one Percept",
             "['a']['b'] @ expression   Ask several Percepts together",
-            "$['*']                     Inspect all live ordinary concepts",
+            "$['*']                     Inspect all live ordinary Concepts",
             "increments its occurrence count",
             "^['choice']",
         ] {
@@ -2554,11 +2454,11 @@ mod tests {
     }
 
     #[test]
-    fn composite_lookup_treats_signed_zero_relevance_as_equal() {
+    fn composite_lookup_treats_signed_zero_coefficients_as_equal() {
         let mut pangine = Pangine::new();
         let member = pangine.reference_named("member").unwrap();
-        let positive_zero = ConceptMap::from([(member.clone(), Relevance::new(0.0, 1.0))]);
-        let negative_zero = ConceptMap::from([(member, Relevance::new(-0.0, 1.0))]);
+        let positive_zero = ConceptMap::from([(member.clone(), Relevance::new(0.0))]);
+        let negative_zero = ConceptMap::from([(member, Relevance::new(-0.0))]);
 
         assert_eq!(positive_zero, negative_zero);
         assert_eq!(
@@ -2577,8 +2477,8 @@ mod tests {
         let atomic = pangine.reference_concept("[A]").unwrap().unwrap();
         let inverse = pangine.reference_concept("![A]").unwrap().unwrap();
         let pair = pangine.reference_concept("[A][B]").unwrap().unwrap();
-        let weighted_pair = pangine.reference_concept("x2[A][B]").unwrap().unwrap();
-        let sequence = [weighted_pair.clone(), atomic, pair, inverse, weighted_pair];
+        let coefficient_pair = pangine.reference_concept("x2[A][B]").unwrap().unwrap();
+        let sequence = [coefficient_pair.clone(), atomic, pair, inverse, coefficient_pair];
 
         for (step, root) in sequence.into_iter().enumerate() {
             let root_text = pangine.format_concept(&root, false);
@@ -2636,15 +2536,9 @@ mod tests {
     #[test]
     fn question_snapshot_drops_only_work_the_question_cannot_use() {
         let mut pangine = Pangine::new();
-        for root in [
-            "[C]->[bridge]->[E]",
-            "[C]->[sound]->[quiet]",
-            "[E]->[sound]->[loud]",
-            "[C]*[sound]*[calm]",
-            "[C]50%x2[bridge]",
-            "[bridge]![E]",
-            "{[C]->{[A]->[Z]}}",
-        ] {
+        for root in
+            ["[C]->[bridge]->[E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]", "[C]*[sound]*[calm]", "[C]x2[bridge]", "[bridge]![E]", "{[C]->{[A]->[Z]}}"]
+        {
             let command = format!("['world'] ~= {root}");
             assert!(pangine.reference_concept(&command).unwrap().is_some());
         }

@@ -3,14 +3,14 @@ use pangine::{ConceptId, Pangine, Relevance};
 #[test]
 fn repeated_experiences_produce_exact_support_counts_without_event_ids() {
     let mut pangine = Pangine::new();
-    let birds = "[morning]*[birds]";
+    let birds = "[morning][birds]";
     experience(&mut pangine, "world", birds);
     experience(&mut pangine, "world", birds);
-    experience(&mut pangine, "world", "[morning]*[traffic]");
+    experience(&mut pangine, "world", "[morning][traffic]");
 
-    ask(&mut pangine, "['world'] @ [morning]*['answer']");
+    ask(&mut pangine, "['world'] @ [morning]['answer']");
 
-    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(1.0, 2.0)));
+    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(2.0)));
     assert_eq!(candidate_relevance(&mut pangine, "answer", "traffic"), Some(Relevance::DEFAULT));
     assert_eq!(must_ref(&mut pangine, "^['answer']"), must_ref(&mut pangine, "[birds]"));
 }
@@ -18,9 +18,9 @@ fn repeated_experiences_produce_exact_support_counts_without_event_ids() {
 #[test]
 fn one_experience_contributes_once_through_recursive_views() {
     let mut pangine = Pangine::new();
-    experience(&mut pangine, "world", "([morning]*[birds])[archived]");
+    experience(&mut pangine, "world", "{([morning][birds])->[archived]}");
 
-    ask(&mut pangine, "['world'] @ [morning]*['answer']");
+    ask(&mut pangine, "['world'] @ [morning]['answer']");
 
     assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::DEFAULT));
 }
@@ -28,7 +28,7 @@ fn one_experience_contributes_once_through_recursive_views() {
 #[test]
 fn one_experience_contributes_once_across_distinct_complete_bindings() {
     let mut pangine = Pangine::new();
-    experience(&mut pangine, "world", "{[sample-a]->[sound]->[birds]}*{[sample-b]->[sound]->[birds]}");
+    experience(&mut pangine, "world", "({[sample-a]->[sound]->[birds]})({[sample-b]->[sound]->[birds]})");
 
     ask(&mut pangine, "['world'] @ {['sample']->[sound]->['answer']}");
 
@@ -38,13 +38,13 @@ fn one_experience_contributes_once_across_distinct_complete_bindings() {
 #[test]
 fn separate_exact_roots_are_separate_experiences_without_event_ids() {
     let mut pangine = Pangine::new();
-    let event = "[morning]*[birds]";
+    let event = "[morning][birds]";
     experience(&mut pangine, "world", event);
-    experience(&mut pangine, "world", &format!("({event})[archived]"));
+    experience(&mut pangine, "world", &format!("{{({event})->[archived]}}"));
 
-    ask(&mut pangine, "['world'] @ [morning]*['answer']");
+    ask(&mut pangine, "['world'] @ [morning]['answer']");
 
-    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(1.0, 2.0)));
+    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(2.0)));
 }
 
 #[test]
@@ -56,17 +56,17 @@ fn selected_percepts_and_root_occurrences_both_supply_support() {
 
     ask(&mut pangine, "['Alice']['Bob'] @ {[C]->[sound]->['answer']}");
 
-    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(1.0, 3.0)));
+    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(3.0)));
 }
 
 #[test]
 fn one_composite_answer_remains_one_decision_candidate_without_fake_support() {
     let mut pangine = Pangine::new();
-    experience(&mut pangine, "memory", "[A]*[B]*[C]");
+    experience(&mut pangine, "memory", "[A][B][C]");
 
-    ask(&mut pangine, "['memory'] @ ['remainder']*[B]");
+    ask(&mut pangine, "['memory'] @ ['remainder'][B]");
 
-    assert_eq!(must_ref(&mut pangine, "^['remainder']"), must_ref(&mut pangine, "[A]*[C]"));
+    assert_eq!(must_ref(&mut pangine, "^['remainder']"), must_ref(&mut pangine, "[A][C]"));
 }
 
 fn experience(pangine: &mut Pangine, percept: &str, root: &str) {

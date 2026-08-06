@@ -46,45 +46,59 @@ command> [cat][cat][dog]
   [dog]
 ```
 
-Repeating the same unordered member increases its retained strength. Canonical output shortens two copies to `x2`.
+Repeating the same unordered member increases its retained multiplicity. Canonical output shortens two copies to `x2`.
 
-Parentheses group an expression but do not create another kind of Concept. Adjacency can retain a complete group as one operand, while `*` flattens before merging:
+Parentheses decide what the grammar applies together, but they do not leave an unordered Concept hidden inside another unordered Concept. Pangine opens directly nested unions and combines equal members, so these three inputs are the same Concept:
 
 ```text
+command> [A][B][A][B]
+  x2 [A]
+  x2 [B]
 command> ([A][B])([A][B])
-  x2 [A][B]
+  x2 [A]
+  x2 [B]
 command> ([A][B])*([A][B])
   x2 [A]
   x2 [B]
 ```
 
-`/` is the inverse form of the flattening merge:
+`*` currently reaches the same unordered normal form as adjacency. It remains accepted syntax while I audit whether it has an independent job left.
+
+A different surrounding Concept kind still retains the union as one position:
+
+```text
+command> ([A][B])->[C]
+  {[A][B]->[C]}
+```
+
+`/` is the inverse form of the union merge:
 
 ```text
 command> ([A][B])/([A][C])
   [B]
   ![C]
-command> [cat]*![cat]
+command> [cat]![cat]
   []
 ```
 
 The positive and inverted copies of `A` cancel. Inversion is part of Concept composition. Pangine does not automatically interpret it as natural-language negation.
 
-### Attach relevance
+### Write multiplicity explicitly
 
-Relevance coefficients prefix the next union operand:
+The `x` prefix is the explicit form of repeated union membership:
 
 ```text
-command> 50%x2[cat]x3[dog]
-  50%x2 [cat]
+command> x2[cat]x3[dog]
   x3 [dog]
+  x2 [cat]
 command> x2([cat][dog])
-  x2 [cat][dog]
+  x2 [cat]
+  x2 [dog]
 ```
 
-`50%` is the probability component and `x2` is the strength component attached to `cat`. `x3` applies separately to `dog`. Parentheses let one coefficient apply to a complete group.
+`x2[cat]` is the same Concept as `[cat][cat]`. The prefix applies to the next union operand, so `x3` applies separately to `dog`. Parentheses make the outer `x2` apply to the complete input group, then unordered normalization multiplies it into each member. Inversion is the negative form: `x-1[cat]` formats as `![cat]`.
 
-These values currently participate in deterministic composition and selection. Question answers use the experience-backed support rule explained below instead of treating these coefficients as evidence. They are not calibrated probabilities or confidence claims, and the richer relevance model is still open work.
+Experience retains exact roots and occurrence counts rather than continuously updating a probability attached to a Concept. Any richer calculation from that accumulated evidence belongs at decision time. The current `^` implementation only supplies the simple positive-support baseline explained below.
 
 ### Put Concepts in order
 
@@ -189,11 +203,11 @@ command> $['what']
   [cat]
 ```
 
-`cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part root remains available as context for later relevance work.
+`cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part root remains available as context for later questions.
 
 ### Let represented context widen an answer
 
-A fresh console keeps this example separate from the earlier Alice and Bob state:
+The next commands add a separate source without changing the earlier Alice and Bob roots:
 
 ```text
 command> ['Room'] ~= [kitchen]->[connected-to]->[living-room]
@@ -223,17 +237,19 @@ This does not mean Pangine has decided that `music` is the right answer. It mean
 Every `~=` command already represents one experience. If the same thing is experienced twice, I can simply say it twice:
 
 ```text
-command> ['world'] ~= [morning]*[birds]
-  [morning]
+command> ['world'] ~= [morning][birds]
   [birds]
-command> ['world'] ~= [morning]*[birds]
-  x2 [birds][morning]
-command> ['world'] ~= [morning]*[traffic]
-  x2 [birds][morning]
-  [morning][traffic]
-command> ['world'] @ [morning]*['answer']
   [morning]
+command> ['world'] ~= [morning][birds]
+  x2 [birds]
+  x2 [morning]
+command> ['world'] ~= [morning][traffic]
+  x3 [morning]
+  x2 [birds]
+  [traffic]
+command> ['world'] @ [morning]['answer']
   ['answer']
+  [morning]
 command> $['answer']
   x2 [birds]
   [traffic]
@@ -245,7 +261,7 @@ The complete root is the implicit experience boundary. The first two commands th
 
 The selected Percept and exact root stay attached to each match. Repeating one exact root increases its stored count. Two unequal roots under the same Percept are two experiences, and equal roots under `Alice` and `Bob` are also separate source contributions. Finding the same answer several times inside one exact root, including through its recursive pieces or context routes, still uses that root only once.
 
-`x2` is a count of supporting experience occurrences. It is useful to the current `^` choice, but it is not a claim that birds are twice as true or have a two-thirds real-world probability. A richer interpretation still needs explicit input describing reliability, dependence, and counterevidence.
+The `x2` on the answer is a count of supporting experience occurrences. It is useful to the current `^` choice, but it is not a general truth score. Any richer interpretation still needs ordinary Pangine input that justifies it.
 
 ### Ask several sources together
 
@@ -255,8 +271,8 @@ Writing several plain Percepts on the left of `@` selects all of them:
 command> ['Alice']['Bob'] @ {[cat]->['shared-sound']}
   {[cat]->['shared-sound']}
 command> $['shared-sound']
-  [purrs]
   [meows]
+  [purrs]
 command> ^['shared-sound']
   [meows]
 ```
@@ -343,8 +359,8 @@ Asking both sources retains the two exact answers. The unrelated lint root does 
 command> ['Maintainer']['Legacy-note'] @ {[full-test]->['route']}
   {[full-test]->['route']}
 command> $['route']
-  [cli-runner]
   [cargo]
+  [cli-runner]
 command> ^['route']
   [cargo]
 ```
@@ -366,9 +382,9 @@ Pangine answers from the selected Percept roots. The source names remain opaque,
 
 ### What this walkthrough does not settle
 
-This walkthrough covers the current console surface: canonical composition, relevance, Percept state, exact-root experience, direct and contextual questions, one-source and multi-source selection, shared output identity, decision, scripts, and inspection.
+This walkthrough covers the current console surface: canonical composition, explicit multiplicity, Percept state, exact-root experience, direct and contextual questions, one-source and multi-source selection, shared output identity, decision, scripts, and inspection.
 
-It does not establish calibrated probabilities, automatic conflict resolution, persistence, authorization, a numeric or temporal domain grammar, richer sampler behavior, or a production revision API.
+It does not establish how a later decision rule should turn accumulated evidence into probabilities or other preferences. Persistence, distributed execution, numeric or temporal domain grammar, and richer sampling behavior also remain open.
 
 ## Why I built Pangine
 
@@ -376,7 +392,7 @@ I originally came up with Pangine by writing down pieces of information in a sem
 
 Concepts have canonical forms and can be composed without giving their names a built-in ontology. A Percept retains exact complete roots. A question can use both those roots and the recursive structure inside them without turning experience into a separate kind of Concept.
 
-The larger question is whether this can become an inference system in its own right. The deterministic `^` rule gives Pangine a stable baseline for choosing among weighted possibilities. A future sampler could provide richer candidate selection, but that does not require an LLM to generate or translate Pangine.
+The larger question is whether this can become an inference system in its own right. Experience now accumulates exact roots and counts without trying to keep a running probability on every Concept. The deterministic `^` rule gives Pangine a stable baseline for choosing among answer candidates. A richer rule can eventually calculate from the available evidence at that point without changing what experience stored.
 
 ## Scaling direction
 
@@ -388,7 +404,7 @@ An operating server may keep a densely connected in-memory representation or a d
 
 Question evaluation snapshots the selected exact roots and their counts before writing any outputs. It derives only the recursive match views needed by the current question and builds disposable in-memory connections from the retained Concept structure. A finite search can then discover an indirect ordered answer without making that temporary structure authoritative or storing it as another kind of experience. Cycles terminate, and several matcher routes through one root do not multiply its count.
 
-This first production implementation rebuilds those connections from the selected roots for each question. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Efficient caching, partitioned execution, and the final relevance model remain active research areas.
+This first production implementation rebuilds those connections from the selected roots for each question. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Efficient caching, partitioned execution, and richer answer scoring remain active research areas.
 
 ## Current status
 
@@ -400,13 +416,13 @@ The current implementation is written in Rust. It includes:
 - Counted experience occurrences over unique exact Percept roots
 - One-source and unparenthesized multi-source question selection
 - Lazy exact recursive matching with explicit Percept wildcards and shared repeated-output bindings
-- Source-backed contextual candidate discovery for ordered questions across nested, ordered, unordered, weighted, negative, cyclic, and multi-source Concept structure
+- Source-backed contextual candidate discovery for ordered questions across nested, ordered, unordered, inverted, cyclic, and multi-source Concept structure
 - Exact-root-backed question scoring with recursive and contextual route deduplication
 - Deterministic positive-weight greedy choice with canonical tie handling
 - `$['*']` global inspection
 - An interactive console, focused regression tests, and a browser-local WebAssembly workbench
 
-Context changes which candidates Pangine can find, and supporting experience occurrences can now change which candidate wins. Graph shape alone still does not create a preference. A richer relevance model, decision and sampling semantics, scalable retrieval, persistence, distributed execution, and general-purpose application bindings are still open work. Pangine does not currently include llama.cpp or another external sampler, a vector database, or a Python package.
+Context changes which candidates Pangine can find, and supporting experience occurrences can now change which candidate wins. Graph shape alone still does not create a preference. A richer decision-time calculation from accumulated evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and general-purpose application bindings are still open work.
 
 To run the complete verification suite:
 
@@ -424,15 +440,15 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 | `['memory']` | Named Percept reference |
 | `(expression)` | Grouping |
 | `[A][B]` | Union |
-| `[A]*[B]` | Flattening merge |
+| `[A]*[B]` | Explicit union merge; currently the same normal form as adjacency |
 | `[A]/[B]` | Merge with an inverted right operand |
 | `![A]` | Inversion |
 | `[A]->[B]->[C]` | One flat ordered composition; canonical output includes braces |
-| `50%x2[A]` | Probability and strength relevance on the next operand |
+| `x2[A]` | Two copies of the next union operand; `x-1[A]` formats as `![A]` |
 | `['memory'] = expression` | Replace a Percept with zero or one root |
 | `['memory'] += expression` | Add to the materialized value, then retain one result root |
 | `['memory'] -= expression` | Subtract from the materialized value, then retain one result root |
-| `['memory'] *= expression` | Flattening merge, then retain one result root |
+| `['memory'] *= expression` | Explicit union merge, then retain one result root; currently the same normal form as `+=` |
 | `['memory'] /= expression` | Inverse merge, then retain one result root |
 | `['memory'] ~= expression` | Record one experience of an exact complete root |
 | `['memory'] @ expression` | Ask one source and bind output Percepts |

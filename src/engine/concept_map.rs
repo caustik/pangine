@@ -188,8 +188,7 @@ impl IntoIterator for ConceptMap {
 fn entry_fingerprint(concept: &ConceptId, relevance: Relevance) -> u64 {
     let mut hasher = DefaultHasher::new();
     concept.hash(&mut hasher);
-    hash_float(relevance.probability, &mut hasher);
-    hash_float(relevance.strength, &mut hasher);
+    hash_float(relevance.x_coefficient, &mut hasher);
     hasher.finish()
 }
 
@@ -214,7 +213,7 @@ mod tests {
         let first = pangine.reference_named("first").unwrap();
         let second = pangine.reference_named("second").unwrap();
         let third = pangine.reference_named("third").unwrap();
-        let entries = [(first, Relevance::DEFAULT), (second, Relevance::new(0.5, 2.0)), (third, Relevance::new(0.25, -3.0))];
+        let entries = [(first, Relevance::DEFAULT), (second, Relevance::new(2.0)), (third, Relevance::new(-3.0))];
 
         let forward = ConceptMap::from(entries.clone());
         let reversed = ConceptMap::from([entries[2].clone(), entries[1].clone(), entries[0].clone()]);
@@ -222,7 +221,7 @@ mod tests {
         assert_eq!(forward.summary, reversed.summary);
 
         let mut modified = forward.clone();
-        modified.insert(entries[0].0.clone(), Relevance::new(0.75, 4.0));
+        modified.insert(entries[0].0.clone(), Relevance::new(4.0));
         modified.remove(&entries[1].0);
         let rebuilt = modified.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<ConceptMap>();
         assert_eq!(modified, rebuilt);
@@ -249,8 +248,8 @@ mod tests {
     fn signed_zero_has_the_same_lookup_summary() {
         let mut pangine = Pangine::new();
         let concept = pangine.reference_named("member").unwrap();
-        let positive = ConceptMap::from([(concept.clone(), Relevance::new(0.0, 1.0))]);
-        let negative = ConceptMap::from([(concept, Relevance::new(-0.0, 1.0))]);
+        let positive = ConceptMap::from([(concept.clone(), Relevance::new(0.0))]);
+        let negative = ConceptMap::from([(concept, Relevance::new(-0.0))]);
 
         assert_eq!(positive, negative);
         assert_eq!(positive.summary, negative.summary);

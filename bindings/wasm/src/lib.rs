@@ -34,8 +34,7 @@ struct ConceptEdge {
     target: usize,
     role: &'static str,
     owner: Option<usize>,
-    probability: f32,
-    strength: f32,
+    x_coefficient: f32,
 }
 
 struct SessionCore {
@@ -147,8 +146,7 @@ impl<'a> GraphBuilder<'a> {
             target: target.index(),
             role,
             owner,
-            probability: relevance.probability,
-            strength: relevance.strength,
+            x_coefficient: relevance.x_coefficient,
         });
     }
 }
@@ -217,7 +215,12 @@ mod tests {
 
         let unordered = view["nodes"].as_array().unwrap().iter().find(|node| node["kind"] == "unordered").unwrap();
         let unordered_id = unordered["id"].as_u64().unwrap();
-        assert_eq!(view["edges"].as_array().unwrap().iter().filter(|edge| edge["role"] == "member" && edge["owner"] == unordered_id).count(), 2);
+        let member_edges =
+            view["edges"].as_array().unwrap().iter().filter(|edge| edge["role"] == "member" && edge["owner"] == unordered_id).collect::<Vec<_>>();
+        assert_eq!(member_edges.len(), 2);
+        for edge in member_edges {
+            assert_eq!(edge["xCoefficient"], 1.0);
+        }
     }
 
     #[test]
