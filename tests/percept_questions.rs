@@ -18,8 +18,8 @@ fn question_keeps_ordered_output_bindings_distinct() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
-    let question = must_ref(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->['Y']}");
-    assert_eq!(question, must_ref(&mut pangine, "{['X']->[A]}*{[B]->['Y']}"));
+    let answer = must_ref(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->['Y']}");
+    assert_eq!(answer, must_ref(&mut pangine, "{[C]->[A]}*{[B]->[D]}"));
 
     let x = named_value(&mut pangine, "$['X']");
     assert_eq!(x.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>(), vec!["C"]);
@@ -29,7 +29,7 @@ fn question_keeps_ordered_output_bindings_distinct() {
 }
 
 #[test]
-fn question_uses_the_surrounding_relationship_context() {
+fn question_matches_shared_unordered_context_inside_ordered_components() {
     let mut pangine = Pangine::new();
 
     must_ref(&mut pangine, "['memory'] ~= {([C]*[A])->([B]*[D])}");
@@ -333,14 +333,14 @@ fn deep_experience_keeps_one_root_while_question_derives_nested_matches() {
 }
 
 #[test]
-fn contextual_question_terminates_on_a_cycle() {
+fn explicit_cyclic_query_graph_terminates() {
     let mut pangine = Pangine::new();
 
     for root in ["[A]->[link]->[B]", "[B]->[link]->[C]", "[C]->[link]->[A]", "[C]->[sound]->[answer]"] {
         must_ref(&mut pangine, &format!("['memory'] ~= {root}"));
     }
 
-    assert!(pangine.reference_concept("['memory'] @ [A]->[sound]->['result']").is_ok());
+    assert!(pangine.reference_concept("['memory'] @ ([A]->[link]->['one'])(['one']->[link]->['two'])(['two']->[link]->[A])").unwrap().is_some());
 }
 
 #[test]
@@ -387,5 +387,5 @@ fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {
 }
 
 fn ask(pangine: &mut Pangine, input: &str) {
-    must_ref(pangine, input);
+    pangine.reference_concept(input).unwrap_or_else(|error| panic!("failed to parse {input:?}: {error}"));
 }

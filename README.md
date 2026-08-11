@@ -22,7 +22,7 @@ Everything below is an actual `pangine-console` transcript. Text after `command>
 
 Pangine does not know what names such as `cat`, `Alice`, or `full-test` mean. They are ordinary names chosen for the examples. Their meaning comes from the person or program using the language.
 
-This walkthrough describes the current prototype, not a finished language specification. The parser and output are real. The detailed rules used by contextual questions, answer totals, and `^` are experiments that I expect to revisit as the larger design becomes clearer.
+This walkthrough describes the current prototype, not a finished language specification. The parser and output are real. The detailed rules used by structural completion, answer totals, and `^` are experiments that I expect to revisit as the larger design becomes clearer.
 
 ### Start with nothing
 
@@ -181,16 +181,16 @@ That combined view is not always a lossless account of the roots. One root `[A][
 
 ### Ask one source
 
-`@` asks a Percept and binds the Percepts inside the question:
+`@` asks a Percept to complete a structural question. Percepts inside the question are holes to fill:
 
 ```text
 command> ['Alice'] @ {[cat]->['sound']}
-  {[cat]->['sound']}
+  {[cat]->[purrs]}
 command> $['sound']
   [purrs]
 ```
 
-The immediate result is still the unresolved question shape. `$['sound']` shows the answer candidates that were written into the output Percept.
+The immediate result is the grounded question row. `$['sound']` shows the compatibility view also written into the output Percept. Returning the row matters when a question has several holes: the values remain correlated instead of becoming an accidental cross-product.
 
 In the current matcher, the fixed `[cat]` must match exactly. `['sound']` is the wildcard position Pangine fills. Ordinary Concepts are not treated as implicit weak wildcards.
 
@@ -200,14 +200,14 @@ A longer ordered root can supply an exact contiguous path without being stored a
 command> ['Sequence'] ~= [cat]->[eats]->[cat_food]
   {[cat]->[eats]->[cat_food]}
 command> ['Sequence'] @ ['what']->[eats]
-  {['what']->[eats]}
+  {[cat]->[eats]}
 command> $['what']
   [cat]
 ```
 
 `cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part root remains available as context for later questions.
 
-### Let represented context widen an answer
+### Ask for composition explicitly
 
 The next commands add a separate source without changing the earlier Alice and Bob roots:
 
@@ -222,17 +222,24 @@ command> ['Room'] ~= [living-room]->[sound]->[music]
   {[kitchen]->[sound]->[fridge-hum]}
   {[living-room]->[sound]->[music]}
 command> ['Room'] @ [kitchen]->[sound]->['answer']
-  {[kitchen]->[sound]->['answer']}
+  {[kitchen]->[sound]->[fridge-hum]}
 command> $['answer']
   [fridge-hum]
+```
+
+One relation atom asks for one relation, so this returns only the direct answer. If I want Pangine to compose the connection and sound relationships, I write both atoms and share a Percept between them:
+
+```text
+command> ['Room'] @ ([kitchen]->[connected-to]->['where'])(['where']->[sound]->['indirect-answer'])
+  {[kitchen]->[connected-to]->[living-room]}
+  {[living-room]->[sound]->[music]}
+command> $['where']
+  x2 [living-room]
+command> $['indirect-answer']
   [music]
 ```
 
-`fridge-hum` is the direct answer. `music` is an additional candidate because the selected experience contains a represented path from `kitchen` to `living-room`, and `living-room -> sound -> music` otherwise matches the question exactly.
-
-The current contextual experiment lets the starting `kitchen` Concept follow that path while the later fixed `sound` Concept still matches exactly. It also blocks a possible answer from using its own sound relationship as the route that admits it, and it searches only the roots selected on the left of `@`. These are current algorithm choices, not settled limits on what Pangine may eventually consider.
-
-This does not mean Pangine has decided that `music` is the right answer. It means the prototype can retain a potentially relevant indirect answer instead of discarding it. Its current projection gives each answer one root occurrence and does not add anything for directness, path length, alternate routes, or shared surroundings. That reduction is provisional because the wider context may eventually be exactly what should inform the decision.
+The top-level unordered collection of ordered atoms is a query graph. Repeating `['where']` gives the two atoms one shared hole, so only mutually consistent rows survive. There is one `where = living-room` binding in the completion; its temporary output-Percept view shows `x2` because each of the two participating roots supplies that same binding. Pangine does not know what `connected-to` or `sound` mean; the composition comes from the structure I asked for. This same distinction lets a one-step transition stay one step while a syllogism-shaped question can request two relationships explicitly.
 
 ### Let experience counts change the choice
 
@@ -250,8 +257,8 @@ command> ['world'] ~= [morning][traffic]
   x2 [birds]
   [traffic]
 command> ['world'] @ [morning]['answer']
-  ['answer']
-  [morning]
+  [birds][morning]
+  [morning][traffic]
 command> $['answer']
   x2 [birds]
   [traffic]
@@ -261,7 +268,7 @@ command> ^['answer']
 
 In this prototype, each complete `~=` input acts as one experience boundary. The current answer projection therefore gives `birds` a total of two and `traffic` a total of one. I do not need to add `event-1` and `event-2` Concepts unless those event identities are meaningful to the information itself.
 
-The current implementation keeps the selected Percept and exact root attached to each match. Repeating one exact root increases its stored count. It presently adds unequal roots and equal roots under different Percepts separately, while repeated routes inside one root contribute that root only once. Those details preserve useful evidence boundaries, but they are not yet a general account of how all evidence should matter.
+The current implementation keeps the selected Percept, exact root, root occurrence count, matched view, and complete assignment attached to each completion. Repeating one exact root increases its stored count. Those details preserve useful evidence boundaries, but they are not yet a general account of how all evidence should matter.
 
 The `x2` on the answer is how this prototype exposes that current total. It is useful to the placeholder `^` choice, but it is not a definition of relevance or a general truth score.
 
@@ -271,7 +278,8 @@ Writing several plain Percepts on the left of `@` selects all of them:
 
 ```text
 command> ['Alice']['Bob'] @ {[cat]->['shared-sound']}
-  {[cat]->['shared-sound']}
+  {[cat]->[meows]}
+  {[cat]->[purrs]}
 command> $['shared-sound']
   [meows]
   [purrs]
@@ -301,12 +309,32 @@ command> ['reviewer'] ~= {[review]->[review]}
 command> ['shipper'] ~= {[prepare]->[ship]}
   {[prepare]->[ship]}
 command> ['reviewer']['shipper'] @ {['same']->['same']}
-  {['same']->['same']}
+  {[review]->[review]}
 command> ^['same']
   [review]
 ```
 
 `{['same']->['same']}` asks for one Concept that can occupy both positions. `{['left']->['right']}` would allow independent answers.
+
+### Keep several outputs correlated
+
+The returned rows preserve which values occurred together:
+
+```text
+command> ['pairs'] ~= [A]->[D]
+  {[A]->[D]}
+command> ['pairs'] ~= [B]->[C]
+  {[A]->[D]}
+  {[B]->[C]}
+command> ['rows'] = (['pairs'] @ ['left']->['right'])
+  {[A]->[D]}
+  {[B]->[C]}
+command> $['rows']
+  {[A]->[D]}
+  {[B]->[C]}
+```
+
+The separate `$['left']` and `$['right']` views are convenient columns, but they cannot express that `A` belonged with `D` and `B` belonged with `C`. The value returned by `@` and stored in `rows` can. The Rust `complete_question` API also retains the complete assignment and the exact source evidence behind each row.
 
 ### Use scripts and comments
 
@@ -359,7 +387,8 @@ Asking both sources retains the two exact answers. The unrelated lint root does 
 
 ```text
 command> ['Maintainer']['Legacy-note'] @ {[full-test]->['route']}
-  {[full-test]->['route']}
+  {[full-test]->[cargo]}
+  {[full-test]->[cli-runner]}
 command> $['route']
   [cargo]
   [cli-runner]
@@ -373,7 +402,7 @@ The caller can instead choose which source to ask:
 
 ```text
 command> ['Maintainer'] @ {[full-test]->['maintainer-route']}
-  {[full-test]->['maintainer-route']}
+  {[full-test]->[cli-runner]}
 command> $['maintainer-route']
   [cli-runner]
 command> ^['maintainer-route']
@@ -384,7 +413,7 @@ Pangine answers from the selected Percept roots. The source names remain opaque,
 
 ### What this walkthrough does not settle
 
-This walkthrough covers the current console surface: canonical composition, explicit multiplicity, Percept state, exact-root experience, direct and contextual questions, one-source and multi-source selection, shared output identity, decision, scripts, and inspection.
+This walkthrough covers the current console surface: canonical composition, explicit multiplicity, Percept state, exact-root experience, structural completion, explicit query graphs, one-source and multi-source selection, correlated rows, shared output identity, decision, scripts, and inspection.
 
 It does not establish how a later decision rule should use accumulated evidence. Persistence, distributed execution, numeric or temporal domain grammar, and richer sampling behavior also remain open. The current `x` storage is itself temporary: it uses a floating-point value and cannot preserve arbitrarily large integer totals exactly.
 
@@ -404,9 +433,9 @@ The current prototype treats those exact roots and their occurrence counts as it
 
 An operating server may keep a densely connected in-memory representation or a disposable lookup to make matching fast. That structure is a cache over the flat canonical roots, not another source of truth. It can be rebuilt, dropped, or scoped to one partition.
 
-Question evaluation currently snapshots the selected exact roots and their counts before writing outputs. It derives recursive match views and builds disposable in-memory connections from the retained Concept structure. This lets the prototype discover an indirect ordered answer without storing another kind of experience. Cycle termination is an implementation safety property; the current route-deduplication policy remains a research choice.
+Question evaluation currently snapshots the selected exact roots and their counts before writing outputs. It derives recursive match views and ordered windows, completes each requested relation atom, and joins clauses on shared Percepts. Those structures are disposable query work over the retained roots, not another kind of stored experience.
 
-This first production implementation rebuilds those connections from the selected roots for each question. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Efficient caching, partitioned execution, and richer answer scoring remain active research areas.
+This first production implementation enumerates clause matches and joins them in memory. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Query planning, result streaming, efficient indexing, partitioned execution, and richer answer reduction remain active research areas.
 
 ## Current prototype status
 
@@ -417,14 +446,16 @@ The current implementation is written in Rust. It includes:
 - Unified Percept state built from exact complete roots
 - Counted experience occurrences over unique exact Percept roots
 - One-source and unparenthesized multi-source question selection
-- Lazy exact recursive matching with explicit Percept wildcards and shared repeated-output bindings
-- Source-backed contextual candidate discovery for ordered questions across nested, ordered, unordered, inverted, cyclic, and multi-source Concept structure
+- Lazy exact recursive matching and ordered windows with explicit Percept holes
+- Conjunctive query graphs joined through shared Percept bindings
+- Complete correlated rows with source roots, occurrence counts, matched views, and explicit unordered remainders in the Rust API
+- Grounded `@` results that can be assigned without losing row correlation
 - A provisional projection of exact-root occurrences onto answer coefficients
 - A deterministic placeholder choice rule behind `^`
 - `$['*']` global inspection
 - An interactive console, current-behavior tests, explicitly ignored research warnings, and a browser-local WebAssembly workbench
 
-Context changes which candidates the prototype can find, and experience occurrences can currently change which candidate `^` returns. The implementation does not yet make use of the wider graph when choosing among candidates. The meaning and representation of decision evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and general-purpose application bindings are all open work.
+The relationships written in a question change which completions the prototype can find, and experience occurrences can currently change which candidate `^` returns. The meaning and representation of decision evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and a general surface form for constructing Concepts from rows are all open work.
 
 To run the complete verification suite:
 
@@ -433,7 +464,7 @@ cargo test --workspace --all-targets --release
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-Detailed checks for provisional contextual, scoring, and decision behavior are compiled but ignored by that run. To inspect the current research expectations explicitly:
+Detailed checks for provisional scoring, decision, and matcher-boundary behavior are compiled but ignored by that run. To inspect the current research expectations explicitly:
 
 ```sh
 cargo test --test research --release -- --ignored
@@ -461,8 +492,8 @@ Those warnings preserve useful examples; they are not compatibility promises.
 | `['memory'] *= expression` | Explicit union merge, then retain one result root; currently the same normal form as `+=` |
 | `['memory'] /= expression` | Inverse merge, then retain one result root |
 | `['memory'] ~= expression` | Record one experience of an exact complete root |
-| `['memory'] @ expression` | Ask one source and bind output Percepts |
-| `['Alice']['Bob'] @ expression` | Ask several sources together; parentheses are optional |
+| `['memory'] @ expression` | Complete a structural question, return grounded row(s), and bind output Percepts |
+| `['Alice']['Bob'] @ expression` | Complete against several selected sources; parentheses are optional |
 | `$operand` | Recursively evaluate every Percept in the operand |
 | `^['choice']` | Run the current deterministic choice placeholder |
 | `$['*']` | Inspect all live ordinary Concepts through a read-only computed view |

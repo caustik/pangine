@@ -1,8 +1,8 @@
 # Pangine research warning checks
 
-The checks in this directory preserve useful behavior examples without declaring their exact outputs to be permanent Pangine semantics. They are compiled but ignored during the normal test run, which makes the unresolved boundary visible without blocking an intentional experiment.
+The checks in this directory preserve useful behavior examples without declaring their exact outputs to be permanent Pangine semantics. They are compiled but ignored during the normal test run, which makes an unresolved boundary visible without blocking an intentional experiment.
 
-Run every warning check explicitly with:
+Run every integration warning check explicitly with:
 
 ```sh
 cargo test --test research --release -- --ignored
@@ -10,9 +10,16 @@ cargo test --test research --release -- --ignored
 
 The current groups are:
 
-- `contextual_questions.rs`: which represented graph connections make an indirect candidate eligible;
 - `question_support.rs`: how exact-root occurrence counts are currently projected into answer coefficients;
-- `decision_fallback.rs`: the placeholder positive filter and canonical tie rule behind `^`;
-- `matcher_boundaries.rs`: restrictions and inferred matches that were implemented before their wider meaning was understood.
+- `decision_fallback.rs`: the placeholder positive filter and canonical tie rule behind `^`; and
+- `matcher_boundaries.rs`: current selector, nesting, and inferred-answer restrictions.
 
-A failure here means that a provisional example changed. Review the input and the new behavior before deciding whether the implementation, the check, or both should change. Do not promote one of these checks into the normal suite merely because its current output seems reasonable.
+The accepted, application-independent completion behavior is in the ordinary suite at `pangine/tests/completion_questions.rs`. Syllogism-shaped composition, Rule 110, symbolic residual, correlation, and evidence-factor cases are kept together there because they are compatibility probes of one production evaluator, not separate research matchers.
+
+One ignored internal check applies an external product oracle to retained completion factors:
+
+```sh
+cargo test --lib completion_calculus --release -- --ignored
+```
+
+That check demonstrates retained information, not Pangine probability semantics. A failure in any warning check means that provisional behavior changed. Review the input and the new behavior before deciding whether the implementation, the check, or both should change.

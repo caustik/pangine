@@ -57,7 +57,7 @@ fn named_candidates(pangine: &mut Pangine, percept: &str) -> Vec<String> {
 }
 
 fn ask(pangine: &mut Pangine, input: &str) {
-    must_ref(pangine, input);
+    pangine.reference_concept(input).unwrap_or_else(|error| panic!("failed to parse {input:?}: {error}"));
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

@@ -9,18 +9,18 @@ use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
+mod completion;
 mod concept_map;
 
+pub use completion::{Completion, CompletionEvidence, CompletionRemainder, CompletionRemainderSide, CompletionResult};
 use concept_map::ConceptMap;
 
 type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ExperienceRoots = BTreeMap<ConceptId, u64>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
-type ProjectionAssignments = BTreeSet<ProjectionAssignment>;
-type ProjectionCache = BTreeMap<(usize, usize), ProjectionAssignments>;
-// One exact experienced root supports a candidate according to that root's
-// occurrence count. Recursive matches and alternate routes to the same answer
-// within that root collapse here.
+// One exact experienced root supports a compatibility-view candidate according
+// to that root's occurrence count. Recursive views and completion rows leading
+// to the same answer within that root collapse here.
 type QuestionCandidateWitnesses = BTreeMap<ConceptId, BTreeMap<ConceptId, BTreeSet<QuestionSource>>>;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,86 +39,14 @@ struct QuestionSource {
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct QuestionSeed {
-    source: QuestionSource,
-    concept: ConceptId,
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum QuestionPort {
-    Ordered(usize),
-    Unordered(ConceptId),
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct QuestionMembership {
-    parent: ConceptId,
-    port: QuestionPort,
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct QuestionExperience {
     source: QuestionSource,
     matched: ConceptId,
-    blocked_memberships: BTreeSet<QuestionMembership>,
-}
-
-#[derive(Clone)]
-struct QuestionStep {
-    destination: ConceptId,
-    source: QuestionSource,
-    membership: QuestionMembership,
-}
-
-#[derive(Default)]
-struct QuestionGraph {
-    steps: BTreeMap<ConceptId, Vec<QuestionStep>>,
-}
-
-impl QuestionGraph {
-    fn add_membership(&mut self, source: &QuestionSource, parent: &ConceptId, child: &ConceptId, port: QuestionPort) {
-        if parent == child {
-            return;
-        }
-
-        let membership = QuestionMembership { parent: parent.clone(), port };
-        self.steps.entry(parent.clone()).or_default().push(QuestionStep { destination: child.clone(), source: source.clone(), membership: membership.clone() });
-        self.steps.entry(child.clone()).or_default().push(QuestionStep { destination: parent.clone(), source: source.clone(), membership });
-    }
-
-    fn connects(&self, start: &ConceptId, target: &ConceptId, answer: &QuestionExperience) -> bool {
-        if start == target {
-            return true;
-        }
-
-        let mut frontier = BTreeSet::from([start.clone()]);
-        let mut visited = frontier.clone();
-        while !frontier.is_empty() {
-            let mut next = BTreeSet::new();
-            for concept in frontier {
-                for step in self.steps.get(&concept).into_iter().flatten() {
-                    if step.source == answer.source && answer.blocked_memberships.contains(&step.membership) {
-                        continue;
-                    }
-                    if step.destination == *target {
-                        return true;
-                    }
-                    if visited.insert(step.destination.clone()) {
-                        next.insert(step.destination.clone());
-                    }
-                }
-            }
-            frontier = next;
-        }
-        false
-    }
 }
 
 #[derive(Default)]
 struct QuestionSnapshot {
     experiences: BTreeSet<QuestionExperience>,
-    source_concepts: BTreeSet<QuestionSeed>,
-    graph: QuestionGraph,
 }
 
 static NEXT_PANGINE_ID: AtomicUsize = AtomicUsize::new(0);
@@ -150,8 +78,8 @@ Percept operations:
   ['name'] *= expression     Explicit union merge
   ['name'] /= expression     Inverse merge
   ['name'] ~= expression     Experience
-  ['source'] @ expression    Ask one Percept; bind outputs in the question
-  ['a']['b'] @ expression   Ask several Percepts together
+  ['source'] @ expression    Complete one source; return rows and bind holes
+  ['a']['b'] @ expression   Complete several selected sources together
   $operand                   Recursively evaluate every Percept in the operand
   $['*']                     Inspect all live ordinary Concepts
 
@@ -1304,15 +1232,15 @@ impl Pangine {
 
     fn answer_question(&mut self, percepts: &[ConceptId], question: Option<ConceptId>) -> Option<ConceptId> {
         let question = question?;
-        let snapshot = self.question_snapshot(percepts, &question);
-
-        let projection_results = self.get_projection_results(&question, &snapshot);
+        let result = self.complete_question(percepts, &question)?;
+        let rows = self.materialize_completion_rows(&result);
+        let projection_results = self.materialize_completion_bindings(&result);
 
         for (percept, binding_result) in projection_results {
             self.set_percept_value(&percept, binding_result);
         }
 
-        Some(question)
+        rows
     }
 
     fn question_snapshot(&mut self, percepts: &[ConceptId], question: &ConceptId) -> QuestionSnapshot {
@@ -1335,9 +1263,6 @@ impl Pangine {
         // pattern can only match its own structural shape.
         let experience_shapes =
             (!patterns.iter().any(|pattern| self.is_percept(pattern))).then(|| patterns.iter().map(|pattern| pattern.0.shape()).collect::<BTreeSet<_>>());
-        let needs_context = patterns
-            .iter()
-            .any(|pattern| pattern.0.ordered_components().and_then(|components| components.first()).is_some_and(|origin| self.origin_has_route_seed(origin)));
         let mut ordered_widths = BTreeSet::new();
         self.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
         let mut snapshot = QuestionSnapshot::default();
@@ -1350,9 +1275,6 @@ impl Pangine {
                 &mut BTreeSet::new(),
                 &mut snapshot.experiences,
             );
-            if needs_context {
-                Self::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
-            }
         }
         snapshot
     }
@@ -1389,13 +1311,7 @@ impl Pangine {
             return;
         }
         if experience_shapes.is_none_or(|shapes| shapes.contains(&concept.0.shape())) {
-            let blocked_memberships = match &concept.0.kind {
-                ConceptKind::Ordered { components } => {
-                    (0..components.len()).map(|position| QuestionMembership { parent: concept.clone(), port: QuestionPort::Ordered(position) }).collect()
-                }
-                ConceptKind::Named(_) | ConceptKind::Percept { .. } | ConceptKind::Unordered => BTreeSet::new(),
-            };
-            experiences.insert(QuestionExperience { source: source.clone(), matched: concept.clone(), blocked_memberships });
+            experiences.insert(QuestionExperience { source: source.clone(), matched: concept.clone() });
         }
 
         match &concept.0.kind {
@@ -1405,12 +1321,9 @@ impl Pangine {
                     if experience_shapes.is_some_and(|shapes| !shapes.contains(&ConceptShape::Ordered(width))) {
                         continue;
                     }
-                    for (start, window) in components.windows(width).enumerate() {
+                    for window in components.windows(width) {
                         let matched = self.reference_ordered(window.to_vec());
-                        let blocked_memberships = (start..start + width)
-                            .map(|position| QuestionMembership { parent: concept.clone(), port: QuestionPort::Ordered(position) })
-                            .collect();
-                        experiences.insert(QuestionExperience { source: source.clone(), matched, blocked_memberships });
+                        experiences.insert(QuestionExperience { source: source.clone(), matched });
                     }
                 }
                 for child in components {
@@ -1427,35 +1340,6 @@ impl Pangine {
                     if let Some(coefficient_concept) = coefficient_concept {
                         self.add_question_experience_rec(source, &coefficient_concept, ordered_widths, experience_shapes, visited, experiences);
                     }
-                }
-            }
-            ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
-        }
-    }
-
-    fn add_question_graph_rec(
-        source: &QuestionSource,
-        concept: &ConceptId,
-        visited: &mut BTreeSet<ConceptId>,
-        source_concepts: &mut BTreeSet<QuestionSeed>,
-        graph: &mut QuestionGraph,
-    ) {
-        if !visited.insert(concept.clone()) {
-            return;
-        }
-        source_concepts.insert(QuestionSeed { source: source.clone(), concept: concept.clone() });
-
-        match &concept.0.kind {
-            ConceptKind::Ordered { components } => {
-                for (position, child) in components.iter().enumerate() {
-                    graph.add_membership(source, concept, child, QuestionPort::Ordered(position));
-                    Self::add_question_graph_rec(source, child, visited, source_concepts, graph);
-                }
-            }
-            ConceptKind::Unordered => {
-                for child in concept.0.subconcepts.keys() {
-                    graph.add_membership(source, concept, child, QuestionPort::Unordered(child.clone()));
-                    Self::add_question_graph_rec(source, child, visited, source_concepts, graph);
                 }
             }
             ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
@@ -1521,69 +1405,6 @@ impl Pangine {
 
 // Experience/question projection.
 impl Pangine {
-    fn get_projection_results(&mut self, question: &ConceptId, snapshot: &QuestionSnapshot) -> BTreeMap<ConceptId, Option<ConceptId>> {
-        let mut questions = BTreeSet::new();
-        let mut contains_percept_cache = BTreeMap::new();
-        self.collect_question_patterns(question, true, &mut questions, &mut contains_percept_cache);
-
-        let mut output_percepts = BTreeSet::new();
-        self.collect_output_percepts(question, &mut output_percepts);
-        let mut witnesses = output_percepts.iter().cloned().map(|percept| (percept, BTreeMap::new())).collect::<QuestionCandidateWitnesses>();
-        let mut experience_index = BTreeMap::<ConceptShape, Vec<&QuestionExperience>>::new();
-        for experience in &snapshot.experiences {
-            experience_index.entry(experience.matched.0.shape()).or_default().push(experience);
-        }
-        let mut cache = ProjectionCache::new();
-
-        for question in &questions {
-            let matching_experiences = if self.is_percept(question) {
-                snapshot.experiences.iter().collect::<Vec<_>>()
-            } else {
-                experience_index.get(&question.0.shape()).into_iter().flatten().copied().collect::<Vec<_>>()
-            };
-
-            for experience in matching_experiences {
-                if let Some(assignment) = self.unordered_remainder_assignment(&experience.matched, question) {
-                    Self::add_question_assignment(&experience.source, &assignment, &output_percepts, &mut witnesses);
-                }
-
-                let assignments = self.projection_assignments(&experience.matched, question, &mut cache);
-                Self::add_projection_witnesses(&experience.source, &assignments, &output_percepts, &mut witnesses);
-            }
-
-            self.add_contextual_projection_witnesses(question, &output_percepts, &mut cache, snapshot, &mut witnesses);
-        }
-
-        self.materialize_question_witnesses(output_percepts, witnesses)
-    }
-
-    fn add_projection_witnesses(
-        source: &QuestionSource,
-        assignments: &ProjectionAssignments,
-        output_percepts: &BTreeSet<ConceptId>,
-        witnesses: &mut QuestionCandidateWitnesses,
-    ) {
-        for assignment in assignments {
-            Self::add_question_assignment(source, assignment, output_percepts, witnesses);
-        }
-    }
-
-    fn add_question_assignment(
-        source: &QuestionSource,
-        assignment: &ProjectionAssignment,
-        output_percepts: &BTreeSet<ConceptId>,
-        witnesses: &mut QuestionCandidateWitnesses,
-    ) {
-        if output_percepts.iter().any(|percept| !assignment.contains_key(percept)) {
-            return;
-        }
-
-        for output in output_percepts {
-            let candidate = assignment[output].clone();
-            witnesses.entry(output.clone()).or_default().entry(candidate).or_default().insert(source.clone());
-        }
-    }
-
     fn materialize_question_witnesses(
         &mut self,
         output_percepts: BTreeSet<ConceptId>,
@@ -1602,78 +1423,6 @@ impl Pangine {
             results.insert(output, self.preserve_unordered_entry_boundary(&candidates, value));
         }
         results
-    }
-
-    fn add_contextual_projection_witnesses(
-        &mut self,
-        question: &ConceptId,
-        output_percepts: &BTreeSet<ConceptId>,
-        cache: &mut ProjectionCache,
-        snapshot: &QuestionSnapshot,
-        witnesses: &mut QuestionCandidateWitnesses,
-    ) {
-        let Some(question_components) = question.0.ordered_components() else {
-            return;
-        };
-        let Some(origin_pattern) = question_components.first() else {
-            return;
-        };
-        if !self.origin_has_route_seed(origin_pattern) {
-            return;
-        }
-
-        let mut origin_cache = ProjectionCache::new();
-        let origins = snapshot
-            .source_concepts
-            .iter()
-            .map(|seed| &seed.concept)
-            .filter(|concept| !self.projection_assignments(concept, origin_pattern, &mut origin_cache).is_empty())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if origins.is_empty() {
-            return;
-        }
-
-        for answer in &snapshot.experiences {
-            let Some(answer_components) = answer.matched.0.ordered_components() else {
-                continue;
-            };
-            if answer_components.len() != question_components.len() {
-                continue;
-            }
-            let Some(answer_origin) = answer_components.first() else {
-                continue;
-            };
-
-            for origin in &origins {
-                if origin == answer_origin || !snapshot.graph.connects(origin, answer_origin, answer) {
-                    continue;
-                }
-
-                let mut routed_components = answer_components.to_vec();
-                routed_components[0] = origin.clone();
-                let routed = self.reference_ordered(routed_components);
-                let assignments = self.projection_assignments(&routed, question, cache);
-                if assignments.is_empty() {
-                    continue;
-                }
-                Self::add_projection_witnesses(&answer.source, &assignments, output_percepts, witnesses);
-            }
-        }
-    }
-
-    fn origin_has_route_seed(&self, concept: &ConceptId) -> bool {
-        match &concept.0.kind {
-            ConceptKind::Named(_) => true,
-            ConceptKind::Percept { .. } => false,
-            ConceptKind::Ordered { components } => components.first().is_some_and(|component| self.origin_has_route_seed(component)),
-            ConceptKind::Unordered => concept.0.subconcepts.keys().any(|member| self.contains_fixed_question_concept(member)),
-        }
-    }
-
-    fn contains_fixed_question_concept(&self, concept: &ConceptId) -> bool {
-        !self.is_percept(concept)
-            && (matches!(concept.0.kind, ConceptKind::Named(_)) || concept.0.children().any(|(child, _)| self.contains_fixed_question_concept(child)))
     }
 
     fn collect_output_percepts(&self, concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {
@@ -1721,60 +1470,6 @@ impl Pangine {
         contains
     }
 
-    fn projection_assignments(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> ProjectionAssignments {
-        let key = (experience.index(), question.index());
-        if let Some(assignments) = cache.get(&key) {
-            return assignments.clone();
-        }
-
-        let assignments = if self.is_percept(question) {
-            ProjectionAssignments::from([ProjectionAssignment::from([(question.clone(), experience.clone())])])
-        } else if let (ConceptKind::Named(experience_name), ConceptKind::Named(question_name)) = (&experience.0.kind, &question.0.kind) {
-            if experience_name == question_name {
-                Self::exact_projection_assignments()
-            } else {
-                ProjectionAssignments::new()
-            }
-        } else if let (Some(experience_components), Some(question_components)) = (experience.0.ordered_components(), question.0.ordered_components()) {
-            if experience_components.len() != question_components.len() {
-                ProjectionAssignments::new()
-            } else {
-                let mut ordered = Self::exact_projection_assignments();
-                for (experience_component, question_component) in experience_components.iter().zip(question_components) {
-                    let component = self.projection_assignments(experience_component, question_component, cache);
-                    ordered = Self::multiply_projection_assignments(&ordered, &component);
-                    if ordered.is_empty() {
-                        break;
-                    }
-                }
-                ordered
-            }
-        } else if experience.0.shape() == question.0.shape() && matches!(experience.0.shape(), ConceptShape::Unordered) {
-            self.unordered_projection_assignments(experience, question, cache)
-        } else {
-            ProjectionAssignments::new()
-        };
-
-        cache.insert(key, assignments.clone());
-        assignments
-    }
-
-    fn exact_projection_assignments() -> ProjectionAssignments {
-        ProjectionAssignments::from([ProjectionAssignment::new()])
-    }
-
-    fn multiply_projection_assignments(left: &ProjectionAssignments, right: &ProjectionAssignments) -> ProjectionAssignments {
-        let mut products = ProjectionAssignments::new();
-        for left in left {
-            for right in right {
-                if let Some(product) = Self::merge_projection_assignments(left, right) {
-                    products.insert(product);
-                }
-            }
-        }
-        products
-    }
-
     fn merge_projection_assignments(left: &ProjectionAssignment, right: &ProjectionAssignment) -> Option<ProjectionAssignment> {
         let mut merged = left.clone();
         for (percept, candidate) in right {
@@ -1787,93 +1482,6 @@ impl Pangine {
             }
         }
         Some(merged)
-    }
-
-    // Unequal unions currently bind one direct output to the complete remainder
-    // left by an exact, default-coefficient subset. Coefficient-bearing and partial
-    // subset matching remain open questions.
-    fn unordered_remainder_assignment(&mut self, experience: &ConceptId, question: &ConceptId) -> Option<ProjectionAssignment> {
-        if experience.0.shape() != ConceptShape::Unordered || question.0.shape() != ConceptShape::Unordered {
-            return None;
-        }
-
-        let experiences = experience.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
-        let questions = question.0.subconcepts.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<Vec<_>>();
-        if experiences.len() <= questions.len()
-            || Self::has_non_default_coefficients(experience, &mut BTreeSet::new())
-            || Self::has_non_default_coefficients(question, &mut BTreeSet::new())
-        {
-            return None;
-        }
-
-        let outputs = questions.iter().filter(|(concept, _)| self.is_percept(concept)).collect::<Vec<_>>();
-        if outputs.len() != 1 {
-            return None;
-        }
-        let (output, _) = outputs[0];
-        let fixed_questions = questions.iter().filter(|(concept, _)| concept != output).collect::<Vec<_>>();
-        let mut contains_percept_cache = BTreeMap::new();
-        if fixed_questions.is_empty()
-            || fixed_questions.iter().any(|(concept, _)| self.contains_percept(concept, &mut contains_percept_cache))
-            || fixed_questions.iter().any(|(question, _)| !experience.0.subconcepts.contains_key(question))
-        {
-            return None;
-        }
-
-        let fixed_concepts = fixed_questions.iter().map(|(concept, _)| concept).collect::<BTreeSet<_>>();
-        let remainder = experiences.into_iter().filter(|(concept, _)| !fixed_concepts.contains(concept)).collect::<ConceptMap>();
-        let remainder = self.reference_map(&remainder)?;
-        Some(ProjectionAssignment::from([(output.clone(), remainder)]))
-    }
-
-    fn has_non_default_coefficients(concept: &ConceptId, visited: &mut BTreeSet<ConceptId>) -> bool {
-        if !visited.insert(concept.clone()) {
-            return false;
-        }
-
-        concept.0.subconcepts.values().any(|&relevance| relevance != Relevance::DEFAULT)
-            || concept.0.children().any(|(child, _)| Self::has_non_default_coefficients(child, visited))
-    }
-
-    fn unordered_projection_assignments(&self, experience: &ConceptId, question: &ConceptId, cache: &mut ProjectionCache) -> ProjectionAssignments {
-        let experiences = experience.0.subconcepts.iter().collect::<Vec<_>>();
-        let questions = question.0.subconcepts.iter().collect::<Vec<_>>();
-        if experiences.len() != questions.len() {
-            return ProjectionAssignments::new();
-        }
-
-        let Some(state_count) = 1usize.checked_shl(experiences.len() as u32) else {
-            return ProjectionAssignments::new();
-        };
-        let edges = questions
-            .iter()
-            .map(|(question, _)| experiences.iter().map(|(experience, _)| self.projection_assignments(experience, question, cache)).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-
-        let mut forward = vec![ProjectionAssignments::new(); state_count];
-        forward[0] = Self::exact_projection_assignments();
-        for mask in 0..state_count {
-            let question_index = mask.count_ones() as usize;
-            if question_index == questions.len() {
-                continue;
-            }
-            let current = forward[mask].clone();
-            if current.is_empty() {
-                continue;
-            }
-
-            for (experience_index, edge) in edges[question_index].iter().enumerate() {
-                let bit = 1usize << experience_index;
-                if mask & bit != 0 {
-                    continue;
-                }
-
-                let products = Self::multiply_projection_assignments(&current, edge);
-                forward[mask | bit].extend(products);
-            }
-        }
-
-        forward.pop().unwrap_or_default()
     }
 }
 
@@ -2403,7 +2011,6 @@ mod tests {
         let mut snapshot = QuestionSnapshot::default();
         for source in sources {
             pangine.add_question_experience_rec(&source, &source.root, &ordered_widths, None, &mut BTreeSet::new(), &mut snapshot.experiences);
-            Pangine::add_question_graph_rec(&source, &source.root, &mut BTreeSet::new(), &mut snapshot.source_concepts, &mut snapshot.graph);
         }
         snapshot
     }
@@ -2418,8 +2025,8 @@ mod tests {
             "[A]/[B]",
             "x2[A]x3[B]                 Signed coefficients",
             "['name'] ~= expression     Experience",
-            "['source'] @ expression    Ask one Percept",
-            "['a']['b'] @ expression   Ask several Percepts together",
+            "['source'] @ expression    Complete one source",
+            "['a']['b'] @ expression   Complete several selected sources together",
             "$['*']                     Inspect all live ordinary Concepts",
             "increments its occurrence count",
             "^['choice']",
@@ -2549,30 +2156,23 @@ mod tests {
             let filtered = pangine.question_snapshot(std::slice::from_ref(&source), &question);
             let full = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &question);
             assert!(filtered.experiences.is_subset(&full.experiences));
-            assert!(filtered.source_concepts.is_subset(&full.source_concepts));
 
-            let filtered_results = pangine.get_projection_results(&question, &filtered);
-            let full_results = pangine.get_projection_results(&question, &full);
-            assert_eq!(filtered_results, full_results, "question {question_text}");
+            let filtered_results = pangine.complete_question_snapshot(&question, &filtered);
+            let full_results = pangine.complete_question_snapshot(&question, &full);
+            assert!(filtered_results.completions() == full_results.completions(), "question {question_text}");
         }
 
         let unordered = pangine.reference_concept("[C]*[sound]*['unordered-answer']").unwrap().unwrap();
         let unordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &unordered);
         assert!(unordered_snapshot.experiences.iter().all(|experience| experience.matched.0.shape() == ConceptShape::Unordered));
-        assert!(unordered_snapshot.source_concepts.is_empty());
-        assert!(unordered_snapshot.graph.steps.is_empty());
 
-        let contextual = pangine.reference_concept("[C]->[sound]->['ordered-answer']").unwrap().unwrap();
-        let contextual_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &contextual);
-        assert!(contextual_snapshot.experiences.iter().all(|experience| experience.matched.0.shape() == ConceptShape::Ordered(3)));
-        assert!(!contextual_snapshot.source_concepts.is_empty());
-        assert!(!contextual_snapshot.graph.steps.is_empty());
+        let ordered = pangine.reference_concept("[C]->[sound]->['ordered-answer']").unwrap().unwrap();
+        let ordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &ordered);
+        assert!(ordered_snapshot.experiences.iter().all(|experience| experience.matched.0.shape() == ConceptShape::Ordered(3)));
 
         let wildcard = pangine.reference_percept("anything");
         let wildcard_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &wildcard);
         let full_wildcard = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &wildcard);
         assert!(wildcard_snapshot.experiences == full_wildcard.experiences);
-        assert!(wildcard_snapshot.source_concepts.is_empty());
-        assert!(wildcard_snapshot.graph.steps.is_empty());
     }
 }
