@@ -10,7 +10,7 @@ cargo test --test research --release -- --ignored
 
 The current groups are:
 
-- `question_support.rs`: how exact-root occurrence counts are currently projected into answer coefficients;
+- `question_support.rs`: how direct Percept-member relevance is currently projected into answer coefficients;
 - `decision_fallback.rs`: the placeholder positive filter and canonical tie rule behind `^`; and
 - `matcher_boundaries.rs`: current selector, nesting, and inferred-answer restrictions.
 

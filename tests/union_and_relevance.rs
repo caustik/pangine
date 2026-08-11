@@ -1,6 +1,6 @@
 mod support;
 
-use pangine::Relevance;
+use pangine::{ParseError, Relevance};
 use support::{pairs, PangineTest};
 
 #[test]
@@ -57,21 +57,25 @@ fn parenthesized_unions_remain_complete_canonical_operands() {
 }
 
 #[test]
-fn signed_x_coefficient_syntax_round_trips() {
+fn signed_integer_coefficient_syntax_round_trips_exactly() {
     let mut test = PangineTest::new();
 
     test.assert_relevance(pairs! {
-        "x2.3[A]" => Relevance::new(2.3),
-        "x-2.3[A]" => Relevance::new(-2.3),
+        "x9223372036854775807[A]" => Relevance::new(i64::MAX),
+        "x-9223372036854775808[A]" => Relevance::new(i64::MIN),
     });
     test.assert_formats(pairs! {
-        "x2.3[A]" => "x2.3[A]",
-        "x-2.3[A]" => "x-2.3[A]",
+        "x9223372036854775807[A]" => "x9223372036854775807[A]",
+        "x-9223372036854775808[A]" => "x-9223372036854775808[A]",
     });
     test.assert_distinct(pairs! {
-        "x2.3[A]" => "x2.5[A]",
+        "x9223372036854775807[A]" => "x9223372036854775806[A]",
     });
-    test.assert_invalid(["50.5[A]"]);
+    test.assert_invalid(["x[A]", "x2.3[A]", "x-2.3[A]", "50.5[A]"]);
+
+    for source in ["x9223372036854775808[A]", "x9223372036854775807[A][A]", "x9223372036854775807x2[A]", "!x-9223372036854775808[A]"] {
+        assert!(matches!(test.engine_mut().reference_concept(source), Err(ParseError::RelevanceOverflow)), "expected relevance overflow for {source}");
+    }
 }
 
 #[test]
@@ -103,7 +107,7 @@ fn nested_coefficients_multiply_during_union_normalization() {
     });
     test.assert_null(["x2x-3[A]x-2x-3[A]"]);
     test.assert_relevance(pairs! {
-        "x2x3[A]" => Relevance::new(6.0),
+        "x2x3[A]" => Relevance::new(6),
     });
     test.assert_formats(pairs! {
         "x2x3[A]" => "x6[A]",

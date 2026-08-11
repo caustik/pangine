@@ -96,9 +96,9 @@ command> x2([cat][dog])
   x2([cat][dog])
 ```
 
-`x2[cat]` is the same Concept as `[cat][cat]`. The prefix applies to the next unordered operand, so `x3` applies separately to `dog`. In `x2([cat][dog])`, the coefficient applies to the complete parenthesized Concept rather than distributing into its members. Inversion is the negative form: `x-1[cat]` formats as `![cat]`. `/` remains the explicit way to merge the inverted members of its right operand.
+`x2[cat]` is the same Concept as `[cat][cat]`. The prefix applies to the next unordered operand, so `x3` applies separately to `dog`. In `x2([cat][dog])`, the coefficient applies to the complete parenthesized Concept rather than distributing into its members. Inversion is the negative form: `x-1[cat]` formats as `![cat]`. `/` remains the explicit way to merge the inverted members of its right operand. Coefficients are currently signed 64-bit integers; decimal coefficients are not valid syntax, and an out-of-range composition reports an error rather than wrapping.
 
-The current engine retains exact roots and occurrence counts when it records experience. What a later decision should calculate from that accumulated information remains open. The current `^` implementation only supplies the simple deterministic placeholder explained below.
+The current engine retains complete Concepts as direct Percept subconcepts with signed integer relevance. It uses the same `ConceptMap` representation as an ordinary unordered Concept rather than a separate experience-root table. What a later decision should calculate from that accumulated information remains open. The current `^` implementation only supplies the simple deterministic placeholder explained below.
 
 ### Put Concepts in order
 
@@ -136,7 +136,7 @@ command> $['memory']
 
 The reference remains `['memory']`. `$` evaluates its current value. Before assignment that value is null.
 
-The ordinary mutation operators work on the current materialized value and replace the Percept with one resulting root:
+The ordinary mutation operators work on the current materialized value and replace the Percept with one resulting subconcept:
 
 ```text
 command> ['state'] = [A]
@@ -155,7 +155,7 @@ command> ['state'] /= [C]
 
 ### Turn a Percept into a source of experience
 
-`~=` adds one complete Concept as an exact root owned by the Percept:
+`~=` adds one complete Concept as a direct subconcept of the Percept:
 
 ```text
 command> ['Alice'] ~= {[cat]->[purrs]}
@@ -164,7 +164,7 @@ command> ['Bob'] ~= {[cat]->[meows]}
   {[cat]->[meows]}
 ```
 
-Each `~=` command is one experience. The complete input is its exact root, so I do not need to invent an event name just to preserve that boundary. Repeating an equal root increments its occurrence count. The root stays an ordinary Concept. Pangine does not put it or the Percept into a special experience mode.
+Each `~=` command is one experience. The complete input becomes one direct subconcept, so I do not need to invent an event name just to preserve that boundary. Repeating an equal Concept adds the default relevance of one to the same member. The member stays an ordinary Concept. Pangine does not put it or the Percept into a special experience mode.
 
 This matters because the complete boundary remains available even though a question can inspect the recursive pieces inside it. Pangine derives those pieces when it asks a question. It does not store a second expanded copy of the experience.
 
@@ -175,11 +175,11 @@ command> $['Alice']
   {[cat]->[purrs]}
 ```
 
-That combined view is not always a lossless account of the roots. One root `[A][B]` and two roots `[A]`, `[B]` can materialize to the same output. The engine API therefore exposes the unique exact roots with `get_percept_roots` and the occurrence count of each root with `get_percept_root_count`.
+That combined view is not always a lossless account of the Percept's direct structure. One subconcept `[A][B]` and two subconcepts `[A]`, `[B]` can materialize to the same output. `get_relevance_map(&percept)` exposes the direct members and their `Relevance`, just as it does for an ordinary unordered Concept.
 
 ### Ask one source
 
-`@` asks a Percept to complete a structural question. Percepts inside the question are holes to fill:
+`@` asks the Concept on its left to complete a structural question. A plain Percept selects its direct retained subconcepts. Percepts inside the question are holes to fill:
 
 ```text
 command> ['Alice'] @ {[cat]->['sound']}
@@ -192,7 +192,23 @@ The immediate result is the grounded question row. `$['sound']` shows the compat
 
 In the current matcher, the fixed `[cat]` must match exactly. `['sound']` is the wildcard position Pangine fills. Ordinary Concepts are not treated as implicit weak wildcards.
 
-A longer ordered root can supply an exact contiguous path without being stored a second time:
+An ordinary grounded Concept can be the subject directly. Pangine treats the complete value on the left as one source Concept and applies the same matcher:
+
+```text
+command> {[cat]->[eats]}{[dog]->[sleeps]} @ ['what']->['whats']
+  {[cat]->[eats]}
+  {[dog]->[sleeps]}
+command> $['what']
+  [cat]
+  [dog]
+command> $['whats']
+  [eats]
+  [sleeps]
+```
+
+This does not turn answer rows into a special kind of Concept. It means any grounded Concept can participate in the same grammar. A direct subject has default relevance and no Percept owner. Selecting a Percept instead preserves which direct subconcept participated, its relevance, and its owner for the Rust completion result.
+
+A longer ordered Concept can supply an exact contiguous path without being stored a second time:
 
 ```text
 command> ['Sequence'] ~= [cat]->[eats]->[cat_food]
@@ -203,11 +219,11 @@ command> $['what']
   [cat]
 ```
 
-`cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part root remains available as context for later questions.
+`cat -> eats` is present as a contiguous path, so `what` becomes `cat`. `eats` is not also returned: that would require the nonexistent path `eats -> eats`. The complete three-part Concept remains available as context for later questions.
 
 ### Ask for composition explicitly
 
-The next commands add a separate source without changing the earlier Alice and Bob roots:
+The next commands add a separate source without changing the earlier Alice and Bob members:
 
 ```text
 command> ['Room'] ~= [kitchen]->[connected-to]->[living-room]
@@ -237,9 +253,9 @@ command> $['indirect-answer']
   [music]
 ```
 
-The top-level unordered collection of ordered atoms is a query graph. Repeating `['where']` gives the two atoms one shared hole, so only mutually consistent rows survive. There is one `where = living-room` binding in the completion; its temporary output-Percept view shows `x2` because each of the two participating roots supplies that same binding. Pangine does not know what `connected-to` or `sound` mean; the composition comes from the structure I asked for. This same distinction lets a one-step transition stay one step while a syllogism-shaped question can request two relationships explicitly.
+The top-level unordered collection of ordered atoms is a query graph. Repeating `['where']` gives the two atoms one shared hole, so only mutually consistent rows survive. There is one `where = living-room` binding in the completion; its temporary output-Percept view shows `x2` because each of the two participating source Concepts supplies that same binding. Pangine does not know what `connected-to` or `sound` mean; the composition comes from the structure I asked for. This same distinction lets a one-step transition stay one step while a syllogism-shaped question can request two relationships explicitly.
 
-### Let experience counts change the choice
+### Let repeated experience change relevance and choice
 
 Every `~=` command already represents one experience. If the same thing is experienced twice, I can simply say it twice:
 
@@ -263,7 +279,7 @@ command> ^['answer']
 
 In this prototype, each complete `~=` input acts as one experience boundary. The current answer projection therefore gives `birds` a total of two and `traffic` a total of one. I do not need to add `event-1` and `event-2` Concepts unless those event identities are meaningful to the information itself.
 
-The current implementation keeps the selected Percept, exact root, root occurrence count, matched view, and complete assignment attached to each completion. Repeating one exact root increases its stored count. Those details preserve useful evidence boundaries, but they are not yet a general account of how all evidence should matter.
+For retained experience, the current implementation keeps the selected Percept, direct source Concept, member relevance, matched view, and complete assignment attached to each completion. Repeating one equal Concept adds default relevance to that member. A direct ordinary subject instead uses the complete Concept itself with default relevance and no selected Percept. Those details preserve useful source boundaries, but they are not yet a general account of how all evidence should matter.
 
 The `x2` on the answer is how this prototype exposes that current total. It is useful to the placeholder `^` choice, but it is not a definition of relevance or a general truth score.
 
@@ -290,7 +306,7 @@ command> ^['shared-sound']
 
 `(['Alice']['Bob']) @ ...` means the same thing, but the parentheses are not needed.
 
-The selected Percepts are the sources. Experiencing an equal root twice under `Alice` contributes twice. Experiencing it once under both `Alice` and `Bob` also contributes twice.
+The selected Percepts are the sources. Experiencing an equal Concept twice under `Alice` gives that member relevance two. Experiencing it once under both `Alice` and `Bob` also contributes twice to the current projection.
 
 `^` currently selects the greatest positive weight. An exact tie uses the earliest canonical Concept spelling, which is why `meows` wins the tie above. This is a stable fallback, not a claim that `meows` is inherently more likely.
 
@@ -331,16 +347,13 @@ command> $['rows']
 
 The separate `$['left']` and `$['right']` views are convenient columns, but they cannot express that `A` belonged with `D` and `B` belonged with `C`. The value returned by `@` and stored in `rows` can. The Rust `complete_question` API also retains the complete assignment and the exact source evidence behind each row.
 
-The same works when each possible row is itself a graph of several relationships. Here I store two paths, then ask the result another question:
+The same works when each possible row is itself a graph of several relationships. Here I ask for two paths, then use that grounded result directly as the subject of another question:
 
 ```text
-command> ['memory'] ~= [A]->[r]->[B]; ['memory'] ~= [B]->[s]->[C]; ['memory'] ~= [X]->[r]->[Y]; ['memory'] ~= [Y]->[s]->[Z]; ['rows'] = (['memory'] @ (['start']->[r]->['middle'])(['middle']->[s]->['end']))
+command> ['memory'] ~= [A]->[r]->[B]; ['memory'] ~= [B]->[s]->[C]; ['memory'] ~= [X]->[r]->[Y]; ['memory'] ~= [Y]->[s]->[Z]; ['memory'] @ (['start']->[r]->['middle'])(['middle']->[s]->['end'])
   {[A]->[r]->[B]}{[B]->[s]->[C]}
   {[X]->[r]->[Y]}{[Y]->[s]->[Z]}
-command> $['rows']
-  {[A]->[r]->[B]}{[B]->[s]->[C]}
-  {[X]->[r]->[Y]}{[Y]->[s]->[Z]}
-command> ['reused'] = (['rows'] @ (['next-start']->[r]->['next-middle'])(['next-middle']->[s]->['next-end']))
+command> (['memory'] @ (['start']->[r]->['middle'])(['middle']->[s]->['end'])) @ (['next-start']->[r]->['next-middle'])(['next-middle']->[s]->['next-end'])
   {[A]->[r]->[B]}{[B]->[s]->[C]}
   {[X]->[r]->[Y]}{[Y]->[s]->[Z]}
 command> $['next-end']
@@ -348,7 +361,7 @@ command> $['next-end']
   [Z]
 ```
 
-The complete value preserves `A-B-C` and `X-Y-Z`; it does not invent `A-B-Z` or `X-Y-C`. Its canonical single-expression spelling is `({[A]->[r]->[B]}{[B]->[s]->[C]})({[X]->[r]->[Y]}{[Y]->[s]->[Z]})`. Parentheses retain each ordinary graph Concept as one member, and that text parses back into the same Concept. Assigning the result makes the assigned Percept the source for the next question. The original clause evidence and occurrence counts remain available in the original Rust `CompletionResult`; they are not encoded into the grounded language value.
+The complete value preserves `A-B-C` and `X-Y-Z`; it does not invent `A-B-Z` or `X-Y-C`. Its canonical single-expression spelling is `({[A]->[r]->[B]}{[B]->[s]->[C]})({[X]->[r]->[Y]}{[Y]->[s]->[Z]})`. Parentheses retain each ordinary graph Concept as one member, and that text parses back into the same Concept. Parentheses around the first `@` make its complete result the subject of the second `@`. The first result's clause evidence and source-Concept relevance remain available in its Rust `CompletionResult`; they are not encoded into the grounded language value passed to the next question. Assigning the value first is still valid when I want a named retained source.
 
 ### Use scripts and comments
 
@@ -397,7 +410,7 @@ command> ['Legacy-note'] ~= {[full-test]->[cargo]}
   {[full-test]->[cargo]}
 ```
 
-Asking both sources retains the two exact answers. The unrelated lint root does not match the fixed `full-test` Concept:
+Asking both sources retains the two exact answers. The unrelated lint Concept does not match the fixed `full-test` Concept:
 
 ```text
 command> ['Maintainer']['Legacy-note'] @ {[full-test]->['route']}
@@ -423,31 +436,33 @@ command> ^['maintainer-route']
   [cli-runner]
 ```
 
-Pangine answers from the selected Percept roots. The source names remain opaque, and source selection is explicit in the question.
+Pangine answers from the selected Percepts' direct subconcepts. The source names remain opaque, and source selection is explicit in the question.
 
 ### What this walkthrough does not settle
 
-This walkthrough covers the current console surface: canonical composition, explicit multiplicity, Percept state, exact-root experience, structural completion, explicit query graphs, one-source and multi-source selection, correlated rows, shared output identity, decision, scripts, and inspection.
+This walkthrough covers the current console surface: canonical composition, explicit multiplicity, relevance-bearing Percept subconcepts, structural completion, direct grounded subjects, explicit query graphs, one-Percept and multi-Percept source selection, correlated rows, shared output identity, decision, scripts, and inspection.
 
-It does not establish how a later decision rule should use accumulated evidence. Persistence, distributed execution, numeric or temporal domain grammar, and richer sampling behavior also remain open. The current `x` storage is itself temporary: it uses a floating-point value and cannot preserve arbitrarily large integer totals exactly.
+It does not establish how a later decision rule should use accumulated evidence. Persistence, distributed execution, numeric or temporal domain grammar, and richer sampling behavior also remain open. The current signed 64-bit `x` storage gives the prototype exact integer coefficients and reductions within its range, but it remains temporary because structural multiplicity, inversion, and answer support may not ultimately be one quantity.
 
 ## Why I built Pangine
 
 I originally came up with Pangine by writing down pieces of information in a semantic shape, asking questions about them, and then reasoning backward from what the grammar should imply. Pangine explores whether experience, retained state, and questions can all use that same small grammar.
 
-Concepts have canonical forms and can be composed without giving their names a built-in ontology. A Percept retains exact complete roots. A question can use both those roots and the recursive structure inside them without turning experience into a separate kind of Concept.
+Concepts have canonical forms and can be composed without giving their names a built-in ontology. A Percept retains complete Concepts as direct relevance-bearing subconcepts. A question can use both those members and the recursive structure inside them without turning experience into a separate kind of Concept.
 
-The larger question is whether this can become an inference system in its own right. Experience now accumulates exact roots and counts without committing to a finished relevance model. The deterministic `^` rule gives Pangine a repeatable placeholder for choosing among answer candidates while I work toward a better understanding of what information the decision should use.
+The larger question is whether this can become an inference system in its own right. Experience now accumulates complete Concept members and their relevance without committing to a finished relevance model. The deterministic `^` rule gives Pangine a repeatable placeholder for choosing among answer candidates while I work toward a better understanding of what information the decision should use.
 
 ## Scaling direction
 
-When I first thought about scaling Pangine, the model was closer to map/reduce than a central database. Canonical form gives Concepts a stable identity, but no Concept needs a permanent machine owner. Each partition can retain flat exact root edges from Percepts to canonical Concepts.
+When I first thought about scaling Pangine, the model was closer to map/reduce than a central database. Canonical form gives Concepts a stable identity, but no Concept needs a permanent machine owner. Each partition can retain flat relevance-bearing member edges from Percepts to canonical Concepts.
 
-The current prototype treats those exact roots and their occurrence counts as its stored form. The intended distributed direction routes a canonical Concept to one member rather than broadcasting it to every member, so a repeated experience can be counted where that Concept lives. A question member could return local results for reduction without user-written event IDs or cross-member duplicate tracking. This is a design direction, not an implemented distributed protocol.
+The current prototype uses the same `ConceptMap` entry representation for those Percept members and for ordinary unordered Concept members. The intended distributed direction routes a canonical Concept to one member rather than broadcasting it to every member, so repeated experience can add relevance where that Concept lives. A question member could return local results for reduction without user-written event IDs or cross-member duplicate tracking. This is a design direction, not an implemented distributed protocol.
 
-An operating server may keep a densely connected in-memory representation or a disposable lookup to make matching fast. That structure is a cache over the flat canonical roots, not another source of truth. It can be rebuilt, dropped, or scoped to one partition.
+An operating server may keep a densely connected in-memory representation or a disposable lookup to make matching fast. That structure is a cache over the flat canonical member edges, not another source of truth. It can be rebuilt, dropped, or scoped to one partition.
 
-Question evaluation currently snapshots the selected exact roots and their counts before writing outputs. It derives recursive match views and ordered windows, completes each requested relation atom, and joins clauses on shared Percepts. Those structures are disposable query work over the retained roots, not another kind of stored experience.
+Question evaluation currently snapshots either one direct canonical Concept or the selected Percept members and their relevance before writing outputs. It derives recursive match views and ordered windows, completes each requested relation atom, and joins clauses on shared Percepts. Those structures are disposable query work over the supplied Concepts, not another kind of stored experience.
+
+A direct subject remains map/reduce-friendly in the same sense as a Percept member: it is already one canonical Concept, can be routed to the same partitioned matcher, and contributes one ephemeral source record rather than requiring a new storage model.
 
 This first production implementation enumerates clause matches and joins them in memory. It establishes the behavior and gives us a testable correctness path, but it does not yet establish large-scale retrieval performance. Query planning, result streaming, efficient indexing, partitioned execution, and richer answer reduction remain active research areas.
 
@@ -457,20 +472,19 @@ The current implementation is written in Rust. It includes:
 
 - Parsing and canonical formatting of the grammar
 - Weakly interned, canonical Concept graphs
-- Unified Percept state built from exact complete roots
-- Counted experience occurrences over unique exact Percept roots
-- One-source and unparenthesized multi-source question selection
+- Unified Percept state built from ordinary relevance-bearing Concept members
+- Direct-Concept, one-Percept, and unparenthesized multi-Percept question subjects
 - Lazy exact recursive matching and ordered windows with explicit Percept holes
 - Conjunctive query graphs joined through shared Percept bindings
 - Canonical nested unordered Concepts, with explicit `*` and `/` member merging
-- Complete correlated rows with source roots, occurrence counts, matched views, and explicit unordered remainders in the Rust API
-- Grounded `@` results that can be assigned, canonically serialized, parsed, and questioned again without losing row correlation
-- A provisional projection of exact-root occurrences onto answer coefficients
+- Complete correlated rows with source Concepts, source relevance, matched views, and explicit unordered remainders in the Rust API
+- Grounded `@` results that can be questioned directly, assigned, canonically serialized, parsed, and questioned again without losing row correlation
+- A provisional projection of Percept-member relevance onto answer coefficients
 - A deterministic placeholder choice rule behind `^`
 - `$['*']` global inspection
 - An interactive console, current-behavior tests, explicitly ignored research warnings, and a browser-local WebAssembly workbench
 
-The relationships written in a question change which completions the prototype can find, and experience occurrences can currently change which candidate `^` returns. The meaning and representation of decision evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and a general surface form for constructing Concepts from rows are all open work.
+The relationships written in a question change which completions the prototype can find, and Percept-member relevance can currently change which candidate `^` returns. The meaning and representation of decision evidence, sampling semantics, scalable retrieval, persistence, distributed execution, and a general surface form for constructing Concepts from rows are all open work.
 
 To run the complete verification suite:
 
@@ -501,14 +515,15 @@ Those warnings preserve useful examples; they are not compatibility promises.
 | `[A]/[B]` | Merge with an inverted right operand |
 | `![A]` | Inversion |
 | `[A]->[B]->[C]` | One flat ordered composition; canonical output includes braces |
-| `x2[A]` | Two copies of the next complete operand; `x-1[A]` formats as `![A]` |
-| `['memory'] = expression` | Replace a Percept with zero or one root |
-| `['memory'] += expression` | Add to the materialized value, then retain one result root |
-| `['memory'] -= expression` | Subtract from the materialized value, then retain one result root |
-| `['memory'] *= expression` | Merge unordered members, then retain one result root |
-| `['memory'] /= expression` | Inverse merge, then retain one result root |
-| `['memory'] ~= expression` | Record one experience of an exact complete root |
-| `['memory'] @ expression` | Complete a structural question, return grounded row(s), and bind output Percepts |
+| `x2[A]` | Signed 64-bit integer coefficient on the next complete operand; `x-1[A]` formats as `![A]` |
+| `['memory'] = expression` | Replace a Percept with zero or one direct subconcept |
+| `['memory'] += expression` | Add to the materialized value, then retain one result subconcept |
+| `['memory'] -= expression` | Subtract from the materialized value, then retain one result subconcept |
+| `['memory'] *= expression` | Merge unordered members, then retain one result subconcept |
+| `['memory'] /= expression` | Inverse merge, then retain one result subconcept |
+| `['memory'] ~= expression` | Add one complete Concept as a relevance-bearing subconcept |
+| `concept @ expression` | Complete a structural question against one grounded Concept, return grounded row(s), and bind output Percepts |
+| `['memory'] @ expression` | Complete against the direct subconcepts of one Percept |
 | `['Alice']['Bob'] @ expression` | Complete against several selected sources; parentheses are optional |
 | `$operand` | Recursively evaluate every Percept in the operand |
 | `^['choice']` | Run the current deterministic choice placeholder |

@@ -18,11 +18,21 @@ fn explicit_ordered_nesting_currently_changes_question_matches() {
 }
 
 #[test]
-#[ignore = "warning: source selector restrictions are current parser policy"]
-fn current_question_selector_requires_plain_mutable_percepts() {
+#[ignore = "warning: unresolved Percepts in structural subjects remain invalid"]
+fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evaluation() {
     let mut pangine = Pangine::new();
 
-    for invalid in ["[Alice] @ ['answer']", "x2['Alice'] @ ['answer']", "['Alice']['Alice'] @ ['answer']", "['*'] @ ['answer']", "!['Alice'] @ ['answer']"] {
+    let answer = must_ref(&mut pangine, "[Alice] @ ['answer']");
+    assert_eq!(pangine.format_concept(&answer, false), "[Alice]");
+    assert_eq!(must_ref(&mut pangine, "$['answer']"), answer);
+
+    for invalid in [
+        "x2['Alice'] @ ['invalid-answer']",
+        "['Alice']['Alice'] @ ['invalid-answer']",
+        "['*'] @ ['invalid-answer']",
+        "!['Alice'] @ ['invalid-answer']",
+        "['Alice']->[context] @ ['invalid-answer']",
+    ] {
         assert!(pangine.reference_concept(invalid).is_err(), "expected invalid selector: {invalid}");
     }
 }
@@ -39,7 +49,7 @@ fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
     }
 
     let unseen = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
-    assert!(!pangine.get_percept_roots(&memory).unwrap().contains(&unseen));
+    assert!(!pangine.get_relevance_map(&memory).into_iter().any(|(_, concept)| concept == unseen));
 
     ask(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
     assert!(named_candidates(&mut pangine, "X").iter().any(|name| name == "E"));

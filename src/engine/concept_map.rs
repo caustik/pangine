@@ -102,6 +102,10 @@ impl ConceptMap {
         self.position(concept).is_ok()
     }
 
+    pub(super) fn get(&self, concept: &ConceptId) -> Option<&Relevance> {
+        self.position(concept).ok().map(|index| &self.entries[index].1)
+    }
+
     pub(super) fn insert(&mut self, concept: ConceptId, relevance: Relevance) -> Option<Relevance> {
         match self.position(&concept) {
             Ok(index) => {
@@ -188,18 +192,8 @@ impl IntoIterator for ConceptMap {
 fn entry_fingerprint(concept: &ConceptId, relevance: Relevance) -> u64 {
     let mut hasher = DefaultHasher::new();
     concept.hash(&mut hasher);
-    hash_float(relevance.x_coefficient, &mut hasher);
+    relevance.x_coefficient.hash(&mut hasher);
     hasher.finish()
-}
-
-fn hash_float<H: Hasher>(value: f32, hasher: &mut H) {
-    // f32 equality treats positive and negative zero as equal, so canonical
-    // lookup must put them in the same candidate bucket.
-    if value == 0.0 {
-        0_u32.hash(hasher);
-    } else {
-        value.to_bits().hash(hasher);
-    }
 }
 
 #[cfg(test)]
@@ -213,7 +207,7 @@ mod tests {
         let first = pangine.reference_named("first").unwrap();
         let second = pangine.reference_named("second").unwrap();
         let third = pangine.reference_named("third").unwrap();
-        let entries = [(first, Relevance::DEFAULT), (second, Relevance::new(2.0)), (third, Relevance::new(-3.0))];
+        let entries = [(first, Relevance::DEFAULT), (second, Relevance::new(2)), (third, Relevance::new(-3))];
 
         let forward = ConceptMap::from(entries.clone());
         let reversed = ConceptMap::from([entries[2].clone(), entries[1].clone(), entries[0].clone()]);
@@ -221,7 +215,7 @@ mod tests {
         assert_eq!(forward.summary, reversed.summary);
 
         let mut modified = forward.clone();
-        modified.insert(entries[0].0.clone(), Relevance::new(4.0));
+        modified.insert(entries[0].0.clone(), Relevance::new(4));
         modified.remove(&entries[1].0);
         let rebuilt = modified.iter().map(|(concept, &relevance)| (concept.clone(), relevance)).collect::<ConceptMap>();
         assert_eq!(modified, rebuilt);
@@ -245,13 +239,13 @@ mod tests {
     }
 
     #[test]
-    fn signed_zero_has_the_same_lookup_summary() {
+    fn full_width_integer_coefficients_have_stable_lookup_summaries() {
         let mut pangine = Pangine::new();
         let concept = pangine.reference_named("member").unwrap();
-        let positive = ConceptMap::from([(concept.clone(), Relevance::new(0.0))]);
-        let negative = ConceptMap::from([(concept, Relevance::new(-0.0))]);
+        let first = ConceptMap::from([(concept.clone(), Relevance::new(i64::MAX))]);
+        let second = ConceptMap::from([(concept, Relevance::new(i64::MAX))]);
 
-        assert_eq!(positive, negative);
-        assert_eq!(positive.summary, negative.summary);
+        assert_eq!(first, second);
+        assert_eq!(first.summary, second.summary);
     }
 }

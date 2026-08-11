@@ -1,13 +1,13 @@
-//! Warning checks for the current projection of root occurrences into `x`.
+//! Warning checks for the current projection of Percept-member relevance into `x`.
 //!
-//! Integer root counts are useful evidence, but placing their sum in the
+//! Integer member relevance is useful evidence, but placing its sum in the
 //! answer coefficient is not an accepted definition of relevance.
 
 use pangine::{ConceptId, Pangine, Relevance};
 
 #[test]
-#[ignore = "warning: projecting occurrence counts into answer x is provisional"]
-fn repeated_experiences_produce_exact_support_counts_without_event_ids() {
+#[ignore = "warning: projecting Percept-member relevance into answer x is provisional"]
+fn repeated_experiences_produce_exact_additive_support_without_event_ids() {
     let mut pangine = Pangine::new();
     let birds = "[morning][birds]";
     experience(&mut pangine, "world", birds);
@@ -16,7 +16,7 @@ fn repeated_experiences_produce_exact_support_counts_without_event_ids() {
 
     ask(&mut pangine, "['world'] @ [morning]['answer']");
 
-    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(2.0)));
+    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(2)));
     assert_eq!(candidate_relevance(&mut pangine, "answer", "traffic"), Some(Relevance::DEFAULT));
     assert_eq!(must_ref(&mut pangine, "^['answer']"), must_ref(&mut pangine, "[birds]"));
 }
@@ -44,8 +44,8 @@ fn one_experience_contributes_once_across_distinct_complete_bindings() {
 }
 
 #[test]
-#[ignore = "warning: root boundaries as separate support are provisional"]
-fn separate_exact_roots_are_separate_experiences_without_event_ids() {
+#[ignore = "warning: direct Percept members as separate support are provisional"]
+fn separate_direct_subconcepts_are_separate_experiences_without_event_ids() {
     let mut pangine = Pangine::new();
     let event = "[morning][birds]";
     experience(&mut pangine, "world", event);
@@ -53,12 +53,12 @@ fn separate_exact_roots_are_separate_experiences_without_event_ids() {
 
     ask(&mut pangine, "['world'] @ [morning]['answer']");
 
-    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(2.0)));
+    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(2)));
 }
 
 #[test]
 #[ignore = "warning: cross-Percept support addition is provisional"]
-fn selected_percepts_and_root_occurrences_both_supply_support() {
+fn selected_percepts_and_member_relevance_both_supply_support() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", "{[C]->[sound]->[birds]}");
     experience(&mut pangine, "Alice", "{[C]->[sound]->[birds]}");
@@ -66,12 +66,12 @@ fn selected_percepts_and_root_occurrences_both_supply_support() {
 
     ask(&mut pangine, "['Alice']['Bob'] @ {[C]->[sound]->['answer']}");
 
-    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(3.0)));
+    assert_eq!(candidate_relevance(&mut pangine, "answer", "birds"), Some(Relevance::new(3)));
 }
 
 #[test]
-#[ignore = "warning: equal roots under different Percepts as additive support is provisional"]
-fn repeated_root_under_different_percepts_increases_current_support() {
+#[ignore = "warning: equal Concepts under different Percepts as additive support is provisional"]
+fn repeated_concept_under_different_percepts_increases_current_support() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "Alice", "{[cat]->[purr]}");
     experience(&mut pangine, "Bob", "{[cat]->[purr]}");
@@ -95,12 +95,12 @@ fn current_decision_opens_one_composite_answer_without_a_special_wrapper() {
     let remainder = must_ref(&mut pangine, "[A][C]");
     let remainder_percept = pangine.reference_percept("remainder");
     assert_eq!(must_ref(&mut pangine, "$['remainder']"), remainder);
-    assert_eq!(pangine.get_percept_roots(&remainder_percept), Some(vec![remainder]));
+    assert_eq!(pangine.get_relevance_map(&remainder_percept), vec![(Relevance::DEFAULT, remainder)]);
     assert_eq!(must_ref(&mut pangine, "^['remainder']"), must_ref(&mut pangine, "[A]"));
 }
 
-fn experience(pangine: &mut Pangine, percept: &str, root: &str) {
-    must_ref(pangine, &format!("['{percept}'] ~= {root}"));
+fn experience(pangine: &mut Pangine, percept: &str, concept: &str) {
+    must_ref(pangine, &format!("['{percept}'] ~= {concept}"));
 }
 
 fn ask(pangine: &mut Pangine, question: &str) {

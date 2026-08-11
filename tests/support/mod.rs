@@ -122,10 +122,7 @@ impl PangineTest {
             assert_eq!(map.len(), 1, "relevance case {index} expected one entry for {source}, got {map:?}");
 
             let actual = map[0].0;
-            assert!(
-                (actual.x_coefficient - expected.x_coefficient).abs() < 0.0001,
-                "relevance case {index} failed for {source}: expected {expected:?}, got {actual:?}"
-            );
+            assert_eq!(actual, expected, "relevance case {index} failed for {source}");
         }
     }
 

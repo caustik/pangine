@@ -24,7 +24,7 @@ fn failed_pure_parses_release_transient_concepts() {
 }
 
 #[test]
-fn percept_roots_retain_concepts_until_cleared() {
+fn percept_subconcepts_retain_concepts_until_cleared() {
     let mut pangine = Pangine::new();
     let percept = pangine.reference_percept("memory");
     let value = pangine.reference_concept("[A][B]").unwrap().unwrap();

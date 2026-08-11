@@ -38,18 +38,18 @@ fn measure(experiences: usize) -> Duration {
     for index in 0..experiences {
         let item = pangine.reference_named(&format!("item-{index}")).unwrap();
         let answer = pangine.reference_named(&format!("answer-{index}")).unwrap();
-        let root = pangine.reference_ordered(vec![item, answer]);
-        pangine.record_experience(&percept, &root).unwrap();
+        let concept = pangine.reference_ordered(vec![item, answer]);
+        pangine.record_experience(&percept, &concept).unwrap();
         returns.push(pangine.materialize_percept_value(&percept).unwrap());
     }
     let elapsed = start.elapsed();
 
     assert_eq!(returns.len(), experiences);
-    assert_eq!(pangine.get_percept_roots(&percept).map(|roots| roots.len()), Some(experiences));
+    assert_eq!(pangine.get_relevance_map(&percept).len(), experiences);
     let first_item = pangine.reference_named("item-0").unwrap();
     let first_answer = pangine.reference_named("answer-0").unwrap();
-    let first_root = pangine.reference_ordered(vec![first_item, first_answer]);
-    assert_eq!(returns.first(), Some(&first_root));
+    let first_concept = pangine.reference_ordered(vec![first_item, first_answer]);
+    assert_eq!(returns.first(), Some(&first_concept));
     assert_eq!(returns.last(), pangine.get_value(&percept).as_ref());
     elapsed
 }

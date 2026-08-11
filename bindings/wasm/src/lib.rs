@@ -11,7 +11,7 @@ struct ExecutionView {
     command: String,
     canonical: String,
     console_lines: Vec<String>,
-    current_root: Option<usize>,
+    current_concept: Option<usize>,
     concept_count: usize,
     nodes: Vec<ConceptNode>,
     edges: Vec<ConceptEdge>,
@@ -34,7 +34,7 @@ struct ConceptEdge {
     target: usize,
     role: &'static str,
     owner: Option<usize>,
-    x_coefficient: f32,
+    x_coefficient: String,
 }
 
 struct SessionCore {
@@ -68,8 +68,8 @@ impl SessionCore {
     fn serialize(&self, command: &str) -> Result<String, String> {
         let current = self.current.as_ref();
         let mut graph = GraphBuilder::new(&self.engine);
-        if let Some(root) = current {
-            graph.visit(root);
+        if let Some(concept) = current {
+            graph.visit(concept);
         }
         let (nodes, edges) = graph.finish();
 
@@ -77,7 +77,7 @@ impl SessionCore {
             command: command.to_owned(),
             canonical: current.map_or_else(|| "[]".to_owned(), |concept| self.engine.format_concept(concept, false)),
             console_lines: self.engine.debug_console_lines(current),
-            current_root: current.map(ConceptId::index),
+            current_concept: current.map(ConceptId::index),
             concept_count: self.engine.concept_count(),
             nodes,
             edges,
@@ -116,8 +116,8 @@ impl<'a> GraphBuilder<'a> {
         match kind {
             ConceptKind::Named(_) => {}
             ConceptKind::Percept { .. } => {
-                for root in self.engine.get_percept_roots(concept).unwrap_or_default() {
-                    self.add_edge(concept, &root, "root", None, 0, Relevance::DEFAULT);
+                for (index, (relevance, child)) in self.engine.get_relevance_map(concept).into_iter().enumerate() {
+                    self.add_edge(concept, &child, "member", Some(concept.index()), index, relevance);
                 }
             }
             ConceptKind::Unordered => {
@@ -146,7 +146,7 @@ impl<'a> GraphBuilder<'a> {
             target: target.index(),
             role,
             owner,
-            x_coefficient: relevance.x_coefficient,
+            x_coefficient: relevance.x_coefficient.to_string(),
         });
     }
 }
@@ -219,8 +219,33 @@ mod tests {
             view["edges"].as_array().unwrap().iter().filter(|edge| edge["role"] == "member" && edge["owner"] == unordered_id).collect::<Vec<_>>();
         assert_eq!(member_edges.len(), 2);
         for edge in member_edges {
-            assert_eq!(edge["xCoefficient"], 1.0);
+            assert_eq!(edge["xCoefficient"], "1");
         }
+    }
+
+    #[test]
+    fn full_width_coefficients_serialize_without_javascript_number_loss() {
+        let mut session = SessionCore::default();
+        let json = session.execute("x9223372036854775807[cat]").unwrap();
+        let view: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let member = view["edges"].as_array().unwrap().iter().find(|edge| edge["role"] == "member").unwrap();
+        assert_eq!(member["xCoefficient"], "9223372036854775807");
+    }
+
+    #[test]
+    fn percept_state_uses_relevance_bearing_member_edges() {
+        let mut session = SessionCore::default();
+        session.execute("['memory'] ~= [cat]").unwrap();
+        session.execute("['memory'] ~= [cat]").unwrap();
+        let json = session.execute("['memory']").unwrap();
+        let view: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let percept = view["nodes"].as_array().unwrap().iter().find(|node| node["kind"] == "percept").unwrap();
+        let percept_id = percept["id"].as_u64().unwrap();
+        let state_member = view["edges"].as_array().unwrap().iter().find(|edge| edge["role"] == "member" && edge["owner"] == percept_id).unwrap();
+        assert_eq!(state_member["xCoefficient"], "2");
+        assert!(!view["edges"].as_array().unwrap().iter().any(|edge| edge["role"] == "root"));
     }
 
     #[test]

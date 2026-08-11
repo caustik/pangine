@@ -1,4 +1,4 @@
-use pangine::{Completion, CompletionRemainderSide, CompletionResult, ConceptId, Pangine};
+use pangine::{Completion, CompletionRemainderSide, CompletionResult, ConceptId, Pangine, Relevance};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
@@ -116,6 +116,17 @@ fn one_generic_graph_join_computes_a_complete_rule110_generation() {
 #[test]
 fn unmatched_context_survives_the_same_completion_that_supplies_a_residual() {
     let mut pangine = Pangine::new();
+
+    let direct_source = must_ref(&mut pangine, "([room][kettle][empty])->[result]");
+    let direct_question = must_ref(&mut pangine, "([kettle][empty])->['direct-answer']");
+    let direct = pangine.complete_subject(&direct_source, &direct_question).expect("valid direct containment question");
+    assert_eq!(direct.completions().len(), 1);
+    let direct_remainders = direct.completions()[0].evidence()[0].remainders().collect::<Vec<_>>();
+    assert_eq!(direct_remainders.len(), 1);
+    assert!(direct_remainders[0].side() == CompletionRemainderSide::Source);
+    assert_eq!(direct_remainders[0].ordered_path(), &[0]);
+    assert_eq!(pangine.format_concept(direct_remainders[0].concept(), false), "[room]");
+
     experience(&mut pangine, "rules", "([kettle][empty])->([full]/[empty])", 1);
 
     let result = complete(&mut pangine, &["rules"], "([room][kettle][empty])->['delta']");
@@ -170,10 +181,52 @@ fn correlated_rows_survive_before_any_marginal_projection() {
 }
 
 #[test]
-fn graph_rows_can_be_stored_round_tripped_and_questioned_again() {
+fn ordinary_concepts_are_one_structural_source_for_the_same_completion_calculus() {
     let mut pangine = Pangine::new();
-    for root in ["[A]->[r]->[B]", "[B]->[s]->[C]", "[X]->[r]->[Y]", "[Y]->[s]->[Z]"] {
-        experience(&mut pangine, "memory", root, 1);
+    let subject = must_ref(&mut pangine, "{[cat]->[eats]}{[dog]->[sleeps]}");
+    let question = must_ref(&mut pangine, "['what']->['whats']");
+    let result = pangine.complete_subject(&subject, &question).expect("valid ordinary subject");
+
+    let pairs = result
+        .completions()
+        .iter()
+        .map(|completion| {
+            assert_eq!(completion.evidence().len(), 1);
+            let evidence = &completion.evidence()[0];
+            assert!(evidence.source_percept().is_none());
+            assert_eq!(evidence.source_subject(), &subject);
+            assert_eq!(evidence.source_concept(), &subject);
+            assert_eq!(evidence.source_relevance(), Relevance::DEFAULT);
+            (bound_name(&mut pangine, completion, "what"), bound_name(&mut pangine, completion, "whats"))
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(pairs, BTreeSet::from([("cat".to_owned(), "eats".to_owned()), ("dog".to_owned(), "sleeps".to_owned())]));
+
+    let rows = must_ref(&mut pangine, "{[cat]->[eats]}{[dog]->[sleeps]} @ ['surface-what']->['surface-whats']");
+    assert_eq!(pangine.debug_console_lines(Some(&rows)), vec!["  {[cat]->[eats]}", "  {[dog]->[sleeps]}"]);
+    let surface_what = must_ref(&mut pangine, "$['surface-what']");
+    let surface_whats = must_ref(&mut pangine, "$['surface-whats']");
+    assert_eq!(pangine.format_concept(&surface_what, false), "[cat][dog]");
+    assert_eq!(pangine.format_concept(&surface_whats, false), "[eats][sleeps]");
+
+    for concept in ["[cat]->[eats]", "[dog]->[sleeps]"] {
+        experience(&mut pangine, "test", concept, 1);
+    }
+    let retained = complete(&mut pangine, &["test"], "['retained-what']->['retained-whats']");
+    let test = pangine.reference_percept("test");
+    for completion in retained.completions() {
+        let evidence = &completion.evidence()[0];
+        assert_eq!(evidence.source_percept(), Some(&test));
+        assert_eq!(evidence.source_subject(), &test);
+        assert_ne!(evidence.source_concept(), &subject);
+    }
+}
+
+#[test]
+fn graph_rows_can_be_stored_round_tripped_and_directly_questioned_again() {
+    let mut pangine = Pangine::new();
+    for concept in ["[A]->[r]->[B]", "[B]->[s]->[C]", "[X]->[r]->[Y]", "[Y]->[s]->[Z]"] {
+        experience(&mut pangine, "memory", concept, 1);
     }
 
     let rows = must_ref(&mut pangine, "['rows'] = (['memory'] @ (['start']->[r]->['middle'])(['middle']->[s]->['end']))");
@@ -181,6 +234,35 @@ fn graph_rows_can_be_stored_round_tripped_and_questioned_again() {
     assert_eq!(formatted, "({[A]->[r]->[B]}{[B]->[s]->[C]})({[X]->[r]->[Y]}{[Y]->[s]->[Z]})");
     let reparsed = must_ref(&mut pangine, &formatted);
     assert_eq!(reparsed, rows, "formatted result did not preserve its row boundaries: {formatted}");
+
+    let direct_question = must_ref(&mut pangine, "(['direct-start']->[r]->['direct-middle'])(['direct-middle']->[s]->['direct-end'])");
+    let direct = pangine.complete_subject(&reparsed, &direct_question).expect("question grounded rows directly");
+    let direct_paths = direct
+        .completions()
+        .iter()
+        .map(|completion| {
+            (
+                bound_name(&mut pangine, completion, "direct-start"),
+                bound_name(&mut pangine, completion, "direct-middle"),
+                bound_name(&mut pangine, completion, "direct-end"),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(direct_paths, BTreeSet::from([("A".to_owned(), "B".to_owned(), "C".to_owned()), ("X".to_owned(), "Y".to_owned(), "Z".to_owned()),]));
+
+    let chained = must_ref(
+        &mut pangine,
+        "(['memory'] @ (['chain-start']->[r]->['chain-middle'])(['chain-middle']->[s]->['chain-end']))
+         @ (['next-start']->[r]->['next-middle'])(['next-middle']->[s]->['next-end'])",
+    );
+    assert_eq!(chained, rows);
+    let next_start = must_ref(&mut pangine, "$['next-start']");
+    let next_middle = must_ref(&mut pangine, "$['next-middle']");
+    let next_end = must_ref(&mut pangine, "$['next-end']");
+    assert_eq!(pangine.format_concept(&next_start, false), "[A][X]");
+    assert_eq!(pangine.format_concept(&next_middle, false), "[B][Y]");
+    assert_eq!(pangine.format_concept(&next_end, false), "[C][Z]");
+
     let restored = pangine.reference_percept("restored-rows");
     assert!(pangine.set_percept_value(&restored, Some(reparsed)));
 
@@ -227,16 +309,22 @@ fn explicit_evidence_factors_remain_separate_without_declaring_bayesian_semantic
                 .evidence()
                 .iter()
                 .map(|evidence| {
-                    let source = pangine.format_concept(evidence.source_percept(), false);
-                    (source, evidence.source_occurrences())
+                    let source = pangine.format_concept(evidence.source_percept().expect("retained Percept source"), false);
+                    (source, evidence.source_relevance())
                 })
                 .collect::<BTreeMap<_, _>>();
             (hypothesis, factors)
         })
         .collect::<BTreeMap<_, _>>();
 
-    assert_eq!(inventory["disease"], BTreeMap::from([("['positive-factor']".to_owned(), 4), ("['prior-factor']".to_owned(), 1)]));
-    assert_eq!(inventory["healthy"], BTreeMap::from([("['positive-factor']".to_owned(), 1), ("['prior-factor']".to_owned(), 9)]));
+    assert_eq!(
+        inventory["disease"],
+        BTreeMap::from([("['positive-factor']".to_owned(), Relevance::new(4)), ("['prior-factor']".to_owned(), Relevance::DEFAULT),])
+    );
+    assert_eq!(
+        inventory["healthy"],
+        BTreeMap::from([("['positive-factor']".to_owned(), Relevance::DEFAULT), ("['prior-factor']".to_owned(), Relevance::new(9)),])
+    );
 }
 
 #[test]
@@ -247,8 +335,8 @@ fn console_question_results_are_grounded_rows() {
     let direct = must_ref(&mut pangine, "['Alice'] @ [cat]->['sound']");
     assert_eq!(pangine.debug_console_lines(Some(&direct)), vec!["  {[cat]->[purrs]}"]);
 
-    for root in ["[kitchen]->[connected-to]->[living-room]", "[kitchen]->[sound]->[fridge-hum]", "[living-room]->[sound]->[music]"] {
-        experience(&mut pangine, "Room", root, 1);
+    for concept in ["[kitchen]->[connected-to]->[living-room]", "[kitchen]->[sound]->[fridge-hum]", "[living-room]->[sound]->[music]"] {
+        experience(&mut pangine, "Room", concept, 1);
     }
     let composed = must_ref(&mut pangine, "['Room'] @ ([kitchen]->[connected-to]->['where'])(['where']->[sound]->['indirect-answer'])");
     assert_eq!(pangine.debug_console_lines(Some(&composed)), vec!["  {[kitchen]->[connected-to]->[living-room]}", "  {[living-room]->[sound]->[music]}"]);
@@ -270,9 +358,9 @@ fn bound_name(pangine: &mut Pangine, completion: &Completion, percept: &str) -> 
     pangine.get_name(completion.binding(&percept).expect("bound Percept")).expect("named binding").to_owned()
 }
 
-fn experience(pangine: &mut Pangine, percept: &str, root: &str, occurrences: u64) {
-    for _ in 0..occurrences {
-        must_ref(pangine, &format!("['{percept}'] ~= {root}"));
+fn experience(pangine: &mut Pangine, percept: &str, concept: &str, repetitions: usize) {
+    for _ in 0..repetitions {
+        must_ref(pangine, &format!("['{percept}'] ~= {concept}"));
     }
 }
 

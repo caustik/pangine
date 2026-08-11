@@ -5,15 +5,18 @@ use support::{pairs, PangineTest};
 
 #[test]
 fn relevance_addition_and_subtraction_are_stable() {
-    let mut relevance = Relevance::new(1.0);
+    let mut relevance = Relevance::new(1);
 
-    relevance.add(Relevance::new(-1.0));
-    relevance.add(Relevance::new(1.0));
-    assert_eq!(relevance, Relevance::new(1.0));
+    relevance = relevance.checked_add(Relevance::new(-1)).unwrap();
+    relevance = relevance.checked_add(Relevance::new(1)).unwrap();
+    assert_eq!(relevance, Relevance::new(1));
 
-    relevance.sub(Relevance::new(-1.0));
-    relevance.sub(Relevance::new(1.0));
-    assert_eq!(relevance, Relevance::new(1.0));
+    relevance = relevance.checked_sub(Relevance::new(-1)).unwrap();
+    relevance = relevance.checked_sub(Relevance::new(1)).unwrap();
+    assert_eq!(relevance, Relevance::new(1));
+
+    assert_eq!(Relevance::new(i64::MAX).checked_add(Relevance::DEFAULT), None);
+    assert_eq!(Relevance::new(i64::MIN).checked_neg(), None);
 }
 
 #[test]
@@ -50,20 +53,20 @@ fn public_api_mutations_update_the_unified_percept_state() {
     assert_eq!(test.reference("['direct']"), Some(percept.clone()));
     assert_eq!(test.engine().get_percept(&percept), Some(percept.clone()));
     assert_eq!(test.engine().get_value(&percept), None);
-    assert_eq!(test.engine().get_percept_roots(&percept), Some(Vec::new()));
+    assert_eq!(test.engine().get_relevance_map(&percept), Vec::new());
 
     let a = test.concept("[A]");
     let b = test.concept("[B]");
     assert!(test.engine_mut().set_percept_value(&percept, Some(a.clone())));
     assert_eq!(test.engine().get_value(&percept), Some(a.clone()));
-    assert_eq!(test.engine().get_percept_roots(&percept), Some(vec![a.clone()]));
+    assert_eq!(test.engine().get_relevance_map(&percept), vec![(Relevance::DEFAULT, a.clone())]);
     assert_eq!(test.engine().recurse(&percept, false), "['direct']");
     assert_eq!(test.engine().recurse(&percept, true), "[A]");
 
     let merged = test.engine_mut().perform_merge(&percept, Some(&b));
     assert_eq!(merged, test.reference("[A]*[B]"));
     assert_eq!(test.engine().get_value(&percept), merged);
-    assert_eq!(test.engine().get_percept_roots(&percept), merged.into_iter().collect::<Vec<_>>().into());
+    assert_eq!(test.engine().get_relevance_map(&percept), merged.into_iter().map(|concept| (Relevance::DEFAULT, concept)).collect::<Vec<_>>());
 
     let ab = test.concept("[A][B]");
     let cd = test.concept("[C][D]");
@@ -79,8 +82,7 @@ fn public_api_mutations_update_the_unified_percept_state() {
     let experienced = test.engine_mut().perform_experience(&memory, Some(&experience));
     assert_eq!(experienced, Some(experience.clone()));
     assert_eq!(test.engine().get_value(&memory), Some(experience.clone()));
-    assert_eq!(test.engine().get_percept_roots(&memory), Some(vec![experience.clone()]));
-    assert_eq!(test.engine().get_percept_root_count(&memory, &experience), Some(1));
+    assert_eq!(test.engine().get_relevance_map(&memory), vec![(Relevance::DEFAULT, experience.clone())]);
 
     let left = test.engine_mut().reference_percept("left");
     let right = test.engine_mut().reference_percept("right");
@@ -173,11 +175,11 @@ fn formatting_round_trips_and_relevance_entries_are_ordered() {
 
     let relevance = test.concept("[A]*[A]*[C]*[C]*[B]*[C]");
     let x_coefficients: Vec<_> = test.engine().get_relevance_map(&relevance).into_iter().map(|(relevance, _)| relevance.x_coefficient).collect();
-    assert_eq!(x_coefficients, vec![3.0, 2.0, 1.0]);
+    assert_eq!(x_coefficients, vec![3, 2, 1]);
 
     let equal_relevance = test.concept("[A]*[C]*[B]");
     let x_coefficients: Vec<_> = test.engine().get_relevance_map(&equal_relevance).into_iter().map(|(relevance, _)| relevance.x_coefficient).collect();
-    assert_eq!(x_coefficients, vec![1.0, 1.0, 1.0]);
+    assert_eq!(x_coefficients, vec![1, 1, 1]);
 }
 
 #[test]
