@@ -85,14 +85,18 @@ fn repeated_root_under_different_percepts_increases_current_support() {
 }
 
 #[test]
-#[ignore = "warning: composite-answer support projection is provisional"]
-fn one_composite_answer_remains_one_decision_candidate_without_fake_support() {
+#[ignore = "warning: deciding over the members of one composite answer is provisional"]
+fn current_decision_opens_one_composite_answer_without_a_special_wrapper() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "memory", "[A][B][C]");
 
     ask(&mut pangine, "['memory'] @ ['remainder'][B]");
 
-    assert_eq!(must_ref(&mut pangine, "^['remainder']"), must_ref(&mut pangine, "[A][C]"));
+    let remainder = must_ref(&mut pangine, "[A][C]");
+    let remainder_percept = pangine.reference_percept("remainder");
+    assert_eq!(must_ref(&mut pangine, "$['remainder']"), remainder);
+    assert_eq!(pangine.get_percept_roots(&remainder_percept), Some(vec![remainder]));
+    assert_eq!(must_ref(&mut pangine, "^['remainder']"), must_ref(&mut pangine, "[A]"));
 }
 
 fn experience(pangine: &mut Pangine, percept: &str, root: &str) {

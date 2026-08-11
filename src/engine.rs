@@ -63,9 +63,9 @@ Concept syntax:
   []                         Null / no Concept
   [name]                     Named Concept
   ['name']                   Percept reference
-  (expression)               Grouping
+  (expression)               Make one complete surrounding operand
   [A][B]                     Union
-  [A]*[B]                    Explicit union merge
+  [A]*[B]                    Merge unordered Concept members
   [A]/[B]                    Merge with inverted [B]
   ![A]                       Inversion
   [A]->[B]->[C]              Ordered composition
@@ -75,7 +75,7 @@ Percept operations:
   ['name'] = expression      Assign
   ['name'] += expression     Union addition
   ['name'] -= expression     Union subtraction
-  ['name'] *= expression     Explicit union merge
+  ['name'] *= expression     Merge unordered Concept members
   ['name'] /= expression     Inverse merge
   ['name'] ~= expression     Experience
   ['source'] @ expression    Complete one source; return rows and bind holes
@@ -696,10 +696,10 @@ impl Pangine {
     }
 
     fn parse_union(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
-        let mut concepts = Vec::new();
+        let mut operands = Vec::new();
 
-        if let Some(concept) = self.parse_union_operand(parser)? {
-            concepts.push(concept);
+        if let Some(operand) = self.parse_union_operand(parser)? {
+            operands.push(operand);
         }
 
         loop {
@@ -708,23 +708,22 @@ impl Pangine {
                 break;
             }
 
-            if let Some(concept) = self.parse_union_operand(parser)? {
-                concepts.push(concept);
+            if let Some(operand) = self.parse_union_operand(parser)? {
+                operands.push(operand);
             }
         }
 
-        Ok(self.reference_union(&concepts))
+        Ok(self.reference_union(&operands))
     }
 
-    fn parse_union_operand(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+    fn parse_union_operand(&mut self, parser: &mut Parser) -> ParseResult<Option<ParsedUnionOperand>> {
         parser.skip_ws();
 
         if parser.consume('x') {
             let x_coefficient = parser.parse_float();
-            let term = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
-            let mut map = ConceptMap::new();
-            self.add_union_concept(&mut map, term, false, Relevance::new(x_coefficient));
-            return Ok(self.reference_map(&map));
+            let mut operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
+            operand.relevance = multiply_relevance(Relevance::new(x_coefficient), operand.relevance);
+            return Ok(Some(operand));
         }
 
         match parser.peek() {
@@ -732,29 +731,34 @@ impl Pangine {
                 parser.next();
                 let concept = self.parse_expression(parser)?;
                 parser.expect(')')?;
-                Ok(concept)
+                Ok(concept.map(ParsedUnionOperand::ordinary))
             }
-            Some('[') => self.parse_bracket(parser),
-            Some('{') => self.parse_ordered(parser),
+            Some('[') => Ok(self.parse_bracket(parser)?.map(ParsedUnionOperand::ordinary)),
+            Some('{') => Ok(self.parse_ordered(parser)?.map(ParsedUnionOperand::ordinary)),
             Some('$') => {
                 parser.next();
-                let evaluated = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
-                Ok(self.evaluate_concept(&evaluated))
+                let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
+                let operand = self.reference_union(&[operand]).ok_or(ParseError::InvalidSyntax)?;
+                Ok(self.evaluate_concept(&operand).map(ParsedUnionOperand::ordinary))
             }
             Some('^') => {
                 parser.next();
-                let decision = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
-                Ok(self.make_decision(&decision))
+                let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
+                let operand = self.reference_union(&[operand]).ok_or(ParseError::InvalidSyntax)?;
+                Ok(self.make_decision(&operand).map(ParsedUnionOperand::ordinary))
             }
             Some('!') => {
                 parser.next();
                 parser.skip_ws();
                 let concept_start = parser.pos;
-                let concept = self.parse_union_operand(parser)?;
-                if concept.is_none() && parser.pos == concept_start {
+                let mut operand = self.parse_union_operand(parser)?;
+                if operand.is_none() && parser.pos == concept_start {
                     return Err(ParseError::InvalidSyntax);
                 }
-                Ok(self.reference_inversion(concept))
+                if let Some(operand) = operand.as_mut() {
+                    operand.relevance.x_coefficient = -operand.relevance.x_coefficient;
+                }
+                Ok(operand)
             }
             _ => Ok(None),
         }
@@ -865,12 +869,6 @@ impl Pangine {
         Some(concept)
     }
 
-    fn reference_inversion(&mut self, concept: Option<ConceptId>) -> Option<ConceptId> {
-        let mut map = ConceptMap::new();
-        self.add_merge_concept(&mut map, concept?, true, Relevance::DEFAULT);
-        self.reference_map(&map)
-    }
-
     fn reference_merge_with_inversion(&mut self, left: Option<ConceptId>, right: Option<ConceptId>, right_inversion: bool) -> Option<ConceptId> {
         let mut map = ConceptMap::new();
 
@@ -884,15 +882,11 @@ impl Pangine {
         self.reference_map(&map)
     }
 
-    fn reference_union(&mut self, concepts: &[ConceptId]) -> Option<ConceptId> {
-        if concepts.len() == 1 {
-            return concepts.first().cloned();
-        }
-
+    fn reference_union(&mut self, operands: &[ParsedUnionOperand]) -> Option<ConceptId> {
         let mut map = ConceptMap::new();
 
-        for concept in concepts.iter().cloned() {
-            self.add_union_concept(&mut map, concept, false, Relevance::DEFAULT);
+        for operand in operands {
+            self.add_union_concept(&mut map, operand.concept.clone(), false, operand.relevance);
         }
 
         self.reference_map(&map)
@@ -1183,8 +1177,7 @@ impl Pangine {
         }
 
         let value = self.reference_map(&map);
-        let stored = self.preserve_unordered_entry_boundary(&map, value.clone());
-        Some((value, stored))
+        Some((value.clone(), value))
     }
 
     fn perform_merge_update(&mut self, percept: &ConceptId, concept: Option<ConceptId>, inversion: bool) -> Option<ConceptId> {
@@ -1213,21 +1206,6 @@ impl Pangine {
         let mut map = ConceptMap::new();
         self.add_union_concept(&mut map, current, false, Relevance::DEFAULT);
         Some(map)
-    }
-
-    fn preserve_unordered_entry_boundary(&mut self, map: &ConceptMap, value: Option<ConceptId>) -> Option<ConceptId> {
-        // Normalization ordinarily collapses a sole default-coefficient member.
-        // Preserve this boundary when that member is itself unordered so ^
-        // chooses the complete member instead of choosing one of its parts.
-        if let Some(concept) = Self::sole_default_concept(map) {
-            if matches!(concept.0.kind, ConceptKind::Unordered) {
-                let stored = self.alloc(ConceptKind::Unordered, map.clone());
-                self.composites.push(Rc::downgrade(&stored.0));
-                return Some(stored);
-            }
-        }
-
-        value
     }
 
     fn answer_question(&mut self, percepts: &[ConceptId], question: Option<ConceptId>) -> Option<ConceptId> {
@@ -1419,8 +1397,7 @@ impl Pangine {
                 let support = candidate_witnesses.iter().map(|source| u128::from(source.occurrences)).sum::<u128>();
                 self.add_relevance(&mut candidates, candidate, false, Relevance::new(support as f32));
             }
-            let value = self.reference_map(&candidates);
-            results.insert(output, self.preserve_unordered_entry_boundary(&candidates, value));
+            results.insert(output, self.reference_map(&candidates));
         }
         results
     }
@@ -1488,15 +1465,21 @@ impl Pangine {
 // Relevance accumulation and structural access.
 impl Pangine {
     fn add_merge_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
-        self.add_union_concept(map, concept, inversion, relevance);
-    }
-
-    fn add_union_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
         let subconcepts = concept.0.subconcepts.clone();
         if matches!(concept.0.kind, ConceptKind::Unordered) {
             for (child, child_relevance) in subconcepts {
                 self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance));
             }
+        } else {
+            self.add_union_concept(map, concept, inversion, relevance);
+        }
+    }
+
+    fn add_union_concept(&mut self, map: &mut ConceptMap, concept: ConceptId, inversion: bool, relevance: Relevance) {
+        let subconcepts = concept.0.subconcepts.clone();
+        if matches!(concept.0.kind, ConceptKind::Unordered) && subconcepts.len() == 1 {
+            let (child, child_relevance) = subconcepts.into_iter().next().unwrap();
+            self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance));
         } else {
             self.add_relevance(map, concept, inversion, relevance);
         }
@@ -1702,6 +1685,7 @@ impl Pangine {
     fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId) -> String {
         let mut out = String::from("  ");
         let add_separator = relevance.x_coefficient != 1.0 && relevance.x_coefficient != -1.0;
+        let wrap_concept = relevance.x_coefficient != 1.0 && matches!(concept.0.kind, ConceptKind::Unordered);
 
         if relevance.x_coefficient == -1.0 {
             out.push('!');
@@ -1711,12 +1695,29 @@ impl Pangine {
             out.push_str(&format_x_coefficient(relevance));
         }
 
-        if add_separator {
+        if add_separator && !wrap_concept {
             out.push(' ');
         }
 
+        if wrap_concept {
+            out.push('(');
+        }
         out.push_str(&self.format_concept(concept, false));
+        if wrap_concept {
+            out.push(')');
+        }
         out
+    }
+}
+
+struct ParsedUnionOperand {
+    concept: ConceptId,
+    relevance: Relevance,
+}
+
+impl ParsedUnionOperand {
+    fn ordinary(concept: ConceptId) -> Self {
+        Self { concept, relevance: Relevance::DEFAULT }
     }
 }
 
@@ -2022,6 +2023,8 @@ mod tests {
         assert_eq!(debug_console_help("[help]"), None);
         for expected in [
             "[]                         Null",
+            "(expression)               Make one complete surrounding operand",
+            "[A]*[B]                    Merge unordered Concept members",
             "[A]/[B]",
             "x2[A]x3[B]                 Signed coefficients",
             "['name'] ~= expression     Experience",

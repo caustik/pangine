@@ -4,7 +4,7 @@ use pangine::Relevance;
 use support::{pairs, PangineTest};
 
 #[test]
-fn union_adjacency_and_star_merge_share_one_normal_form() {
+fn adjacency_composes_complete_operands_while_star_merges_their_members() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
@@ -13,34 +13,47 @@ fn union_adjacency_and_star_merge_share_one_normal_form() {
         "[A][A]" => "x2[A]",
         "[A][A]*[A][A]" => "[A][A][A][A]",
         "([A][B])*([A][B])" => "[A][B][A][B]",
-        "([A][B])([A][B])" => "([A][B])*([A][B])",
+        "(([A][B])([C][D]))*([E][F])" => "([A][B])([C][D])[E][F]",
     });
     test.assert_distinct(pairs! {
         "[A][A]" => "[A]",
         "[A][B][A][B]" => "[A][B]",
+        "([A][B])([A][B])" => "([A][B])*([A][B])",
+        "(([A][B])([C][D]))*([E][F])" => "[A][B][C][D][E][F]",
     });
     test.assert_formats(pairs! {
         "[A]*[B]" => "[A][B]",
+        "([A][B])*([C][D])" => "[A][B][C][D]",
     });
-    test.assert_invalid(["*[A]", "[A]*"]);
+    test.assert_invalid(["*[A]", "[A]*", "<[A][B]>", "[A]<[B]>"]);
 }
 
 #[test]
-fn directly_nested_unions_normalize_like_flat_unions() {
+fn parenthesized_unions_remain_complete_canonical_operands() {
     let mut test = PangineTest::new();
 
-    test.assert_equivalent(pairs! {
+    test.assert_distinct(pairs! {
         "([A][B])([A][B])" => "[A][B][A][B]",
         "([A][B])([B][C])" => "[A][B][B][C]",
         "([A][B])([C][D])" => "[A][B][C][D]",
         "x2([A][B])" => "x2[A]x2[B]",
         "(x2[A]x2[B])(x3[A]x3[B])" => "x5[A]x5[B]",
-        "([A][B])(x2[A]x2[B])" => "([A][B])*(x2[A]x2[B])",
     });
-    test.assert_null(["(x2[A]x2[B])(x-2[A]x-2[B])"]);
+    test.assert_equivalent(pairs! {
+        "([A][B])([A][B])" => "x2([A][B])",
+        "x-1([A][B])" => "!([A][B])",
+    });
+    test.assert_null(["([A][B])x-1([A][B])"]);
     test.assert_formats(pairs! {
-        "([A][B])([A][B])" => "x2[A]x2[B]",
+        "([A][B])([C][D])" => "([A][B])([C][D])",
+        "([A][B])([A][B])" => "x2([A][B])",
+        "x-1([A][B])" => "!([A][B])",
     });
+
+    let repeated = test.concept("x2([A][B])");
+    assert_eq!(test.engine().debug_console_lines(Some(&repeated)), vec!["  x2([A][B])"]);
+    let inverted = test.concept("!([A][B])");
+    assert_eq!(test.engine().debug_console_lines(Some(&inverted)), vec!["  !([A][B])"]);
 }
 
 #[test]
@@ -62,7 +75,7 @@ fn signed_x_coefficient_syntax_round_trips() {
 }
 
 #[test]
-fn coefficient_prefixes_bind_one_operand_and_distribute_over_grouped_unions() {
+fn coefficient_prefixes_bind_one_complete_operand() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
@@ -75,7 +88,7 @@ fn coefficient_prefixes_bind_one_operand_and_distribute_over_grouped_unions() {
     });
     test.assert_formats(pairs! {
         "x2[A]x3[B]" => "x3[B]x2[A]",
-        "x2([A][B])" => "x2[A]x2[B]",
+        "x2([A][B])" => "x2([A][B])",
     });
 }
 

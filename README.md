@@ -50,23 +50,22 @@ command> [cat][cat][dog]
 
 Repeating the same unordered member increases its retained multiplicity. Canonical output shortens two copies to `x2`.
 
-Parentheses decide what the grammar applies together, but they do not leave an unordered Concept hidden inside another unordered Concept. Pangine opens directly nested unions and combines equal members, so these three inputs are the same Concept:
+Parentheses make a complete expression one operand of the surrounding composition. A parenthesized unordered Concept therefore remains an ordinary member of another unordered Concept:
 
 ```text
 command> [A][B][A][B]
   x2 [A]
   x2 [B]
 command> ([A][B])([A][B])
-  x2 [A]
-  x2 [B]
+  x2([A][B])
 command> ([A][B])*([A][B])
   x2 [A]
   x2 [B]
 ```
 
-`*` currently reaches the same unordered normal form as adjacency. It remains available while I audit whether it has an independent job left.
+The first Concept has four members at one level. The second has two equal members, each of which is the complete Concept `[A][B]`. `*` explicitly merges the direct members of its operands, so the third input reaches the same flat members as the first. This distinction belongs to Concept construction, not only to text parsing. The canonical Concept graph retains the nested member, and its formatted text parses back into the same graph.
 
-A different surrounding Concept kind still retains the union as one position:
+A surrounding ordered Concept likewise retains an unordered Concept as one position:
 
 ```text
 command> ([A][B])->[C]
@@ -94,11 +93,10 @@ command> x2[cat]x3[dog]
   x3 [dog]
   x2 [cat]
 command> x2([cat][dog])
-  x2 [cat]
-  x2 [dog]
+  x2([cat][dog])
 ```
 
-`x2[cat]` is the same Concept as `[cat][cat]`. The prefix applies to the next union operand, so `x3` applies separately to `dog`. Parentheses make the outer `x2` apply to the complete input group, then unordered normalization multiplies it into each member. Inversion is the negative form: `x-1[cat]` formats as `![cat]`.
+`x2[cat]` is the same Concept as `[cat][cat]`. The prefix applies to the next unordered operand, so `x3` applies separately to `dog`. In `x2([cat][dog])`, the coefficient applies to the complete parenthesized Concept rather than distributing into its members. Inversion is the negative form: `x-1[cat]` formats as `![cat]`. `/` remains the explicit way to merge the inverted members of its right operand.
 
 The current engine retains exact roots and occurrence counts when it records experience. What a later decision should calculate from that accumulated information remains open. The current `^` implementation only supplies the simple deterministic placeholder explained below.
 
@@ -247,15 +245,12 @@ Every `~=` command already represents one experience. If the same thing is exper
 
 ```text
 command> ['world'] ~= [morning][birds]
-  [birds]
-  [morning]
+  [birds][morning]
 command> ['world'] ~= [morning][birds]
-  x2 [birds]
-  x2 [morning]
+  x2([birds][morning])
 command> ['world'] ~= [morning][traffic]
-  x3 [morning]
-  x2 [birds]
-  [traffic]
+  x2([birds][morning])
+  [morning][traffic]
 command> ['world'] @ [morning]['answer']
   [birds][morning]
   [morning][traffic]
@@ -335,6 +330,25 @@ command> $['rows']
 ```
 
 The separate `$['left']` and `$['right']` views are convenient columns, but they cannot express that `A` belonged with `D` and `B` belonged with `C`. The value returned by `@` and stored in `rows` can. The Rust `complete_question` API also retains the complete assignment and the exact source evidence behind each row.
+
+The same works when each possible row is itself a graph of several relationships. Here I store two paths, then ask the result another question:
+
+```text
+command> ['memory'] ~= [A]->[r]->[B]; ['memory'] ~= [B]->[s]->[C]; ['memory'] ~= [X]->[r]->[Y]; ['memory'] ~= [Y]->[s]->[Z]; ['rows'] = (['memory'] @ (['start']->[r]->['middle'])(['middle']->[s]->['end']))
+  {[A]->[r]->[B]}{[B]->[s]->[C]}
+  {[X]->[r]->[Y]}{[Y]->[s]->[Z]}
+command> $['rows']
+  {[A]->[r]->[B]}{[B]->[s]->[C]}
+  {[X]->[r]->[Y]}{[Y]->[s]->[Z]}
+command> ['reused'] = (['rows'] @ (['next-start']->[r]->['next-middle'])(['next-middle']->[s]->['next-end']))
+  {[A]->[r]->[B]}{[B]->[s]->[C]}
+  {[X]->[r]->[Y]}{[Y]->[s]->[Z]}
+command> $['next-end']
+  [C]
+  [Z]
+```
+
+The complete value preserves `A-B-C` and `X-Y-Z`; it does not invent `A-B-Z` or `X-Y-C`. Its canonical single-expression spelling is `({[A]->[r]->[B]}{[B]->[s]->[C]})({[X]->[r]->[Y]}{[Y]->[s]->[Z]})`. Parentheses retain each ordinary graph Concept as one member, and that text parses back into the same Concept. Assigning the result makes the assigned Percept the source for the next question. The original clause evidence and occurrence counts remain available in the original Rust `CompletionResult`; they are not encoded into the grounded language value.
 
 ### Use scripts and comments
 
@@ -448,8 +462,9 @@ The current implementation is written in Rust. It includes:
 - One-source and unparenthesized multi-source question selection
 - Lazy exact recursive matching and ordered windows with explicit Percept holes
 - Conjunctive query graphs joined through shared Percept bindings
+- Canonical nested unordered Concepts, with explicit `*` and `/` member merging
 - Complete correlated rows with source roots, occurrence counts, matched views, and explicit unordered remainders in the Rust API
-- Grounded `@` results that can be assigned without losing row correlation
+- Grounded `@` results that can be assigned, canonically serialized, parsed, and questioned again without losing row correlation
 - A provisional projection of exact-root occurrences onto answer coefficients
 - A deterministic placeholder choice rule behind `^`
 - `$['*']` global inspection
@@ -479,17 +494,18 @@ Those warnings preserve useful examples; they are not compatibility promises.
 | `[]` | Null or no Concept |
 | `[name]` | Named Concept |
 | `['memory']` | Named Percept reference |
-| `(expression)` | Grouping |
-| `[A][B]` | Union |
-| `[A]*[B]` | Explicit union merge; currently the same normal form as adjacency |
+| `(expression)` | Make the complete expression one operand of its surrounding composition |
+| `[A][B]` | Unordered composition |
+| `([A][B])([C][D])` | Unordered composition whose two members are complete unordered Concepts |
+| `[A]*[B]` | Merge the direct unordered members of both operands |
 | `[A]/[B]` | Merge with an inverted right operand |
 | `![A]` | Inversion |
 | `[A]->[B]->[C]` | One flat ordered composition; canonical output includes braces |
-| `x2[A]` | Two copies of the next union operand; `x-1[A]` formats as `![A]` |
+| `x2[A]` | Two copies of the next complete operand; `x-1[A]` formats as `![A]` |
 | `['memory'] = expression` | Replace a Percept with zero or one root |
 | `['memory'] += expression` | Add to the materialized value, then retain one result root |
 | `['memory'] -= expression` | Subtract from the materialized value, then retain one result root |
-| `['memory'] *= expression` | Explicit union merge, then retain one result root; currently the same normal form as `+=` |
+| `['memory'] *= expression` | Merge unordered members, then retain one result root |
 | `['memory'] /= expression` | Inverse merge, then retain one result root |
 | `['memory'] ~= expression` | Record one experience of an exact complete root |
 | `['memory'] @ expression` | Complete a structural question, return grounded row(s), and bind output Percepts |

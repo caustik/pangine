@@ -140,7 +140,7 @@ fn coefficient_root_and_repeated_atomic_root_remain_distinct() {
 }
 
 #[test]
-fn roots_with_different_coefficients_remain_distinct_while_their_materialized_union_normalizes() {
+fn roots_with_different_coefficients_remain_distinct_in_the_materialized_value() {
     let mut pangine = Pangine::new();
     let memory = pangine.reference_percept("memory");
 
@@ -151,23 +151,25 @@ fn roots_with_different_coefficients_remain_distinct_while_their_materialized_un
     let second = must_ref(&mut pangine, "x2[A]x2[B]");
     assert_eq!(pangine.get_percept_roots(&memory).unwrap().into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([first, second]));
 
-    let normalized = must_ref(&mut pangine, "x3[A]x3[B]");
-    assert_eq!(pangine.get_value(&memory), Some(normalized.clone()));
-    assert_eq!(must_ref(&mut pangine, "$['memory']"), normalized);
+    let materialized = must_ref(&mut pangine, "([A][B])(x2[A]x2[B])");
+    assert_eq!(pangine.get_value(&memory), Some(materialized.clone()));
+    assert_eq!(must_ref(&mut pangine, "$['memory']"), materialized);
 }
 
 #[test]
-fn equivalent_grouped_unions_share_one_exact_experience_root() {
+fn flat_and_grouped_unions_remain_distinct_exact_experience_roots() {
     let mut pangine = Pangine::new();
     let memory = pangine.reference_percept("memory");
 
     must_ref(&mut pangine, "['memory'] ~= [A][B][A][B]");
     must_ref(&mut pangine, "['memory'] ~= ([A][B])([A][B])");
 
-    let root = must_ref(&mut pangine, "x2[A]x2[B]");
-    assert_eq!(pangine.get_percept_roots(&memory), Some(vec![root.clone()]));
-    assert_eq!(pangine.get_percept_root_count(&memory, &root), Some(2));
-    let materialized = must_ref(&mut pangine, "x4[A]x4[B]");
+    let flat = must_ref(&mut pangine, "x2[A]x2[B]");
+    let grouped = must_ref(&mut pangine, "x2([A][B])");
+    assert_eq!(pangine.get_percept_roots(&memory).unwrap().into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([flat.clone(), grouped.clone()]));
+    assert_eq!(pangine.get_percept_root_count(&memory, &flat), Some(1));
+    assert_eq!(pangine.get_percept_root_count(&memory, &grouped), Some(1));
+    let materialized = must_ref(&mut pangine, "x2([A][B])(x2[A]x2[B])");
     assert_eq!(pangine.get_value(&memory), Some(materialized));
 }
 
@@ -302,7 +304,7 @@ fn unequal_union_question_binds_the_exact_remainder_above_its_parts() {
     must_ref(&mut pangine, "['memory'] ~= [A]*[B]*[C]");
     ask(&mut pangine, "['memory'] @ ['X']*[B]");
 
-    assert_eq!(must_ref(&mut pangine, "^['X']"), must_ref(&mut pangine, "[A]*[C]"));
+    assert_eq!(must_ref(&mut pangine, "$['X']"), must_ref(&mut pangine, "[A]*[C]"));
 }
 
 #[test]

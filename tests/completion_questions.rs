@@ -22,6 +22,22 @@ fn shared_holes_compose_relationships_while_one_atom_remains_one_step() {
 }
 
 #[test]
+fn nested_unordered_concepts_are_questioned_as_ordinary_structure() {
+    let mut pangine = Pangine::new();
+    experience(&mut pangine, "memory", "([A][B])([C][D])", 1);
+
+    let result = complete(&mut pangine, &["memory"], "([A]['left'])([C]['right'])");
+    assert_eq!(result.completions().len(), 1);
+    assert_eq!(bound_name(&mut pangine, &result.completions()[0], "left"), "B");
+    assert_eq!(bound_name(&mut pangine, &result.completions()[0], "right"), "D");
+
+    let row = must_ref(&mut pangine, "['memory'] @ ([A]['surface-left'])([C]['surface-right'])");
+    let formatted = pangine.format_concept(&row, false);
+    assert_eq!(formatted, "([A][B])([C][D])");
+    assert_eq!(must_ref(&mut pangine, &formatted), row);
+}
+
+#[test]
 fn at_uses_explicit_graph_composition_instead_of_implicit_contextual_widening() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "knowledge", "[Socrates]->[is-a]->[human]", 1);
@@ -123,6 +139,11 @@ fn unmatched_context_survives_the_same_completion_that_supplies_a_residual() {
     assert_eq!(pangine.format_concept(&pangine.get_value(&state).expect("updated state"), false), "[full][kettle][room]");
 
     must_ref(&mut pangine, "['rules'] @ ([room][kettle][empty])->['at-delta']");
+    let at_delta_percept = pangine.reference_percept("at-delta");
+    let stored_at_delta = pangine.get_value(&at_delta_percept).expect("stored composite answer");
+    let stored_at_delta_text = pangine.format_concept(&stored_at_delta, false);
+    assert_eq!(stored_at_delta_text, "[full]![empty]");
+    assert_eq!(must_ref(&mut pangine, &stored_at_delta_text), stored_at_delta);
     let at_delta = must_ref(&mut pangine, "$['at-delta']");
     assert_eq!(pangine.format_concept(&at_delta, false), "[full]![empty]");
 }
@@ -146,6 +167,44 @@ fn correlated_rows_survive_before_any_marginal_projection() {
     assert_eq!(row_members, BTreeSet::from(["{[A]->[D]}".to_owned(), "{[B]->[C]}".to_owned()]));
     let rows_percept = pangine.reference_percept("rows");
     assert_eq!(pangine.get_value(&rows_percept), Some(rows));
+}
+
+#[test]
+fn graph_rows_can_be_stored_round_tripped_and_questioned_again() {
+    let mut pangine = Pangine::new();
+    for root in ["[A]->[r]->[B]", "[B]->[s]->[C]", "[X]->[r]->[Y]", "[Y]->[s]->[Z]"] {
+        experience(&mut pangine, "memory", root, 1);
+    }
+
+    let rows = must_ref(&mut pangine, "['rows'] = (['memory'] @ (['start']->[r]->['middle'])(['middle']->[s]->['end']))");
+    let formatted = pangine.format_concept(&rows, false);
+    assert_eq!(formatted, "({[A]->[r]->[B]}{[B]->[s]->[C]})({[X]->[r]->[Y]}{[Y]->[s]->[Z]})");
+    let reparsed = must_ref(&mut pangine, &formatted);
+    assert_eq!(reparsed, rows, "formatted result did not preserve its row boundaries: {formatted}");
+    let restored = pangine.reference_percept("restored-rows");
+    assert!(pangine.set_percept_value(&restored, Some(reparsed)));
+
+    let result = complete(&mut pangine, &["restored-rows"], "(['next-start']->[r]->['next-middle'])(['next-middle']->[s]->['next-end'])");
+    let paths = result
+        .completions()
+        .iter()
+        .map(|completion| {
+            (
+                bound_name(&mut pangine, completion, "next-start"),
+                bound_name(&mut pangine, completion, "next-middle"),
+                bound_name(&mut pangine, completion, "next-end"),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(paths, BTreeSet::from([("A".to_owned(), "B".to_owned(), "C".to_owned()), ("X".to_owned(), "Y".to_owned(), "Z".to_owned()),]));
+
+    let surface_rows = must_ref(&mut pangine, "['restored-rows'] @ (['surface-start']->[r]->['surface-middle'])(['surface-middle']->[s]->['surface-end'])");
+    let row_members = pangine.get_relevance_map(&surface_rows).into_iter().map(|(_, row)| pangine.format_concept(&row, false)).collect::<BTreeSet<_>>();
+    assert_eq!(row_members.len(), 2);
+
+    let end = must_ref(&mut pangine, "$['surface-end']");
+    let marginal = pangine.get_relevance_map(&end).into_iter().map(|(_, value)| pangine.format_concept(&value, false)).collect::<BTreeSet<_>>();
+    assert_eq!(marginal, BTreeSet::from(["[C]".to_owned(), "[Z]".to_owned()]));
 }
 
 #[test]

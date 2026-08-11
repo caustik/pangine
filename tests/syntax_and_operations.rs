@@ -66,7 +66,7 @@ fn ordered_compositions_are_flat_canonical_and_explicitly_nestable() {
         "[A]->[B]->[C]" => "{[A]->[B]->[C]}",
         "{[a]->[b][c][d]}" => "{[a]->[b][c][d]}",
         "([A][B])->[target]" => "{[A][B]->[target]}",
-        "x2([A][B])->[target]" => "{x2[A]x2[B]->[target]}",
+        "x2([A][B])->[target]" => "{x2([A][B])->[target]}",
         "([A]->[B])->[C]" => "{{[A]->[B]}->[C]}",
         "[A]->([B]->[C])" => "{[A]->{[B]->[C]}}",
     });
@@ -144,18 +144,24 @@ fn ordinary_percept_mutation_operators_are_explicit() {
 }
 
 #[test]
-fn percept_addition_and_merge_use_the_same_normalized_union() {
+fn percept_addition_preserves_operands_while_merge_opens_their_members() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
         "['A'] += [A][B]" => "[A][B]",
         "['M'] *= [A][B]" => "[A][B]",
-        "['A'] += [B][C]" => "[A][B][B][C]",
+        "['A'] += [B][C]" => "[A][B]([B][C])",
         "['M'] *= [B][C]" => "[A][B][B][C]",
         "['A'] -= [B][C]" => "[A][B]",
         "['M'] /= [B][C]" => "[A][B]",
+        "['A'] -= [A][B]" => "[A][B]x-1([A][B])",
     });
-    test.assert_null(["['A'] -= [A][B]", "['M'] /= [A][B]"]);
+    test.assert_null(["['M'] /= [A][B]"]);
+
+    PangineTest::assert_script_results(pairs! {
+        "['P'] = [A][B]; ['P'] += [C][D]" => "[A][B]([C][D])",
+        "['P'] = [A][B]; ['P'] *= [C][D]" => "[A][B][C][D]",
+    });
 }
 
 #[test]

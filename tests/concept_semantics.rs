@@ -65,6 +65,15 @@ fn public_api_mutations_update_the_unified_percept_state() {
     assert_eq!(test.engine().get_value(&percept), merged);
     assert_eq!(test.engine().get_percept_roots(&percept), merged.into_iter().collect::<Vec<_>>().into());
 
+    let ab = test.concept("[A][B]");
+    let cd = test.concept("[C][D]");
+    assert!(test.engine_mut().set_percept_value(&percept, Some(ab.clone())));
+    let added = test.engine_mut().perform_addition(&percept, Some(&cd));
+    assert_eq!(added, test.reference("[A][B]([C][D])"));
+    assert!(test.engine_mut().set_percept_value(&percept, Some(ab)));
+    let merged = test.engine_mut().perform_merge(&percept, Some(&cd));
+    assert_eq!(merged, test.reference("[A][B][C][D]"));
+
     let memory = test.engine_mut().reference_percept("memory");
     let experience = test.concept("{[A]->[B]}");
     let experienced = test.engine_mut().perform_experience(&memory, Some(&experience));
@@ -99,7 +108,7 @@ fn ordered_and_unordered_compositions_are_canonical() {
     });
     test.assert_equivalent(pairs! {
         "x2[A]x2[B]x3[B]" => "x2[A]x5[B]",
-        "x2([A]*[B])x3([B]*[A])x2{[C]->[D]}" => "x5[A]x5[B]x2{[C]->[D]}",
+        "x2([A]*[B])x3([B]*[A])x2{[C]->[D]}" => "x5([A][B])x2{[C]->[D]}",
     });
     test.exec(["{x2[A]x2[B]->[C]}"]);
 }
@@ -123,7 +132,7 @@ fn composite_identity_survives_registry_growth_and_cleanup() {
 }
 
 #[test]
-fn union_inversion_normalization_and_null_removal_are_canonical() {
+fn unordered_identity_inversion_and_explicit_merge_are_canonical() {
     let mut test = PangineTest::new();
 
     test.assert_distinct(pairs! {
@@ -132,6 +141,7 @@ fn union_inversion_normalization_and_null_removal_are_canonical() {
         "[A]*[B]" => "[B]",
         "[A]" => "![A]",
         "!([A]*[B])" => "[A]*[B]",
+        "!([A]*[B])" => "![A]*![B]",
     });
     test.assert_equivalent(pairs! {
         "[A]*[B]" => "[B]*[A]",
@@ -141,15 +151,15 @@ fn union_inversion_normalization_and_null_removal_are_canonical() {
         "[A]" => "!(!([A]))",
         "!([A]*[B])" => "!(!!([B]*[A]))",
         "x-1[A]" => "![A]",
-        "x-1[A]x-1[B]" => "!([A]*[B])",
-        "x-2[A]x-2[B]*([A]*[B])" => "!([A]*[B])",
+        "x-1([A]*[B])" => "!([A]*[B])",
+        "x-2([A]*[B])([A]*[B])" => "!([A]*[B])",
         "!([A])*!([B])" => "![A]*(![B])",
         "![A]*(![B])" => "![A]*![B]",
         "![A]*![B]" => "(![A])*(![B])",
-        "!([A]*[B])*!([C]*[D])" => "(![A]*![B]*![C]*![D])",
-        "([A]*[B]*[C])*!([A]*[B])" => "[C]",
+        "!([A]*[B])*!([C]*[D])" => "x-1([A][B])x-1([C][D])",
+        "([A]*[B]*[C])/([A]*[B])" => "[C]",
     });
-    test.assert_null(["x-2([A]*[B])*x2([A]*[B])", "!([A]*[B])*([A]*[B])", "[A]*![A]", "([A]*[B])*!([A]*[B])"]);
+    test.assert_null(["x-2([A]*[B])*x2([A]*[B])", "!([A]*[B])([A]*[B])", "[A]*![A]", "([A]*[B])/([A]*[B])"]);
     test.assert_invalid(["([A]*![B})*(![A]*[B])"]);
 }
 
