@@ -42,7 +42,7 @@ enum PerceptEvaluation {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum QuestionSourceOrigin {
     Percept(ConceptId),
-    Subject(ConceptId),
+    Subject,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -58,19 +58,20 @@ impl QuestionSource {
     }
 
     fn from_subject(subject: ConceptId) -> Self {
-        Self { origin: QuestionSourceOrigin::Subject(subject.clone()), concept: subject, relevance: Relevance::DEFAULT }
+        Self { origin: QuestionSourceOrigin::Subject, concept: subject, relevance: Relevance::DEFAULT }
     }
 
     fn subject(&self) -> &ConceptId {
         match &self.origin {
-            QuestionSourceOrigin::Percept(percept) | QuestionSourceOrigin::Subject(percept) => percept,
+            QuestionSourceOrigin::Percept(percept) => percept,
+            QuestionSourceOrigin::Subject => &self.concept,
         }
     }
 
     fn percept(&self) -> Option<&ConceptId> {
         match &self.origin {
             QuestionSourceOrigin::Percept(percept) => Some(percept),
-            QuestionSourceOrigin::Subject(_) => None,
+            QuestionSourceOrigin::Subject => None,
         }
     }
 }
@@ -87,10 +88,7 @@ struct QuestionSourceView {
     routes: BTreeSet<CompletionRoute>,
 }
 
-#[derive(Default)]
-struct QuestionSnapshot {
-    source_views: QuestionSourceViews,
-}
+type QuestionSnapshot = QuestionSourceViews;
 
 #[derive(Clone)]
 struct AnswerState {
@@ -567,46 +565,22 @@ impl Pangine {
 
     /// Adds `addition` to a mutable percept and returns its updated value.
     pub fn perform_addition(&mut self, percept: &ConceptId, addition: Option<&ConceptId>) -> Option<ConceptId> {
-        if !self.accepts_percept_input(percept, addition) {
-            return None;
-        }
-
-        let (value, stored) = self.perform_union_update(percept, addition.cloned(), false)?;
-        self.set_percept_value(percept, stored);
-        value
+        self.perform_union_change(percept, addition, false)
     }
 
     /// Subtracts `subtraction` from a mutable percept and returns its updated value.
     pub fn perform_subtraction(&mut self, percept: &ConceptId, subtraction: Option<&ConceptId>) -> Option<ConceptId> {
-        if !self.accepts_percept_input(percept, subtraction) {
-            return None;
-        }
-
-        let (value, stored) = self.perform_union_update(percept, subtraction.cloned(), true)?;
-        self.set_percept_value(percept, stored);
-        value
+        self.perform_union_change(percept, subtraction, true)
     }
 
     /// Explicitly merges `merge` into a mutable percept and returns its updated value.
     pub fn perform_merge(&mut self, percept: &ConceptId, merge: Option<&ConceptId>) -> Option<ConceptId> {
-        if !self.accepts_percept_input(percept, merge) {
-            return None;
-        }
-
-        let value = self.perform_merge_update(percept, merge.cloned(), false);
-        self.set_percept_value(percept, value.clone());
-        value
+        self.perform_merge_change(percept, merge, false)
     }
 
     /// Explicitly merges the inverse of `merge` into a mutable percept and returns its updated value.
     pub fn perform_inverse_merge(&mut self, percept: &ConceptId, merge: Option<&ConceptId>) -> Option<ConceptId> {
-        if !self.accepts_percept_input(percept, merge) {
-            return None;
-        }
-
-        let value = self.perform_merge_update(percept, merge.cloned(), true);
-        self.set_percept_value(percept, value.clone());
-        value
+        self.perform_merge_change(percept, merge, true)
     }
 
     /// Evaluates a complete Concept and adds default relevance to the grounded result under a mutable Percept.
@@ -639,11 +613,7 @@ impl Pangine {
 
     /// Returns the name of an owned named concept.
     pub fn get_name<'a>(&self, concept: &'a ConceptId) -> Option<&'a str> {
-        if !self.owns(concept) {
-            return None;
-        }
-
-        match &concept.0.kind {
+        match self.concept_kind(concept)? {
             ConceptKind::Named(name) => Some(name.as_str()),
             _ => None,
         }
@@ -697,10 +667,8 @@ impl Pangine {
             }
         }
 
-        for (percept, _) in updates {
-            self.detach_answer_percept(percept);
-        }
         for (percept, value) in updates {
+            self.detach_answer_percept(percept);
             self.write_current_percept_value(percept, value.clone());
         }
         Ok(())
@@ -708,11 +676,10 @@ impl Pangine {
 
     /// Returns an owned ordered composition's component occurrences.
     pub fn get_ordered_components(&self, concept: &ConceptId) -> Option<Vec<ConceptId>> {
-        if !self.owns(concept) {
+        let ConceptKind::Ordered { components } = self.concept_kind(concept)? else {
             return None;
-        }
-
-        concept.0.ordered_components().map(<[ConceptId]>::to_vec)
+        };
+        Some(components.clone())
     }
 
     /// Returns `concept` when it is an owned percept.
@@ -928,7 +895,7 @@ impl Pangine {
         if parser.consume('x') {
             let x_coefficient = parser.parse_integer()?.ok_or(ParseError::InvalidSyntax)?;
             let mut operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
-            operand.relevance = multiply_relevance(Relevance::new(x_coefficient), operand.relevance).ok_or(ParseError::RelevanceOverflow)?;
+            operand.relevance = Relevance::new(x_coefficient).checked_mul(operand.relevance).ok_or(ParseError::RelevanceOverflow)?;
             return Ok(Some(operand));
         }
 
@@ -941,23 +908,17 @@ impl Pangine {
             }
             Some('[') => Ok(self.parse_bracket(parser)?.map(ParsedUnionOperand::ordinary)),
             Some('{') => Ok(self.parse_ordered(parser)?.map(ParsedUnionOperand::ordinary)),
-            Some('$') => {
+            Some(operator @ ('$' | '&' | '^')) => {
                 parser.next();
                 let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
                 let operand = self.reference_union(&[operand])?.ok_or(ParseError::InvalidSyntax)?;
-                Ok(self.evaluate_concept(&operand).map(ParsedUnionOperand::ordinary))
-            }
-            Some('&') => {
-                parser.next();
-                let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
-                let operand = self.reference_union(&[operand])?.ok_or(ParseError::InvalidSyntax)?;
-                Ok(self.linked_answer(&operand).map(ParsedUnionOperand::ordinary))
-            }
-            Some('^') => {
-                parser.next();
-                let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
-                let operand = self.reference_union(&[operand])?.ok_or(ParseError::InvalidSyntax)?;
-                Ok(self.make_decision(&operand).map(ParsedUnionOperand::ordinary))
+                let result = match operator {
+                    '$' => self.evaluate_concept(&operand),
+                    '&' => self.linked_answer(&operand),
+                    '^' => self.make_decision(&operand),
+                    _ => unreachable!(),
+                };
+                Ok(result.map(ParsedUnionOperand::ordinary))
             }
             Some('!') => {
                 parser.next();
@@ -1202,11 +1163,7 @@ impl Pangine {
     }
 
     fn is_global_percept(&self, concept: &ConceptId) -> bool {
-        self.is_percept(concept)
-            && matches!(
-                &concept.0.kind,
-                ConceptKind::Percept { name } if name == GLOBAL_PERCEPT_NAME
-            )
+        self.owns(concept) && matches!(&concept.0.kind, ConceptKind::Percept { name } if name == GLOBAL_PERCEPT_NAME)
     }
 
     fn is_mutable_percept(&self, concept: &ConceptId) -> bool {
@@ -1234,10 +1191,7 @@ impl Pangine {
 
         let index = percept.index();
         let value_map = self.materialized_percept_map(&subconcepts)?;
-        let value = match subconcepts.first_key_value() {
-            Some((concept, relevance)) if subconcepts.len() == 1 && *relevance == Relevance::DEFAULT => Some(concept.clone()),
-            _ => self.reference_map(&value_map),
-        };
+        let value = Self::sole_default_concept(&subconcepts).cloned().or_else(|| self.reference_map(&value_map));
         if subconcepts.is_empty() {
             self.percept_subconcepts.remove(&index);
             self.percept_value_maps.remove(&index);
@@ -1322,10 +1276,7 @@ impl Pangine {
             return Some(value.clone());
         }
 
-        let single_subconcept = self.percept_subconcepts.get(&index).and_then(|subconcepts| match subconcepts.first_key_value() {
-            Some((concept, relevance)) if subconcepts.len() == 1 && *relevance == Relevance::DEFAULT => Some(concept.clone()),
-            _ => None,
-        });
+        let single_subconcept = self.percept_subconcepts.get(&index).and_then(Self::sole_default_concept).cloned();
         let value = if let Some(concept) = single_subconcept {
             Some(concept)
         } else {
@@ -1417,25 +1368,32 @@ impl Pangine {
         Some(map)
     }
 
-    fn perform_union_update(&mut self, percept: &ConceptId, concept: Option<ConceptId>, inversion: bool) -> Option<(Option<ConceptId>, Option<ConceptId>)> {
+    fn perform_union_change(&mut self, percept: &ConceptId, concept: Option<&ConceptId>, inversion: bool) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, concept) {
+            return None;
+        }
         let mut map = self.percept_union_value_map(percept)?;
-
         if let Some(concept) = concept {
-            self.add_union_concept(&mut map, concept, inversion, Relevance::DEFAULT)?;
+            self.add_union_concept(&mut map, concept.clone(), inversion, Relevance::DEFAULT)?;
         }
 
         let value = self.reference_map(&map);
-        Some((value.clone(), value))
+        self.set_percept_value(percept, value.clone());
+        value
     }
 
-    fn perform_merge_update(&mut self, percept: &ConceptId, concept: Option<ConceptId>, inversion: bool) -> Option<ConceptId> {
-        let mut map = self.percept_value_map(percept)?;
-
-        if let Some(concept) = concept {
-            self.add_merge_concept(&mut map, concept, inversion, Relevance::DEFAULT)?;
+    fn perform_merge_change(&mut self, percept: &ConceptId, concept: Option<&ConceptId>, inversion: bool) -> Option<ConceptId> {
+        if !self.accepts_percept_input(percept, concept) {
+            return None;
         }
-
-        self.reference_map(&map)
+        let value = self.percept_value_map(percept).and_then(|mut map| {
+            if let Some(concept) = concept {
+                self.add_merge_concept(&mut map, concept.clone(), inversion, Relevance::DEFAULT)?;
+            }
+            self.reference_map(&map)
+        });
+        self.set_percept_value(percept, value.clone());
+        value
     }
 
     fn percept_union_value_map(&mut self, percept: &ConceptId) -> Option<ConceptMap> {
@@ -1562,14 +1520,14 @@ impl Pangine {
         let mut ordered_widths = BTreeSet::new();
         self.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
         let track_ordered_occurrences = self.question_has_shared_clause_percept(question);
-        let mut snapshot = QuestionSnapshot::default();
+        let mut snapshot = QuestionSnapshot::new();
         for source in sources {
             let mut traversal = QuestionSourceViewTraversal {
                 ordered_widths: &ordered_widths,
                 source_shapes: source_shapes.as_ref(),
                 track_ordered_occurrences,
                 visited: BTreeSet::new(),
-                source_views: &mut snapshot.source_views,
+                source_views: &mut snapshot,
             };
             self.add_question_source_views_rec(&source, &source.concept, &CompletionRoute::default(), None, &[], &mut traversal);
         }
@@ -1912,23 +1870,11 @@ impl Pangine {
     }
 
     fn select_projection_candidate(&self, witnesses: &CompletionProjectionWitnesses) -> Option<ConceptId> {
-        let mut selected: Option<(i64, String, ConceptId)> = None;
-        for (candidate, sources) in witnesses {
-            let weight = self.question_source_support(sources)?.weight();
-            if weight <= 0 {
-                continue;
-            }
-
-            let canonical = self.format_concept(candidate, false);
-            let replace = match &selected {
-                None => true,
-                Some((greatest, earliest, _)) => weight > *greatest || (weight == *greatest && canonical < *earliest),
-            };
-            if replace {
-                selected = Some((weight, canonical, candidate.clone()));
-            }
-        }
-        selected.map(|(_, _, candidate)| candidate)
+        let candidates = witnesses
+            .iter()
+            .map(|(candidate, sources)| self.question_source_support(sources).map(|support| (candidate, support.weight())))
+            .collect::<Option<Vec<_>>>()?;
+        self.select_greatest_positive(candidates)
     }
 
     fn question_source_support(&self, sources: &BTreeSet<QuestionSource>) -> Option<Relevance> {
@@ -2008,7 +1954,7 @@ impl Pangine {
         let subconcepts = concept.0.subconcepts.clone();
         if matches!(concept.0.kind, ConceptKind::Unordered) {
             for (child, child_relevance) in subconcepts {
-                self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance)?)?;
+                self.add_union_concept(map, child, inversion, relevance.checked_mul(child_relevance)?)?;
             }
         } else {
             self.add_union_concept(map, concept, inversion, relevance)?;
@@ -2020,7 +1966,7 @@ impl Pangine {
         let subconcepts = concept.0.subconcepts.clone();
         if matches!(concept.0.kind, ConceptKind::Unordered) && subconcepts.len() == 1 {
             let (child, child_relevance) = subconcepts.into_iter().next().unwrap();
-            self.add_union_concept(map, child, inversion, multiply_relevance(relevance, child_relevance)?)?;
+            self.add_union_concept(map, child, inversion, relevance.checked_mul(child_relevance)?)?;
         } else {
             self.add_relevance(map, concept, inversion, relevance)?;
         }
@@ -2032,8 +1978,8 @@ impl Pangine {
             relevance = relevance.checked_neg()?;
         }
 
-        if map.contains_key(&concept) {
-            let current = map[&concept].checked_add(relevance)?;
+        if let Some(current) = map.get(&concept).copied() {
+            let current = current.checked_add(relevance)?;
             if current.is_empty() {
                 map.remove(&concept);
             } else {
@@ -2058,9 +2004,12 @@ impl Pangine {
             return Some(concept);
         }
 
-        let mut selected: Option<(i64, String, ConceptId)> = None;
-        for (candidate, relevance) in &concept.0.subconcepts {
-            let weight = relevance.weight();
+        self.select_greatest_positive(concept.0.subconcepts.iter().map(|(candidate, relevance)| (candidate, relevance.weight())))
+    }
+
+    fn select_greatest_positive<'a>(&self, candidates: impl IntoIterator<Item = (&'a ConceptId, i64)>) -> Option<ConceptId> {
+        let mut selected = None;
+        for (candidate, weight) in candidates {
             if weight <= 0 {
                 continue;
             }
@@ -2071,11 +2020,10 @@ impl Pangine {
                 Some((greatest, earliest, _)) => weight > *greatest || (weight == *greatest && canonical < *earliest),
             };
             if replace {
-                selected = Some((weight, canonical, candidate.clone()));
+                selected = Some((weight, canonical, candidate));
             }
         }
-
-        selected.map(|(_, _, candidate)| candidate)
+        selected.map(|(_, _, candidate)| candidate.clone())
     }
 
     fn relevance_entries(&self, concept: &ConceptId) -> Option<Vec<(Relevance, ConceptId)>> {
@@ -2489,10 +2437,6 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
     ScriptStatements { items: statements, has_semicolons }
 }
 
-fn multiply_relevance(left: Relevance, right: Relevance) -> Option<Relevance> {
-    left.checked_mul(right)
-}
-
 fn compare_coefficients_desc(left: Relevance, right: Relevance) -> Ordering {
     right.x_coefficient.cmp(&left.x_coefficient)
 }
@@ -2534,14 +2478,14 @@ mod tests {
         let mut ordered_widths = BTreeSet::new();
         pangine.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
         let track_ordered_occurrences = pangine.question_has_shared_clause_percept(question);
-        let mut snapshot = QuestionSnapshot::default();
+        let mut snapshot = QuestionSnapshot::new();
         for source in sources {
             let mut traversal = QuestionSourceViewTraversal {
                 ordered_widths: &ordered_widths,
                 source_shapes: None,
                 track_ordered_occurrences,
                 visited: BTreeSet::new(),
-                source_views: &mut snapshot.source_views,
+                source_views: &mut snapshot,
             };
             pangine.add_question_source_views_rec(&source, &source.concept, &CompletionRoute::default(), None, &[], &mut traversal);
         }
@@ -2739,10 +2683,7 @@ mod tests {
             let question = pangine.reference_concept(question_text).unwrap().unwrap();
             let filtered = pangine.question_snapshot(std::slice::from_ref(&source), &question);
             let full = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &question);
-            assert!(filtered
-                .source_views
-                .iter()
-                .all(|(key, ancestors)| { full.source_views.get(key).is_some_and(|full_ancestors| ancestors.is_subset(full_ancestors)) }));
+            assert!(filtered.iter().all(|(key, ancestors)| full.get(key).is_some_and(|full_ancestors| ancestors.is_subset(full_ancestors))));
 
             let filtered_results = pangine.complete_question_snapshot(&question, &filtered);
             let full_results = pangine.complete_question_snapshot(&question, &full);
@@ -2751,15 +2692,15 @@ mod tests {
 
         let unordered = pangine.reference_concept("[C]*[sound]*['unordered-answer']").unwrap().unwrap();
         let unordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &unordered);
-        assert!(unordered_snapshot.source_views.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Unordered));
+        assert!(unordered_snapshot.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Unordered));
 
         let ordered = pangine.reference_concept("[C]->[sound]->['ordered-answer']").unwrap().unwrap();
         let ordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &ordered);
-        assert!(ordered_snapshot.source_views.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Ordered(3)));
+        assert!(ordered_snapshot.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Ordered(3)));
 
         let wildcard = pangine.reference_percept("anything");
         let wildcard_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &wildcard);
         let full_wildcard = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &wildcard);
-        assert!(wildcard_snapshot.source_views == full_wildcard.source_views);
+        assert!(wildcard_snapshot == full_wildcard);
     }
 }

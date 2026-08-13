@@ -4,13 +4,13 @@ Pangine is an experimental language for writing information as simple shapes and
 
 Created by [Aaron (`caustik`)](https://github.com/caustik) and released by APU Software, LLC.
 
-I started Pangine from one intuition: the information, the question, and the answer should be made from the same thing. In Pangine, that thing is a **Concept**.
+I started Pangine from one intuition: the information, the question, and the answer should be made from the same thing. In Pangine, that thing is a Concept.
 
-You do not need a machine-learning background to use the current prototype. Pangine is not a trained model, and it does not secretly know what names mean. It only works with the structure and experience you give it.
+Pangine is not a trained model and it does not know what names mean. It works with the structure and experience you give it.
 
 ## Pangine in one minute
 
-Start the console, remember two statements, and ask a question:
+Remember two statements and ask a question:
 
 ```text
 command> ['memory'] ~= [cat]->[purrs]
@@ -29,19 +29,13 @@ command> $['sound']
   [purrs]
 ```
 
-Here is what happened:
+`[cat]` is a named Concept. `[cat]->[purrs]` is an ordered Concept. `['memory']` is a Percept, which is Pangine's mutable reference. `~=` remembers one complete experience under it.
 
-- `[cat]` is a named Concept. Pangine does not assign a built-in meaning to `cat`.
-- `[cat]->[purrs]` is an ordered Concept. It can represent a relationship, a sequence, or anything else the application decides.
-- `['memory']` is a **Percept**, Pangine's name for a mutable reference. `~=` remembers each complete statement under it.
-- `@` asks a question. The quoted Percepts inside the question, `['animal']` and `['sound']`, are the blanks to fill.
-- The immediate answer is two complete Concepts. `$['animal']` and `$['sound']` let us inspect one part of those answers afterward.
+`@` asks a question. The Percepts inside the question are blanks to fill. Its immediate result contains the complete rows, so Pangine keeps `cat` with `purrs` and `dog` with `barks`. `$` reads any part of that answer without changing it.
 
-The complete rows are important. Looking only at the two output columns would no longer tell us that `cat` went with `purrs` and `dog` went with `barks`. The value returned by `@` keeps those pairings together.
+## Concepts and questions
 
-## One grammar for information, questions, and answers
-
-A Concept can be a name, an ordered relationship, or an unordered collection of other Concepts:
+The same grammar describes information, questions, and answers:
 
 ```text
 [cat]
@@ -50,107 +44,44 @@ A Concept can be a name, an ordered relationship, or an unordered collection of 
 ([person]->[Alice])([pet]->[cat])
 ```
 
-A question is another Concept with explicit blanks in it:
+A grounded answer is an ordinary Concept again. It can be assigned, formatted, parsed, or used as the subject of another question.
+
+Several relationships can form one question. Reusing a Percept connects their blanks:
 
 ```text
-['memory'] @ ['animal']->['sound']
+['knowledge'] ~= [Socrates]->[is-a]->[human]
+['knowledge'] ~= [human]->[is-a]->[mortal]
+['knowledge'] @ ([Socrates]->[is-a]->['kind'])(['kind']->[is-a]->['conclusion'])
+$['conclusion']
 ```
 
-Once the blanks are filled, the answer is an ordinary grounded Concept again. It can be assigned, formatted, parsed, or used as the subject of another question:
+The result is `[mortal]`. Pangine does not know that `is-a` is logical. The question asks for two relationships whose middle Concept must agree.
+
+Parentheses preserve a complete unordered member. This keeps alternatives such as `([person]->[Alice])([pet]->[cat])` together. `*` explicitly merges direct members when they are meant to share one pool. The matcher also tracks represented occurrences while a question runs, so equal values in different parts of a longer source do not create unsupported cross-pairings. This temporary bookkeeping is not added to the returned Concept.
+
+## Experience and choice
+
+Repeating an experience raises its current integer weight:
 
 ```text
-command> (['memory'] @ ['animal']->['sound']) @ ['next-animal']->['next-sound']
-  {[cat]->[purrs]}
-  {[dog]->[barks]}
-command> $['next-sound']
-  [barks]
-  [purrs]
+['world'] ~= [morning]->[birds]
+['world'] ~= [morning]->[birds]
+['world'] ~= [morning]->[traffic]
+['world'] @ [morning]->['answer']
+$['answer']
 ```
 
-A Percept is the mutable handle in this model. It points at remembered Concepts, but it is not a special answer-row type. While a question is running, the Rust engine also carries temporary bookkeeping about which source and which represented occurrence supplied each match. That bookkeeping prevents false combinations, but it is not silently added to the grounded Concept returned by `@`.
+The last command shows `x2 [birds]` and `[traffic]`. `x2 [birds]` is the compact form of two equal bird members. Pangine currently exposes remembered support this way.
 
-## Ask for a chain explicitly
+`^['answer']` chooses the greatest positive weight and uses canonical order to break a tie. This is a deterministic placeholder, not probability, confidence, sampling, or a finished theory of Relevance.
 
-Several relationships can be placed in one question. Reusing the same Percept connects their blanks:
+I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. The application supplies observations and current values, but the Pangine program should form and choose among candidates instead of hiding that decision in application code.
 
-```text
-command> ['knowledge'] ~= [Socrates]->[is-a]->[human]
-  {[Socrates]->[is-a]->[human]}
-command> ['knowledge'] ~= [human]->[is-a]->[mortal]
-  {[Socrates]->[is-a]->[human]}
-  {[human]->[is-a]->[mortal]}
-command> ['knowledge'] @ ([Socrates]->[is-a]->['kind'])(['kind']->[is-a]->['conclusion'])
-  {[Socrates]->[is-a]->[human]}
-  {[human]->[is-a]->[mortal]}
-command> $['conclusion']
-  [mortal]
-```
+## Shared answers
 
-Pangine does not know that `is-a` has a logical meaning. The question itself asks for two relationships whose middle Concept must agree. This is how the existing grammar can express a syllogism-shaped use case without adding a special syllogism command.
+Outputs from one question stay connected to the same complete answer. `&` reveals that answer's question shape, `$` reads it, and `^` removes complete rows that do not fit the chosen result.
 
-## Keep represented occurrences together
-
-The current matcher can follow overlapping pieces of a longer ordered Concept without splicing unrelated occurrences together:
-
-```text
-command> [Alice]->[gave]->[book]->[to]->[Bob]->[gap]->[Carol]->[gave]->[book]->[to]->[Dave] @ (['giver']->[gave]->['thing'])(['thing']->[to]->['receiver'])
-  {[Alice]->[gave]->[book]}{[book]->[to]->[Bob]}
-  {[Carol]->[gave]->[book]}{[book]->[to]->[Dave]}
-```
-
-The Concept `[book]` appears in both parts of the sequence. Pangine still keeps track of which occurrence supplied each half of a completed answer. It returns Alice with Bob and Carol with Dave. It does not invent Alice with Dave or Carol with Bob.
-
-## Parentheses preserve a complete choice
-
-Parentheses make a complete expression one member of the surrounding unordered Concept. That lets two graph-shaped alternatives remain distinct:
-
-```text
-command> (([person]->[Alice])([pet]->[cat]))(([person]->[Bob])([pet]->[dog])) @ ([person]->['who'])([pet]->['animal'])
-  {[person]->[Alice]}{[pet]->[cat]}
-  {[person]->[Bob]}{[pet]->[dog]}
-```
-
-The two parenthesized groups keep each whole group together. Pangine does not mix Alice with dog or Bob with cat. If the direct members are meant to form one shared pool, `*` explicitly merges them:
-
-```text
-([A][B])*([C][D])
-```
-
-This distinction belongs to the Concept itself. Canonical output preserves the boundary and can be parsed back into the same Concept.
-
-## Repeated experience and the current choice placeholder
-
-Repeating one experience raises its current integer weight:
-
-```text
-command> ['world'] ~= [morning]->[birds]
-  {[morning]->[birds]}
-command> ['world'] ~= [morning]->[birds]
-  x2 {[morning]->[birds]}
-command> ['world'] ~= [morning]->[traffic]
-  x2 {[morning]->[birds]}
-  {[morning]->[traffic]}
-command> ['world'] @ [morning]->['answer']
-  {[morning]->[birds]}
-  {[morning]->[traffic]}
-command> $['answer']
-  x2 [birds]
-  [traffic]
-command> ^['answer']
-  [birds]
-command> $['answer']
-  x2 [birds]
-```
-
-`x2` is the compact form of two equal unordered members. An implied `x1` is not printed. The current prototype also uses these signed integers to expose how strongly retained experience supported an output.
-
-I think of `@` as leaving the possible answers together and `^` as the point where that state is collapsed to one answer. After the choice, the output Percept contains only the surviving answer. The present `^` rule is only a deterministic placeholder: choose the greatest positive weight, then use canonical order to break a tie. It is not sampling from logits, a probability calculation, or a finished theory of relevance.
-
-## Several outputs share one answer
-
-The output Percepts from one question remain connected to the same complete answer. `&` reveals the answer shape, `$` reads any part of it without changing it, and `^` chooses a value and removes complete answers that do not fit that choice.
-
-This setup gives `cat-fish` one remembered occurrence, `cat-milk` two, and `dog-fish` three:
+Suppose the memory contains `cat-fish` once, `cat-milk` twice, and `dog-fish` three times:
 
 ```text
 ['memory'] ~= [cat]->[fish]
@@ -159,135 +90,76 @@ This setup gives `cat-fish` one remembered occurrence, `cat-milk` two, and `dog-
 ['memory'] ~= [dog]->[fish]
 ['memory'] ~= [dog]->[fish]
 ['memory'] ~= [dog]->[fish]
+['memory'] @ ['animal']->['food']
 ```
 
-Now ask one question with two outputs:
+The linked answer can then be inspected and changed:
 
 ```text
-command> ['memory'] @ ['animal']->['food']
-  {[cat]->[fish]}
-  {[cat]->[milk]}
-  {[dog]->[fish]}
 command> &['animal']
   {['animal']->['food']}
 command> $(&['animal'])
   x3 {[dog]->[fish]}
   x2 {[cat]->[milk]}
   {[cat]->[fish]}
-command> $['animal']
-  x3 [cat]
-  x3 [dog]
-command> $['food']
-  x4 [fish]
-  x2 [milk]
 command> ^['animal']
   [cat]
 command> $['food']
   x2 [milk]
   [fish]
-command> ^['food']
-  [milk]
-command> $(&['animal'])
-  x2 {[cat]->[milk]}
 ```
 
-`&['animal']` returns the question shape shared by `animal` and `food`. It does not read or change the answer. Passing that shape to `$` reads every complete possibility with its current strength. Choosing `animal` then removes the `dog-fish` row. Pangine counts `food` again from the two surviving cat rows, so milk becomes stronger than fish.
+Choosing `animal` removes the `dog-fish` row, then recalculates `food` from the surviving rows. Choosing several outputs together, such as `^(['animal']->['food'])`, chooses that complete subset at once. Separate choices can produce a different result because each choice changes what remains for the next one.
 
-The choice can also contain several outputs. Starting from the same setup, `^(['animal']->['food'])` chooses one complete animal-food pair at once. With the current greatest-weight rule it chooses `dog-fish`. Choosing food first and animal second also ends at `dog-fish`, while choosing animal first and food second ends at `cat-milk`. The order is visible because each deterministic choice changes what remains before the next choice.
+A later question can reuse one linked output. Pangine joins compatible old and new rows and expands the shared answer. If no row is compatible, it returns `[]` without changing the existing answers. Asking again with every output from one answer starts a new answer cycle.
 
-If a program needs an independent branch for comparison, it can copy a read first, as in `['animal-copy'] = $['animal']`, and choose the copy. Assignment makes that a detached value, so `^['animal-copy']` does not collapse the original question.
+Assignment detaches a value. For example, `['animal-copy'] = $['animal']` makes an independent copy that can be chosen without collapsing the original answer.
 
-A later question can reuse part of a shared answer:
+## Input Percepts
+
+The console, pangine.com, and Rust can provide current values through Percepts. Assign the values, then mention them in an experience:
 
 ```text
-command> ([cat]->[eats]->[fish])([dog]->[eats]->[bone]) @ ['animal']->[eats]->['food']
-  {[cat]->[eats]->[fish]}
-  {[dog]->[eats]->[bone]}
-command> ([cat]->[lives-in]->[house])([dog]->[lives-in]->[yard]) @ ['animal']->[lives-in]->['home']
-  {[cat]->[eats]->[fish]}{[cat]->[lives-in]->[house]}
-  {[dog]->[eats]->[bone]}{[dog]->[lives-in]->[yard]}
-command> &['animal']
-  {['animal']->[eats]->['food']}
-  {['animal']->[lives-in]->['home']}
+['context-input'] = [opal]
+['reading-input'] = [cedar]
+['observations'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']
 ```
 
-The repeated `animal` is the same blank, so Pangine joins only compatible complete answers and links `animal`, `food`, and `home` to the larger result. `$(&['animal'])` reads the complete combined possibilities. A question can also connect two existing shared answers this way. If an extension has no compatible result, it returns `[]` without changing either answer. Asking again with every output from one answer starts a new answer cycle instead of trapping the program in its previous collapse.
+When `~=` runs, Pangine captures assigned Percepts at that moment. Later changes do not rewrite old experience. If a required input is empty, Pangine records nothing instead of keeping a partial observation.
 
-This does not settle what Relevance should eventually be. Pangine keeps the remembered support behind each possible row, then the current integer rule combines that support when a view is read or chosen. That leaves room to research a richer Relevance without throwing away the complete answer first.
+A Percept populated through `~=` remains a reference when another experience mentions it. Use `$` when you want to follow every Percept in an expression. Rust callers can update a complete input group with `set_percept_values`, remember a Percept-bearing Concept with `perform_experience`, and read the resulting output Percepts.
 
-## Capture current input values as experience
+## Grammar
 
-The console, pangine.com, and Rust can all provide current values through Percepts. Assign the values with `=`, then mention those Percepts in an experience:
-
-```text
-command> ['context-input'] = [opal]
-  [opal]
-command> ['reading-input'] = [cedar]
-  [cedar]
-command> ['observations'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']
-  {[observation]->[context]->[opal]->[reading]->[cedar]}
-command> ['reading-input'] = [violet]
-  [violet]
-command> ['observations'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']
-  {[observation]->[context]->[opal]->[reading]->[cedar]}
-  {[observation]->[context]->[opal]->[reading]->[violet]}
-```
-
-When `~=` runs, Pangine captures assigned Percepts as they are at that moment. Later changes do not rewrite earlier experience. If one assigned input is empty, Pangine does not remember a partial observation.
-
-A Percept populated through `~=` remains a reference when another experience mentions it. Use `$` when you want to follow all Percepts in an expression. This is how the current implementation works. It does not create separate Percept types.
-
-Rust callers can validate and set a complete input group with `set_percept_values`, remember a Percept-bearing template with `perform_experience`, and read output Percepts after Pangine questions and chooses. `evaluate_concept` is available when explicit grounding is needed without remembering the result. The caller controls when a complete update occurs, but Pangine retains the experience, forms the candidate state, and makes the represented choice.
-
-## Grammar summary
-
-| Form | Plain-language meaning |
+| Form | Meaning |
 | --- | --- |
 | `[]` | No Concept |
-| `[name]` | A named Concept |
-| `['memory']` | A mutable Percept reference |
-| `[A]->[B]->[C]` | One ordered Concept |
-| `[A][B]` | One unordered Concept containing `A` and `B` |
-| `(expression)` | Keep the complete expression as one surrounding member |
-| `[A]*[B]` | Merge the direct unordered members |
+| `[name]` | Named Concept |
+| `['memory']` | Mutable Percept reference |
+| `[A]->[B]->[C]` | Ordered Concept |
+| `[A][B]` | Unordered Concept containing `A` and `B` |
+| `(expression)` | Keep the expression as one surrounding member |
+| `[A]*[B]` | Merge direct unordered members |
 | `[A]/[B]` | Merge with an inverted right side |
-| `![A]` | An inverted member |
-| `x2[A]` | Two copies of the next complete member; `x1` is omitted |
-| `['memory'] = expression` | Replace a Percept's value |
-| `['memory'] ~= expression` | Capture assigned inputs, then remember one complete expression |
-| `subject @ question` | Fill the question's Percept blanks from the subject |
-| `&operand` | Return the shared answer shape for linked Percepts |
-| `$operand` | Read one or more Percepts without changing their shared answer |
-| `^operand` | Choose one result and update every linked output Percept |
+| `![A]` | Inverted member |
+| `x2[A]` | Two copies of the next complete member |
+| `['memory'] = expression` | Replace a Percept value |
+| `['memory'] ~= expression` | Capture assigned inputs and remember one experience |
+| `subject @ question` | Fill the question's Percept blanks |
+| `&operand` | Return the shared answer shape |
+| `$operand` | Read Percepts without changing their answer |
+| `^operand` | Choose and update every linked output |
 | `$['*']` | Inspect the ordinary Concepts currently live in the engine |
 
-See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the complete compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for more literal console transcripts.
+See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 
-## Current implementation
+## Current scope
 
-The Rust prototype currently includes:
+The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, collapse, grouped input updates, a console, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
 
-- A parser and canonical formatter
-- Canonical Concept graphs and mutable Percepts
-- Complete remembered statements with signed integer weights
-- Questions over one Concept, one Percept, or several selected Percepts
-- Questions made from one relationship or several relationships joined through shared blanks
-- Complete answer rows that remain ordinary Concepts and can be questioned again
-- Visible shared answer shapes, compatible question extension, one- or several-output reads, and collapse
-- Matching inside unordered groups and contiguous ordered paths without unsupported cross-pairing
-- Grouped Rust input updates, experience capture, explicit evaluation, and readable output Percepts
-- A deterministic placeholder behind `^`
-- A command-line console, a browser-local WebAssembly workbench, tests, and research probes
+The current signed integer and deterministic choice rule are useful placeholders. The open work is to compare better Relevance rules over the retained source evidence and learn how far complete shared answers can go in useful programs.
 
-## Open work
-
-Pangine began as an intuition about a Bayesian semantic hypergraph. I still care about keeping uncertainty visible and allowing accumulated experience to shape a later choice. More matching experience can matter, much as more active signals can matter in a body, without declaring every integer weight to be probability, confidence, or truth.
-
-The application provides observations, current values, timing, and represented context, so that experience shapes the answer. I still want the Pangine program to form the candidates and choose among them instead of hiding that work in the application. I do not want to make this a strict boundary while the integration is still being worked out.
-
-The next work is to learn how far this shared answer and collapse model can go before adding another layer. An LLM could eventually participate as an identified source of experience or as a consumer of an output Percept. It should not silently become Pangine's question selector, relevance calculator, or final judge.
-
-A learned decision step, a logit sampler, probabilities, persistence, automatic application callbacks, and a distributed runtime are not implemented yet. The ignored research fixtures contain the detailed experiments and open questions.
+A learned decision step, logit sampling, probabilities, persistence, automatic callbacks, LLM adapters, and a distributed runtime are not implemented. An LLM could eventually be an identified source or output participant. It should not silently become Pangine's question selector, relevance calculator, or final judge.
 
 ## Run Pangine
 
@@ -299,18 +171,18 @@ cd pangine
 cargo run --bin pangine-console
 ```
 
-Run the normal verification suite with:
+Run the normal suite with:
 
 ```sh
 cargo test --workspace --all-targets --release
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-The repository also contains ignored research tests. They record provisional questions and boundaries; they are not compatibility promises.
+Ignored research tests record provisional questions, not compatibility promises.
 
 ## Contributing
 
-Reproducible bug reports and focused design discussion are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the current contribution policy.
+Reproducible bug reports and focused design discussion are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licensing
 

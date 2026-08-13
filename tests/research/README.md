@@ -23,7 +23,7 @@ Research programs that compare independent views copy a `$` result into a detach
 - `joint_answer_relevance.rs` keeps the current source-deduplication rule visible without treating additive integer support as the final Relevance model.
 - `matcher_boundaries.rs` keeps four open matcher questions: ordered nesting, valid `@` subjects, unseen wholes assembled from partial experience, and enclosing-entry correlation.
 - `question_support.rs` records how direct Percept-member weights currently reach output coefficients.
-- `represented_choice.rs` is the detailed decision corpus. It covers experience-shaped amounts, replaceable state, represented context and stance, question order, provenance, live source references, and saved records without host-side scoring.
+- `represented_choice.rs` keeps focused counterexamples for experience, current state, context, stance, question order, source identity, records, and coefficients without host-side scoring.
 - `row_choice.rs` shows that collapsing complete rows into totals can discard information needed by some decisions.
 - `src/engine/research/source_state_copy.rs` compares value copies, live references, direct source-state copies, and represented version scopes. The behavior is test-only and does not choose a public lifecycle.
 
@@ -33,6 +33,6 @@ Accepted behavior belongs in ordinary tests:
 - `tests/joint_answers.rs` covers visible shared answer shapes, answer extension, conditioning, subset choice, order effects, and answer-state detachment.
 - `tests/percept_integration.rs` covers grouped input validation, assigned-input capture, stable experience, and the Rust-input-to-Pangine-output cycle.
 
-The former completion-projection, symbolic-annotation, and represented-reduction frameworks were removed after their conclusions were summarized in `design/pangine-research.md`. They were test-local interpreters, not production Pangine behavior.
+Former projection, annotation, reduction, and successive decision-pipeline fixtures were removed after their distinct conclusions were summarized and kept in smaller warning checks. They were test-local experiments, not production behavior.
 
 An ignored check failing after a deliberate experiment is a prompt to review the example. It is not automatic proof that the new behavior is wrong.

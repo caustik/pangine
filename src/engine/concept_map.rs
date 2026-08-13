@@ -98,10 +98,6 @@ impl ConceptMap {
         self.entries.iter().map(|entry| &entry.1)
     }
 
-    pub(super) fn contains_key(&self, concept: &ConceptId) -> bool {
-        self.position(concept).is_ok()
-    }
-
     pub(super) fn get(&self, concept: &ConceptId) -> Option<&Relevance> {
         self.position(concept).ok().map(|index| &self.entries[index].1)
     }
@@ -233,7 +229,7 @@ mod tests {
         assert!(current.entries.ptr_eq(&snapshot.entries));
 
         current.insert(extra.clone(), Relevance::DEFAULT);
-        assert!(!snapshot.contains_key(&extra));
+        assert!(snapshot.get(&extra).is_none());
         assert_eq!(snapshot.len(), 128);
         assert_eq!(current.len(), 129);
     }

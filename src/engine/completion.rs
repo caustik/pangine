@@ -169,7 +169,7 @@ impl CompletionRemainder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct StructuralCompletion {
     assignment: ProjectionAssignment,
     binding_paths: BTreeMap<ConceptId, BTreeSet<Vec<usize>>>,
@@ -409,18 +409,14 @@ impl Pangine {
 
         for clause in clauses {
             let mut clause_evidence = BTreeSet::new();
-            for ((source, matched, _), routes) in &snapshot.source_views {
+            for ((source, matched, _), routes) in snapshot {
                 for completion in self.source_view_completions(matched, &clause) {
-                    let source_view = QuestionSourceView {
-                        source: source.clone(),
-                        matched: matched.clone(),
-                        routes: routes_with_binding_origins(routes, &completion.binding_paths),
-                    };
-                    let source_route_products = source_route_constraints(&source_view.routes, &shared_percepts);
+                    let routes = routes_with_binding_origins(routes, &completion.binding_paths);
+                    let source_route_products = source_route_constraints(&routes, &shared_percepts);
                     clause_evidence.insert(CompletionEvidence {
                         clause: clause.clone(),
                         source_route_products,
-                        source_view: source_view.clone(),
+                        source_view: QuestionSourceView { source: source.clone(), matched: matched.clone(), routes },
                         assignment: completion.assignment,
                         remainders: completion.remainders,
                     });
@@ -703,10 +699,7 @@ impl Pangine {
         patterns_are_questions: bool,
         ordered_path: &[usize],
     ) -> BTreeSet<Injection> {
-        let mut injections = BTreeSet::from([Injection {
-            completion: StructuralCompletion { assignment: ProjectionAssignment::new(), binding_paths: BTreeMap::new(), remainders: BTreeSet::new() },
-            used_candidates: BTreeSet::new(),
-        }]);
+        let mut injections = BTreeSet::from([Injection { completion: StructuralCompletion::default(), used_candidates: BTreeSet::new() }]);
         for pattern in patterns {
             let mut next = BTreeSet::new();
             for injection in injections {
@@ -858,7 +851,7 @@ fn join_source_route_relations(left: &BTreeSet<CompletionRoute>, right: &BTreeSe
 }
 
 fn exact_structural_completion() -> BTreeSet<StructuralCompletion> {
-    BTreeSet::from([StructuralCompletion { assignment: ProjectionAssignment::new(), binding_paths: BTreeMap::new(), remainders: BTreeSet::new() }])
+    BTreeSet::from([StructuralCompletion::default()])
 }
 
 fn multiply_structural_completions(left: &BTreeSet<StructuralCompletion>, right: &BTreeSet<StructuralCompletion>) -> BTreeSet<StructuralCompletion> {
