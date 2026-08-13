@@ -56,7 +56,7 @@ fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
 }
 
 #[test]
-#[ignore = "warning: an enclosing ordered entry and one nested descendant are not yet correlated"]
+#[ignore = "warning: an enclosing ordered entry and a separately asked nested descendant are not yet correlated"]
 fn enclosing_ordered_entries_do_not_yet_constrain_descendant_group_matches() {
     let mut pangine = Pangine::new();
     let question = must_ref(&mut pangine, "([row]->['selected-group'])([left]->['selected-left'])");

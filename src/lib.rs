@@ -8,6 +8,7 @@ mod relevance;
 
 pub use engine::{
     Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
-    CompletionResult, CompletionRoute, ConceptConstructionError, ConceptId, ConceptKind, Pangine, ParseError, ParseResult, GLOBAL_PERCEPT_NAME,
+    CompletionResult, CompletionRoute, ConceptConstructionError, ConceptId, ConceptKind, Pangine, ParseError, ParseResult, PerceptUpdateError,
+    GLOBAL_PERCEPT_NAME,
 };
 pub use relevance::Relevance;

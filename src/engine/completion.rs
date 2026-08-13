@@ -536,6 +536,18 @@ impl Pangine {
             return exact_structural_completion();
         }
 
+        // A coefficient-bearing Concept can contain an ordinary structural
+        // question, but the wrapper itself must match exactly. Do not turn a
+        // coefficient difference into a remainder, occurrence count, or score.
+        if let (Some((source_relevance, source_operand)), Some((question_relevance, question_operand))) =
+            (source.0.coefficient_operand(), question.0.coefficient_operand())
+        {
+            if source_relevance != question_relevance {
+                return BTreeSet::new();
+            }
+            return self.structural_completions(source_operand, question_operand, ordered_path);
+        }
+
         match (&source.0.kind, &question.0.kind) {
             (ConceptKind::Named(source_name), ConceptKind::Named(question_name)) => {
                 if source_name == question_name {

@@ -267,6 +267,29 @@ fn an_outer_source_coefficient_does_not_replicate_the_fixture_completion() {
 }
 
 #[test]
+fn an_exact_coefficient_pattern_can_bind_inside_its_operand() {
+    let mut pangine = Pangine::new();
+    let weighted = must_ref(&mut pangine, "x2([fact]->[cat]->[eats])");
+    let question = must_ref(&mut pangine, "x2([fact]->['coefficient-who']->['coefficient-does'])");
+
+    let result = pangine.complete_subject(&weighted, &question).expect("valid exact coefficient question");
+    let [completion] = result.completions() else {
+        panic!("the exact coefficient question should produce one completion");
+    };
+    assert_eq!(bound_name(&mut pangine, completion, "coefficient-who"), "cat");
+    assert_eq!(bound_name(&mut pangine, completion, "coefficient-does"), "eats");
+    let [evidence] = completion.evidence() else {
+        panic!("the exact coefficient question should supply one evidence fragment");
+    };
+    assert_eq!(evidence.source_concept(), &weighted);
+    assert_eq!(evidence.matched(), &weighted);
+    assert!(evidence.coefficient_ancestors().next().is_none(), "matching the requested wrapper crosses no coefficient boundary");
+
+    let different_coefficient = must_ref(&mut pangine, "x3([fact]->['other-who']->['other-does'])");
+    assert!(pangine.complete_subject(&weighted, &different_coefficient).expect("valid different coefficient question").completions().is_empty());
+}
+
+#[test]
 fn equal_views_preserve_alternative_coefficient_routes_without_duplicate_rows() {
     let mut pangine = Pangine::new();
     let fact = must_ref(&mut pangine, "[fact]->[cat]->[eats]");

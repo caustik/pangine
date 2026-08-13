@@ -36,6 +36,12 @@ enum ConceptShape {
     Ordered(usize),
 }
 
+#[derive(Clone, Copy)]
+enum PerceptEvaluation {
+    All,
+    AssignedValues,
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum QuestionSourceOrigin {
     Percept(ConceptId),
@@ -125,7 +131,7 @@ Percept operations:
   ['name'] -= expression     Union subtraction
   ['name'] *= expression     Merge unordered Concept members
   ['name'] /= expression     Inverse merge
-  ['name'] ~= expression     Experience
+  ['name'] ~= expression     Capture one experience
   subject @ expression       Complete a Concept; return rows and bind holes
   ['source'] @ expression    Complete one retained Percept source
   ['a']['b'] @ expression   Complete several retained sources together
@@ -133,10 +139,13 @@ Percept operations:
   $['*']                     Inspect all live ordinary Concepts
 
 Experience:
-  ['memory'] ~= {[cat]->[purrs]}
-  Records the complete input as one experience owned by ['memory']. Repeating
-  an equal Concept adds default relevance to that member. Questions derive
-  recursive matches without multiplying one experience by match routes.
+  ['input'] = [purrs]
+  ['memory'] ~= {[cat]->['input']}
+  Evaluates assigned Percepts in the complete input, then records the grounded
+  result as one experience owned by ['memory']. Percepts populated by experience
+  remain references. Repeating an equal Concept adds default relevance to that
+  member. Questions derive recursive matches without multiplying one experience
+  by match routes.
 
 Scripts:
   expression; expression    Multiple statements
@@ -217,6 +226,30 @@ impl std::fmt::Display for ConceptConstructionError {
 }
 
 impl std::error::Error for ConceptConstructionError {}
+
+/// An error produced while replacing several Percept values as one update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PerceptUpdateError {
+    /// A supplied Percept is foreign, ordinary, or the read-only global Percept.
+    InvalidPercept,
+    /// A supplied value belongs to a different engine.
+    ForeignConcept,
+    /// The same Percept appears more than once in the update.
+    DuplicatePercept,
+}
+
+impl std::fmt::Display for PerceptUpdateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPercept => formatter.write_str("concept is not a mutable Percept owned by this engine"),
+            Self::ForeignConcept => formatter.write_str("Percept value belongs to a different engine"),
+            Self::DuplicatePercept => formatter.write_str("Percept appears more than once in the update"),
+        }
+    }
+}
+
+impl std::error::Error for PerceptUpdateError {}
 
 /// An engine-scoped handle to an interned concept.
 #[derive(Clone)]
@@ -343,6 +376,10 @@ pub struct Pangine {
     // Disposable materialization cache derived from the Percept subconcepts.
     percept_value_maps: BTreeMap<usize, ConceptMap>,
     percept_values: BTreeMap<usize, ConceptId>,
+    // Percepts updated as replaceable current values are input/output Percepts
+    // when experience is captured. Percepts populated by experience remain
+    // references unless evaluation is explicitly requested with `$`.
+    current_value_percepts: BTreeSet<usize>,
     composites: Vec<Weak<Concept>>,
     // Local accelerator for the existing weak canonical registry. Complete
     // equality, not the fingerprint, still determines Concept identity.
@@ -364,6 +401,7 @@ impl Default for Pangine {
             percept_subconcepts: BTreeMap::new(),
             percept_value_maps: BTreeMap::new(),
             percept_values: BTreeMap::new(),
+            current_value_percepts: BTreeSet::new(),
             composites: Vec::new(),
             composite_lookup: CompositeLookup::new(),
             next_index_prune_size: 2,
@@ -555,7 +593,13 @@ impl Pangine {
         value
     }
 
-    /// Adds default relevance to a complete Concept under a mutable Percept.
+    /// Evaluates a complete Concept and adds default relevance to the grounded result under a mutable Percept.
+    ///
+    /// Every nested Percept holding a replaceable current value is evaluated
+    /// before the experience is retained. Percepts populated by experience
+    /// remain references unless they are explicitly evaluated with
+    /// [`Self::evaluate_concept`]. A missing required input value produces no
+    /// experience and leaves the target unchanged.
     pub fn perform_experience(&mut self, percept: &ConceptId, experience: Option<&ConceptId>) -> Option<ConceptId> {
         if !self.accepts_percept_input(percept, experience) {
             return None;
@@ -565,7 +609,9 @@ impl Pangine {
             return self.get_value(percept);
         };
 
-        self.record_experience(percept, experience)?;
+        let experience = self.evaluate_experience_concept(experience)?;
+        self.record_experience(percept, &experience)?;
+        self.current_value_percepts.remove(&percept.index());
         self.materialize_percept_value(percept)
     }
 
@@ -599,7 +645,10 @@ impl Pangine {
         self.percept_values.get(&concept.index()).cloned()
     }
 
-    /// Replaces a mutable percept's value, returning whether the input was valid.
+    /// Replaces a mutable Percept's current value, returning whether the input was valid.
+    ///
+    /// A Percept set through this operation is evaluated automatically when it
+    /// appears inside a later experience.
     pub fn set_percept_value(&mut self, percept: &ConceptId, value: Option<ConceptId>) -> bool {
         if !self.is_mutable_percept(percept) || value.as_ref().is_some_and(|concept| !self.owns(concept)) {
             return false;
@@ -607,7 +656,36 @@ impl Pangine {
 
         let subconcepts = value.into_iter().map(|concept| (concept, Relevance::DEFAULT)).collect();
         self.set_percept_subconcepts(percept, subconcepts);
+        self.current_value_percepts.insert(percept.index());
         true
+    }
+
+    /// Replaces several mutable Percept values as one validated update.
+    ///
+    /// Every supplied Percept and value is checked before any value changes.
+    /// The same Percept cannot appear twice. An error therefore leaves the
+    /// complete group unchanged. Each updated Percept is evaluated automatically
+    /// when it appears inside a later experience.
+    pub fn set_percept_values(&mut self, updates: &[(ConceptId, Option<ConceptId>)]) -> Result<(), PerceptUpdateError> {
+        let mut supplied_percepts = BTreeSet::new();
+        for (percept, value) in updates {
+            if !self.is_mutable_percept(percept) {
+                return Err(PerceptUpdateError::InvalidPercept);
+            }
+            if value.as_ref().is_some_and(|concept| !self.owns(concept)) {
+                return Err(PerceptUpdateError::ForeignConcept);
+            }
+            if !supplied_percepts.insert(percept.clone()) {
+                return Err(PerceptUpdateError::DuplicatePercept);
+            }
+        }
+
+        for (percept, value) in updates {
+            let subconcepts = value.iter().cloned().map(|concept| (concept, Relevance::DEFAULT)).collect();
+            self.set_percept_subconcepts(percept, subconcepts);
+            self.current_value_percepts.insert(percept.index());
+        }
+        Ok(())
     }
 
     /// Returns an owned ordered composition's component occurrences.
@@ -1534,56 +1612,87 @@ impl Pangine {
         false
     }
 
-    fn evaluate_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
-        self.evaluate_concept_inner(concept, &mut BTreeSet::new())
+    /// Recursively replaces Percepts in an owned Concept with their current values.
+    ///
+    /// Returns no Concept when the input is foreign or a required Percept has
+    /// no current value. A repeated Percept in a reference cycle remains as the
+    /// point where recursion stops. An acyclic result is grounded at the time
+    /// of this call, so later input changes do not alter it.
+    pub fn evaluate_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
+        if !self.owns(concept) {
+            return None;
+        }
+        self.evaluate_concept_inner(concept, &mut BTreeSet::new(), PerceptEvaluation::All)
     }
 
-    fn evaluate_concept_inner(&mut self, concept: &ConceptId, visited_percepts: &mut BTreeSet<ConceptId>) -> Option<ConceptId> {
+    fn evaluate_experience_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
+        self.evaluate_concept_inner(concept, &mut BTreeSet::new(), PerceptEvaluation::AssignedValues)
+    }
+
+    fn evaluate_concept_inner(
+        &mut self,
+        concept: &ConceptId,
+        visited_percepts: &mut BTreeSet<ConceptId>,
+        percept_evaluation: PerceptEvaluation,
+    ) -> Option<ConceptId> {
         match &concept.0.kind {
             ConceptKind::Named(_) => Some(concept.clone()),
             ConceptKind::Percept { .. } => {
+                if matches!(percept_evaluation, PerceptEvaluation::AssignedValues) && !self.current_value_percepts.contains(&concept.index()) {
+                    return Some(concept.clone());
+                }
                 if !visited_percepts.insert(concept.clone()) {
                     return Some(concept.clone());
                 }
 
                 let evaluated = self.get_value(concept).and_then(|value| {
                     if self.is_global_percept(concept) {
-                        self.evaluate_transient_concept(&value, visited_percepts)
+                        self.evaluate_transient_concept(&value, visited_percepts, percept_evaluation)
                     } else {
-                        self.evaluate_concept_inner(&value, visited_percepts)
+                        self.evaluate_concept_inner(&value, visited_percepts, percept_evaluation)
                     }
                 });
                 visited_percepts.remove(concept);
                 evaluated
             }
             ConceptKind::Unordered => {
-                let evaluated = self.evaluate_subconcepts(concept, visited_percepts)?;
+                let evaluated = self.evaluate_subconcepts(concept, visited_percepts, percept_evaluation)?;
                 self.reference_map(&evaluated)
             }
             ConceptKind::Ordered { components } => {
                 let components = components.clone();
                 let mut evaluated = Vec::with_capacity(components.len());
                 for component in components {
-                    evaluated.push(self.evaluate_concept_inner(&component, visited_percepts)?);
+                    evaluated.push(self.evaluate_concept_inner(&component, visited_percepts, percept_evaluation)?);
                 }
                 Some(self.reference_ordered(evaluated))
             }
         }
     }
 
-    fn evaluate_transient_concept(&mut self, concept: &ConceptId, visited_percepts: &mut BTreeSet<ConceptId>) -> Option<ConceptId> {
+    fn evaluate_transient_concept(
+        &mut self,
+        concept: &ConceptId,
+        visited_percepts: &mut BTreeSet<ConceptId>,
+        percept_evaluation: PerceptEvaluation,
+    ) -> Option<ConceptId> {
         if matches!(concept.0.kind, ConceptKind::Unordered) {
-            let evaluated = self.evaluate_subconcepts(concept, visited_percepts)?;
+            let evaluated = self.evaluate_subconcepts(concept, visited_percepts, percept_evaluation)?;
             self.reference_transient_map(evaluated)
         } else {
-            self.evaluate_concept_inner(concept, visited_percepts)
+            self.evaluate_concept_inner(concept, visited_percepts, percept_evaluation)
         }
     }
 
-    fn evaluate_subconcepts(&mut self, concept: &ConceptId, visited_percepts: &mut BTreeSet<ConceptId>) -> Option<ConceptMap> {
+    fn evaluate_subconcepts(
+        &mut self,
+        concept: &ConceptId,
+        visited_percepts: &mut BTreeSet<ConceptId>,
+        percept_evaluation: PerceptEvaluation,
+    ) -> Option<ConceptMap> {
         let mut evaluated = ConceptMap::new();
         for (child, relevance) in concept.0.subconcepts.clone() {
-            if let Some(child) = self.evaluate_concept_inner(&child, visited_percepts) {
+            if let Some(child) = self.evaluate_concept_inner(&child, visited_percepts, percept_evaluation) {
                 self.add_relevance(&mut evaluated, child, false, relevance)?;
             }
         }
@@ -2229,12 +2338,12 @@ mod tests {
             "[A]*[B]                    Merge unordered Concept members",
             "[A]/[B]",
             "x2[A]x3[B]                 Signed integer coefficients",
-            "['name'] ~= expression     Experience",
+            "['name'] ~= expression     Capture one experience",
             "subject @ expression       Complete a Concept",
             "['source'] @ expression    Complete one retained Percept source",
             "['a']['b'] @ expression   Complete several retained sources together",
             "$['*']                     Inspect all live ordinary Concepts",
-            "adds default relevance to that member",
+            "Repeating an equal Concept adds default relevance",
             "^['choice']",
         ] {
             assert!(help.contains(expected), "missing help entry: {expected}");

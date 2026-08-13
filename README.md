@@ -100,8 +100,6 @@ command> [Alice]->[gave]->[book]->[to]->[Bob]->[gap]->[Carol]->[gave]->[book]->[
 
 The Concept `[book]` appears in both parts of the sequence. Pangine still keeps track of which occurrence supplied each half of a completed answer. It returns Alice with Bob and Carol with Dave. It does not invent Alice with Dave or Carol with Bob.
 
-This is the practical point of the recent matching work. The grammar did not gain a path-specific command or a special answer type. The engine got better at preserving what an ordinary Concept already represented while it answered a question.
-
 ## Parentheses preserve a complete choice
 
 Parentheses make a complete expression one member of the surrounding unordered Concept. That lets two graph-shaped alternatives remain distinct:
@@ -112,13 +110,13 @@ command> (([person]->[Alice])([pet]->[cat]))(([person]->[Bob])([pet]->[dog])) @ 
   {[person]->[Bob]}{[pet]->[dog]}
 ```
 
-The two parenthesized groups say “this whole group” and “that whole group.” Pangine does not mix Alice with dog or Bob with cat. If the direct members are meant to form one shared pool instead, `*` explicitly merges them:
+The two parenthesized groups keep each whole group together. Pangine does not mix Alice with dog or Bob with cat. If the direct members are meant to form one shared pool, `*` explicitly merges them:
 
 ```text
 ([A][B])*([C][D])
 ```
 
-This distinction belongs to the Concept itself, not merely to how the parser happened to read the text. Canonical output preserves the boundary and can be parsed back into the same Concept.
+This distinction belongs to the Concept itself. Canonical output preserves the boundary and can be parsed back into the same Concept.
 
 ## Repeated experience and the current choice placeholder
 
@@ -146,7 +144,31 @@ command> ^['answer']
 
 I think of `@` as leaving the possible answers together and `^` as the point where that state is collapsed to one answer. The present `^` rule is only a deterministic placeholder: choose the greatest positive weight, then use canonical order to break a tie. It is not sampling from logits, a probability calculation, or a finished theory of relevance.
 
-## Language at a glance
+## Capture current input values as experience
+
+The console, pangine.com, and Rust can all provide current values through Percepts. Assign the values with `=`, then mention those Percepts in an experience:
+
+```text
+command> ['context-input'] = [opal]
+  [opal]
+command> ['reading-input'] = [cedar]
+  [cedar]
+command> ['observations'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']
+  {[observation]->[context]->[opal]->[reading]->[cedar]}
+command> ['reading-input'] = [violet]
+  [violet]
+command> ['observations'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']
+  {[observation]->[context]->[opal]->[reading]->[cedar]}
+  {[observation]->[context]->[opal]->[reading]->[violet]}
+```
+
+When `~=` runs, Pangine captures assigned Percepts as they are at that moment. Later changes do not rewrite earlier experience. If one assigned input is empty, Pangine does not remember a partial observation.
+
+A Percept populated through `~=` remains a reference when another experience mentions it. Use `$` when you want to follow all Percepts in an expression. This is how the current implementation works. It does not create separate Percept types.
+
+Rust callers can validate and set a complete input group with `set_percept_values`, remember a Percept-bearing template with `perform_experience`, and read output Percepts after Pangine questions and chooses. `evaluate_concept` is available when explicit grounding is needed without remembering the result. The caller controls when a complete update occurs, but Pangine retains the experience, forms the candidate state, and makes the represented choice.
+
+## Grammar summary
 
 | Form | Plain-language meaning |
 | --- | --- |
@@ -161,7 +183,7 @@ I think of `@` as leaving the possible answers together and `^` as the point whe
 | `![A]` | An inverted member |
 | `x2[A]` | Two copies of the next complete member; `x1` is omitted |
 | `['memory'] = expression` | Replace a Percept's value |
-| `['memory'] ~= expression` | Remember one complete expression under a Percept |
+| `['memory'] ~= expression` | Capture assigned inputs, then remember one complete expression |
 | `subject @ question` | Fill the question's Percept blanks from the subject |
 | `$operand` | Evaluate the Percepts inside an expression |
 | `^['choice']` | Use the current deterministic choice placeholder |
@@ -169,7 +191,7 @@ I think of `@` as leaving the possible answers together and `^` as the point whe
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the complete compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for more literal console transcripts.
 
-## What exists today
+## Current implementation
 
 The Rust prototype currently includes:
 
@@ -180,16 +202,19 @@ The Rust prototype currently includes:
 - Questions made from one relationship or several relationships joined through shared blanks
 - Complete answer rows that remain ordinary Concepts and can be questioned again
 - Matching inside unordered groups and contiguous ordered paths without unsupported cross-pairing
+- Grouped Rust input updates, experience capture, explicit evaluation, and readable output Percepts
 - A deterministic placeholder behind `^`
 - A command-line console, a browser-local WebAssembly workbench, tests, and research probes
 
-## What remains open
+## Open work
 
-Pangine began as an intuition about a Bayesian semantic hypergraph. I still care about the Bayesian spirit of keeping uncertainty visible and allowing accumulated experience to change a later choice. I no longer think that requires every question to spell out a literal Bayesian calculation.
+Pangine began as an intuition about a Bayesian semantic hypergraph. I still care about keeping uncertainty visible and allowing accumulated experience to shape a later choice. More matching experience can matter, much as more active signals can matter in a body, without declaring every integer weight to be probability, confidence, or truth.
 
-The next research question is whether the same grammar can support syllogism-shaped questions, cellular-automaton transitions, path and graph questions, and Bayesian-like decision use cases without separate machinery for each one. The current matcher is a step in that direction. A learned decision step, a logit sampler, probabilities, persistence, and a distributed runtime are not implemented yet.
+The application provides observations, current values, timing, and represented context, so that experience shapes the answer. I still want the Pangine program to form the candidates and choose among them instead of hiding that work in the application. I do not want to make this a strict boundary while the integration is still being worked out.
 
-The design remains map/reduce-friendly in principle: different parts of a question can be matched independently, then joined through their shared blanks and represented source positions. The current implementation proves that behavior locally in memory. It is not yet a distributed protocol, and large-scale indexing and streaming remain open work.
+A real Rust caller is the next place to exercise the input-to-experience-to-output loop. An LLM could eventually participate as an identified source of experience or as a consumer of an output Percept. It should not silently become Pangine's question selector, relevance calculator, or final judge.
+
+A learned decision step, a logit sampler, probabilities, persistence, automatic application callbacks, and a distributed runtime are not implemented yet. The ignored research fixtures contain the detailed experiments and open questions.
 
 ## Run Pangine
 

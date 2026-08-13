@@ -144,6 +144,56 @@ fn ordinary_percept_mutation_operators_are_explicit() {
 }
 
 #[test]
+fn experience_evaluates_nested_percepts_at_capture_time() {
+    let mut pangine = Pangine::new();
+    let first = pangine
+        .parse_script_text(
+            "['context-input'] = [opal];
+             ['reading-input'] = [cedar];
+             ['memory'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']",
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(pangine.format_concept(&first, false), "{[observation]->[context]->[opal]->[reading]->[cedar]}");
+
+    pangine.reference_concept("['reading-input'] = [violet]").unwrap();
+    let memory = pangine.reference_percept("memory");
+    assert_eq!(
+        pangine.format_concept(&pangine.get_value(&memory).unwrap(), false),
+        "{[observation]->[context]->[opal]->[reading]->[cedar]}",
+        "changing an input does not rewrite an earlier grounded experience"
+    );
+
+    pangine.reference_concept("['memory'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']").unwrap();
+    assert_eq!(
+        pangine.get_relevance_map(&memory).into_iter().map(|(relevance, concept)| (relevance, pangine.format_concept(&concept, false))).collect::<Vec<_>>(),
+        vec![
+            (pangine::Relevance::DEFAULT, "{[observation]->[context]->[opal]->[reading]->[cedar]}".to_owned()),
+            (pangine::Relevance::DEFAULT, "{[observation]->[context]->[opal]->[reading]->[violet]}".to_owned()),
+        ]
+    );
+
+    let before_missing_input = pangine.get_value(&memory);
+    pangine.reference_concept("['reading-input'] = []").unwrap();
+    assert_eq!(pangine.reference_concept("['memory'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']").unwrap(), None);
+    assert_eq!(pangine.get_value(&memory), before_missing_input, "a missing input records no partial experience");
+}
+
+#[test]
+fn experience_preserves_experience_populated_percepts_as_references() {
+    let mut pangine = Pangine::new();
+    pangine.reference_concept("['source-memory'] ~= [source-value]").unwrap();
+    let reference_record = pangine.reference_concept("['reference-record'] ~= [source]->['source-memory']").unwrap().unwrap();
+    assert_eq!(
+        pangine.format_concept(&reference_record, false),
+        "{[source]->['source-memory']}",
+        "a Percept populated by experience remains a represented source reference"
+    );
+    let evaluated_reference = pangine.reference_concept("$['reference-record']").unwrap().unwrap();
+    assert_eq!(pangine.format_concept(&evaluated_reference, false), "{[source]->[source-value]}");
+}
+
+#[test]
 fn percept_addition_preserves_operands_while_merge_opens_their_members() {
     let mut test = PangineTest::new();
 
