@@ -272,6 +272,22 @@ mod tests {
     }
 
     #[test]
+    fn shared_answers_can_be_revealed_and_extended_in_the_browser_runtime() {
+        let mut session = SessionCore::default();
+        session.execute("([cat]->[eats]->[fish])([dog]->[eats]->[bone]) @ ['animal']->[eats]->['food']").unwrap();
+        session.execute("([cat]->[lives-in]->[house])([dog]->[lives-in]->[yard]) @ ['animal']->[lives-in]->['home']").unwrap();
+
+        let linked: serde_json::Value = serde_json::from_str(&session.execute("&['animal']").unwrap()).unwrap();
+        assert_eq!(linked["consoleLines"], serde_json::json!(["  {['animal']->[eats]->['food']}", "  {['animal']->[lives-in]->['home']}"]));
+
+        let possibilities: serde_json::Value = serde_json::from_str(&session.execute("$(&['animal'])").unwrap()).unwrap();
+        assert_eq!(
+            possibilities["consoleLines"],
+            serde_json::json!(["  x2({[cat]->[eats]->[fish]}{[cat]->[lives-in]->[house]})", "  x2({[dog]->[eats]->[bone]}{[dog]->[lives-in]->[yard]})"])
+        );
+    }
+
+    #[test]
     fn graph_contains_only_the_current_command_output() {
         let mut session = SessionCore::default();
         session.execute("[cat][eats]").unwrap();

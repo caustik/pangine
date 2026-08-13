@@ -1,4 +1,4 @@
-use super::{ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionCandidateWitnesses, QuestionSourceView};
+use super::{CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSourceView};
 use crate::Relevance;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -347,7 +347,7 @@ impl Completion {
 #[derive(Clone)]
 pub struct CompletionResult {
     question: ConceptId,
-    completions: Vec<Completion>,
+    pub(super) completions: Vec<Completion>,
 }
 
 impl CompletionResult {
@@ -468,6 +468,38 @@ impl Pangine {
         CompletionResult { question: question.clone(), completions }
     }
 
+    pub(super) fn join_completion_results(
+        &self,
+        left: &CompletionResult,
+        left_outputs: &BTreeSet<ConceptId>,
+        right: &CompletionResult,
+        right_outputs: &BTreeSet<ConceptId>,
+        question: &ConceptId,
+    ) -> CompletionResult {
+        let active_outputs = left_outputs.union(right_outputs).cloned().collect::<BTreeSet<_>>();
+        let mut completions = BTreeSet::new();
+        for left_completion in &left.completions {
+            for right_completion in &right.completions {
+                let left_assignment = active_completion_assignment(left_completion, left_outputs);
+                let right_assignment = active_completion_assignment(right_completion, right_outputs);
+                let Some(assignment) = Self::merge_projection_assignments(&left_assignment, &right_assignment) else {
+                    continue;
+                };
+                let mut evidence = left_completion.evidence.clone();
+                evidence.extend(right_completion.evidence.iter().cloned());
+                evidence.sort();
+                evidence.dedup();
+                if !refresh_completion_evidence_routes(&mut evidence, &active_outputs) {
+                    continue;
+                }
+                evidence.sort();
+                evidence.dedup();
+                completions.insert(Completion { assignment, evidence });
+            }
+        }
+        CompletionResult { question: question.clone(), completions: completions.into_iter().collect() }
+    }
+
     fn shared_clause_percepts(&self, clauses: &[ConceptId]) -> BTreeSet<ConceptId> {
         let mut counts = BTreeMap::new();
         for clause in clauses {
@@ -488,35 +520,59 @@ impl Pangine {
         self.instantiate_completion_inner(template, &completion.assignment)
     }
 
-    pub(super) fn materialize_completion_bindings(&mut self, result: &CompletionResult) -> Option<BTreeMap<ConceptId, Option<ConceptId>>> {
+    pub(super) fn completion_projection_witnesses(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<CompletionProjectionWitnesses> {
         let mut outputs = BTreeSet::new();
-        self.collect_output_percepts(&result.question, &mut outputs);
-        let mut witnesses = outputs.iter().cloned().map(|percept| (percept, BTreeMap::new())).collect::<QuestionCandidateWitnesses>();
-
+        self.collect_output_percepts(template, &mut outputs);
+        let mut witnesses = CompletionProjectionWitnesses::new();
         for completion in &result.completions {
-            for evidence in &completion.evidence {
-                for output in &outputs {
-                    let Some(candidate) = evidence.assignment.get(output) else {
-                        continue;
-                    };
-                    if completion.assignment.get(output) != Some(candidate) {
-                        continue;
-                    }
-                    witnesses.entry(output.clone()).or_default().entry(candidate.clone()).or_default().insert(evidence.source_view.source.clone());
-                }
-            }
+            let candidate = self.instantiate_completion_inner(template, &completion.assignment)?;
+            let candidate_witnesses = witnesses.entry(candidate).or_default();
+            candidate_witnesses.extend(
+                completion
+                    .evidence
+                    .iter()
+                    .filter(|evidence| {
+                        outputs.iter().any(|output| {
+                            let Some(binding) = evidence.assignment.get(output) else {
+                                return false;
+                            };
+                            completion.assignment.get(output) == Some(binding)
+                        })
+                    })
+                    .map(|evidence| evidence.source_view.source.clone()),
+            );
         }
-
-        self.materialize_question_witnesses(outputs, witnesses)
+        Some(witnesses)
     }
 
     pub(super) fn materialize_completion_rows(&mut self, result: &CompletionResult) -> Option<ConceptId> {
+        self.materialize_completion_rows_for(result, &result.question)
+    }
+
+    pub(super) fn materialize_completion_rows_for(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<ConceptId> {
         let mut rows = ConceptMap::new();
         for completion in &result.completions {
-            let row = self.instantiate_completion_inner(&result.question, &completion.assignment)?;
+            let row = self.instantiate_completion_inner(template, &completion.assignment)?;
             self.add_relevance(&mut rows, row, false, Relevance::DEFAULT)?;
         }
         self.reference_map(&rows)
+    }
+
+    pub(super) fn materialize_completion_projection(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<ConceptId> {
+        self.try_materialize_completion_projection(result, template).flatten()
+    }
+
+    pub(super) fn try_materialize_completion_projection(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<Option<ConceptId>> {
+        let witnesses = self.completion_projection_witnesses(result, template)?;
+        let mut candidates = ConceptMap::new();
+        for (candidate, sources) in witnesses {
+            // The current integer rule adds distinct source witnesses. Keeping
+            // those witnesses in the answer state leaves room for a different
+            // Relevance combination rule later.
+            let support = self.question_source_support(&sources)?;
+            self.add_relevance(&mut candidates, candidate, false, support)?;
+        }
+        Some(self.reference_map(&candidates))
     }
 
     fn source_view_completions(&mut self, source: &ConceptId, question: &ConceptId) -> BTreeSet<StructuralCompletion> {
@@ -726,6 +782,36 @@ impl Pangine {
             }
         }
     }
+}
+
+fn active_completion_assignment(completion: &Completion, outputs: &BTreeSet<ConceptId>) -> ProjectionAssignment {
+    completion.assignment.iter().filter(|(percept, _)| outputs.contains(*percept)).map(|(percept, value)| (percept.clone(), value.clone())).collect()
+}
+
+fn refresh_completion_evidence_routes(evidence: &mut [CompletionEvidence], active_outputs: &BTreeSet<ConceptId>) -> bool {
+    let mut percept_counts = BTreeMap::new();
+    for fragment in evidence.iter() {
+        for percept in fragment.assignment.keys().filter(|percept| active_outputs.contains(*percept)) {
+            *percept_counts.entry(percept.clone()).or_insert(0_usize) += 1;
+        }
+    }
+    let shared_percepts = percept_counts.into_iter().filter_map(|(percept, count)| (count > 1).then_some(percept)).collect::<BTreeSet<_>>();
+    let sources = evidence.iter().map(|fragment| fragment.source_view.source.clone()).collect::<BTreeSet<_>>();
+
+    for source in sources {
+        let mut source_route_products = BTreeSet::from([CompletionRoute::default()]);
+        for fragment in evidence.iter().filter(|fragment| fragment.source_view.source == source) {
+            let constraints = source_route_constraints(&fragment.source_view.routes, &shared_percepts);
+            source_route_products = join_source_route_relations(&source_route_products, &constraints);
+        }
+        if source_route_products.is_empty() {
+            return false;
+        }
+        for fragment in evidence.iter_mut().filter(|fragment| fragment.source_view.source == source) {
+            fragment.source_route_products = source_route_products.clone();
+        }
+    }
+    true
 }
 
 fn question_clauses(question: &ConceptId) -> Vec<ConceptId> {

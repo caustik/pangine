@@ -8,6 +8,8 @@ mod decision_fallback;
 mod decision_record;
 #[path = "research/interface_percepts.rs"]
 mod interface_percepts;
+#[path = "research/joint_answer_relevance.rs"]
+mod joint_answer_relevance;
 #[path = "research/matcher_boundaries.rs"]
 mod matcher_boundaries;
 #[path = "research/question_support.rs"]

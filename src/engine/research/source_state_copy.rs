@@ -328,9 +328,9 @@ fn represented_capture_scope_can_version_selected_references_and_leave_others_li
     run_selected_source_decision(&mut pangine, "versioned-record-source", "versioned-scope-after");
     assert_eq!(decision_state(&mut pangine, "live-scope-after-candidate"), state(&[("[B]", 3), ("[A]", 2)], Some("[B]")));
     assert_eq!(decision_state(&mut pangine, "versioned-scope-after-candidate"), state(&[("[A]", 2), ("[B]", 1)], Some("[A]")));
-    assert_eq!(must_ref(&mut pangine, "$['versioned-record-context']"), must_ref(&mut pangine, "[south]"));
-    assert_eq!(must_ref(&mut pangine, "$['versioned-record-shared-one']"), must_ref(&mut pangine, "[shared-old]"));
-    assert_eq!(must_ref(&mut pangine, "$['versioned-record-shared-two']"), must_ref(&mut pangine, "[shared-old]"));
+    assert_eq!(must_ref(&mut pangine, "$($['versioned-record-context'])"), must_ref(&mut pangine, "[south]"));
+    assert_eq!(must_ref(&mut pangine, "$($['versioned-record-shared-one'])"), must_ref(&mut pangine, "[shared-old]"));
+    assert_eq!(must_ref(&mut pangine, "$($['versioned-record-shared-two'])"), must_ref(&mut pangine, "[shared-old]"));
     assert_eq!(must_ref(&mut pangine, "$['left']"), must_ref(&mut pangine, "[resolved-original]"));
     assert_eq!(must_ref(&mut pangine, "$['versioned-record-cycle']"), left_v1);
 }

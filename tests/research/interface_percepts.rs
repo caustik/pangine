@@ -75,7 +75,7 @@ impl RustPerceptBridge {
 }
 
 #[test]
-#[ignore = "research detail: ordinary tests now cover grouped Rust input, automatic assigned-input capture, and output reads; callbacks and LLM adapters remain absent"]
+#[ignore = "research detail: ordinary tests now cover grouped Rust input, automatic assigned-input capture, collapsed output reads, and no callback or LLM adapter"]
 fn rust_input_frames_become_experience_and_output_percepts_deliver_pangines_changing_choice() {
     let mut pangine = Pangine::new();
     let mut bridge = RustPerceptBridge::new(&mut pangine);
@@ -91,13 +91,13 @@ fn rust_input_frames_become_experience_and_output_percepts_deliver_pangines_chan
     }
 
     assert_eq!(bridge.decide(&mut pangine, "opal", "pearl"), Some("[cedar]".to_owned()));
-    assert_eq!(read_named_weights(&mut pangine, "decision-candidate"), weight_map(&[("[cedar]", 3), ("[violet]", 2)]));
+    assert_eq!(read_named_weights(&mut pangine, "decision-candidate"), weight_map(&[("[cedar]", 3)]));
 
     for _ in 0..2 {
         bridge.capture_frame(&mut pangine, RustFrame { context: "opal", reading: "violet", result: "pearl" }).unwrap();
     }
     assert_eq!(bridge.decide(&mut pangine, "opal", "pearl"), Some("[violet]".to_owned()));
-    assert_eq!(read_named_weights(&mut pangine, "decision-candidate"), weight_map(&[("[cedar]", 3), ("[violet]", 4)]));
+    assert_eq!(read_named_weights(&mut pangine, "decision-candidate"), weight_map(&[("[violet]", 4)]));
     assert_eq!(
         bridge.delivered_outputs,
         vec![Some("[cedar]".to_owned()), Some("[violet]".to_owned())],
@@ -201,7 +201,7 @@ fn queued_output_delivery_can_feed_later_input_after_each_complete_cycle() {
     }
 
     assert_eq!(delivered, vec![Some("[cedar]".to_owned()), Some("[violet]".to_owned())]);
-    assert_eq!(read_named_weights(&mut pangine, "decision-candidate"), weight_map(&[("[cedar]", 3), ("[violet]", 4)]));
+    assert_eq!(read_named_weights(&mut pangine, "decision-candidate"), weight_map(&[("[violet]", 4)]));
     assert_eq!(pangine.get_value(&living.bridge.output).map(|output| pangine.format_concept(&output, false)), Some("[violet]".to_owned()));
 }
 

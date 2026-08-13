@@ -787,7 +787,7 @@ fn question_order_can_choose_total_reports_or_most_reported_event_inside_pangine
         "all seven reporting sources remain visible before either Pangine choice"
     );
 
-    must_ref(&mut pangine, "['selected-order-event'] = ^['order-event']");
+    must_ref(&mut pangine, "['order-event-choice-input'] = $['order-event']; ['selected-order-event'] = ^['order-event-choice-input']");
     let selected_event = must_ref(&mut pangine, "$['selected-order-event']");
     assert_eq!(pangine.format_concept(&selected_event, false), "[shared-a-event]");
     must_ref(&mut pangine, "['selected-event-link'] = [selected]->$['selected-order-event']");
@@ -802,7 +802,7 @@ fn question_order_can_choose_total_reports_or_most_reported_event_inside_pangine
 
     experience(&mut pangine, "condition", "[lantern]->[cobalt]->[opal]", 19);
     must_ref(&mut pangine, &format!("['reports']['condition'] @ {report_question}"));
-    must_ref(&mut pangine, "['selected-order-event'] = ^['order-event']");
+    must_ref(&mut pangine, "['order-event-choice-input'] = $['order-event']; ['selected-order-event'] = ^['order-event-choice-input']");
     must_ref(&mut pangine, "['selected-event-link'] = [selected]->$['selected-order-event']");
     must_ref(&mut pangine, &format!("['selected-event-link']['reports']['condition'] @ {event_first_question}"));
     assert_eq!(
@@ -3068,8 +3068,13 @@ fn represented_requested_result_can_select_a_less_common_answer_view_without_hos
 #[ignore = "warning: choosing a matching observed answer before mapping it to a preserved view is one provisional question order; a direct all-row join keeps each view once, equal conclusions remain ambiguous, and no causal meaning is implied"]
 fn observed_choice_and_result_derive_answer_view_without_episode_view_labels() {
     let mut pangine = prepare_explicit_activation_comparison();
-    must_run(&mut pangine, "['retained-report-choice'] = ^['retained-report-answer']");
-    must_run(&mut pangine, "['activation-answer-choice'] = ^['activation-answer']");
+    must_run(
+        &mut pangine,
+        "['retained-report-choice-input'] = $['retained-report-answer'];
+         ['retained-report-choice'] = ^['retained-report-choice-input'];
+         ['activation-answer-choice-input'] = $['activation-answer'];
+         ['activation-answer-choice'] = ^['activation-answer-choice-input']",
+    );
     must_ref(
         &mut pangine,
         "['activation-answer-observation-record'] =
@@ -5086,14 +5091,22 @@ fn derive_context_answer_view(pangine: &mut Pangine) {
 
 fn run_context_selected_activation_answer(pangine: &mut Pangine) {
     derive_context_answer_view(pangine);
-    must_run(pangine, "['selected-answer-view'] = [selected-view]->^['routing-view']");
+    must_run(
+        pangine,
+        "['routing-view-choice-input'] = $['routing-view'];
+         ['selected-answer-view'] = [selected-view]->^['routing-view-choice-input']",
+    );
     must_run(
         pangine,
         "['activation-answer-view-record']['selected-answer-view'] @
            (['represented-answer-view']->[rose]->['context-selected-answer-state'])
            ([selected-view]->['represented-answer-view'])",
     );
-    must_run(pangine, "['context-selected-answer-choice'] = ^['context-selected-answer-state']");
+    must_run(
+        pangine,
+        "['context-answer-state-choice-input'] = $['context-selected-answer-state'];
+         ['context-selected-answer-choice'] = ^['context-answer-state-choice-input']",
+    );
 }
 
 fn derive_context_result_answer_view(pangine: &mut Pangine) {
@@ -5110,14 +5123,22 @@ fn derive_context_result_answer_view(pangine: &mut Pangine) {
 
 fn run_context_result_selected_activation_answer(pangine: &mut Pangine) {
     derive_context_result_answer_view(pangine);
-    must_run(pangine, "['result-selected-answer-view'] = [selected-view]->^['result-routing-view']");
+    must_run(
+        pangine,
+        "['result-routing-view-choice-input'] = $['result-routing-view'];
+         ['result-selected-answer-view'] = [selected-view]->^['result-routing-view-choice-input']",
+    );
     must_run(
         pangine,
         "['activation-answer-view-record']['result-selected-answer-view'] @
            (['represented-answer-view']->[rose]->['result-selected-answer-state'])
            ([selected-view]->['represented-answer-view'])",
     );
-    must_run(pangine, "['result-selected-answer-choice'] = ^['result-selected-answer-state']");
+    must_run(
+        pangine,
+        "['result-answer-state-choice-input'] = $['result-selected-answer-state'];
+         ['result-selected-answer-choice'] = ^['result-answer-state-choice-input']",
+    );
 }
 
 fn derive_all_choice_result_answer_views(pangine: &mut Pangine) {
@@ -5147,21 +5168,33 @@ fn derive_observed_answer_choice(pangine: &mut Pangine) {
 
 fn run_choice_result_derived_activation_answer(pangine: &mut Pangine) {
     derive_observed_answer_choice(pangine);
-    must_run(pangine, "['selected-past-answer-choice'] = [past-choice]->^['observed-answer-choice']");
+    must_run(
+        pangine,
+        "['observed-answer-choice-input'] = $['observed-answer-choice'];
+         ['selected-past-answer-choice'] = [past-choice]->^['observed-answer-choice-input']",
+    );
     must_run(
         pangine,
         "['activation-answer-observation-record']['selected-past-answer-choice'] @
            (['choice-derived-answer-view']->[topaz]->['recorded-answer-choice'])
            ([past-choice]->['recorded-answer-choice'])",
     );
-    must_run(pangine, "['choice-selected-answer-view'] = [selected-view]->^['choice-derived-answer-view']");
+    must_run(
+        pangine,
+        "['derived-answer-view-choice-input'] = $['choice-derived-answer-view'];
+         ['choice-selected-answer-view'] = [selected-view]->^['derived-answer-view-choice-input']",
+    );
     must_run(
         pangine,
         "['activation-answer-observation-record']['choice-selected-answer-view'] @
            (['represented-answer-view']->[rose]->['choice-derived-answer-state'])
            ([selected-view]->['represented-answer-view'])",
     );
-    must_run(pangine, "['choice-derived-answer-choice'] = ^['choice-derived-answer-state']");
+    must_run(
+        pangine,
+        "['derived-answer-state-choice-input'] = $['choice-derived-answer-state'];
+         ['choice-derived-answer-choice'] = ^['derived-answer-state-choice-input']",
+    );
 }
 
 fn derive_historical_decision_record(pangine: &mut Pangine) {
@@ -5245,7 +5278,11 @@ fn derive_tentative_historical_reading(pangine: &mut Pangine) {
 }
 
 fn select_tentative_historical_reading(pangine: &mut Pangine) {
-    must_run(pangine, "['selected-tentative-historical-reading'] = [tentative-reading]->^['tentative-historical-observed-reading']");
+    must_run(
+        pangine,
+        "['tentative-reading-choice-input'] = $['tentative-historical-observed-reading'];
+         ['selected-tentative-historical-reading'] = [tentative-reading]->^['tentative-reading-choice-input']",
+    );
 }
 
 fn explain_tentative_historical_reading(pangine: &mut Pangine) {
@@ -5313,7 +5350,11 @@ fn materialize_tentative_decision_details(pangine: &mut Pangine) {
            ([tentative-reading]->['recordable-agreement-reading'])
            (['recordable-agreement-view']->[latest-reading]->['recordable-agreement-reading'])",
     );
-    must_run(pangine, "['tentative-selected-reading-value'] = ^['tentative-historical-observed-reading']");
+    must_run(
+        pangine,
+        "['tentative-reading-value-choice-input'] = $['tentative-historical-observed-reading'];
+         ['tentative-selected-reading-value'] = ^['tentative-reading-value-choice-input']",
+    );
 }
 
 fn capture_tentative_decision_record(pangine: &mut Pangine, record: &str) {
@@ -5377,7 +5418,11 @@ fn inspect_tentative_decision_record_rows(pangine: &mut Pangine, prefix: &str) {
 
 fn run_record_linked_choice_mapping(pangine: &mut Pangine) {
     derive_historical_decision_record(pangine);
-    must_run(pangine, "['selected-historical-record'] = [historical-record]->^['historical-decision-record']");
+    must_run(
+        pangine,
+        "['historical-record-choice-input'] = $['historical-decision-record'];
+         ['selected-historical-record'] = [historical-record]->^['historical-record-choice-input']",
+    );
     must_run(
         pangine,
         "['historical-answer-choice-episodes']['historical-answer-context']['requested-historical-result']['selected-historical-record'] @
@@ -5389,7 +5434,11 @@ fn run_record_linked_choice_mapping(pangine: &mut Pangine) {
            ([request]->[saffron]->['historical-choice-result'])
            ([historical-record]->['historical-choice-record'])",
     );
-    must_run(pangine, "['selected-historical-choice'] = [historical-choice]->^['historical-observed-choice']");
+    must_run(
+        pangine,
+        "['historical-choice-input'] = $['historical-observed-choice'];
+         ['selected-historical-choice'] = [historical-choice]->^['historical-choice-input']",
+    );
     must_run(
         pangine,
         "['historical-answer-records']['selected-historical-record']['selected-historical-choice'] @
@@ -5402,7 +5451,11 @@ fn run_record_linked_choice_mapping(pangine: &mut Pangine) {
 }
 
 fn retrieve_record_linked_answer(pangine: &mut Pangine) {
-    must_run(pangine, "['selected-historical-view'] = [historical-view]->^['historical-derived-view']");
+    must_run(
+        pangine,
+        "['historical-view-choice-input'] = $['historical-derived-view'];
+         ['selected-historical-view'] = [historical-view]->^['historical-view-choice-input']",
+    );
     must_run(
         pangine,
         "['historical-answer-records']['selected-historical-record']['selected-historical-view'] @
@@ -5412,7 +5465,11 @@ fn retrieve_record_linked_answer(pangine: &mut Pangine) {
            ([historical-record]->['historical-state-record'])
            ([historical-view]->['historical-state-view'])",
     );
-    must_run(pangine, "['historical-derived-answer-choice'] = ^['historical-derived-answer-state']");
+    must_run(
+        pangine,
+        "['historical-answer-state-choice-input'] = $['historical-derived-answer-state'];
+         ['historical-derived-answer-choice'] = ^['historical-answer-state-choice-input']",
+    );
 }
 
 fn ask_sensor_decision(pangine: &mut Pangine) {
@@ -5439,13 +5496,13 @@ fn populate_question_order_record(pangine: &mut Pangine) {
 
     let report_question = "(['record-report']->[amber]->['record-source'])(['record-report']->[topaz]->['record-condition'])([lantern]->[cobalt]->['record-condition'])(['record-report']->[indigo]->['record-event'])(['record-event']->[saffron]->['outcome-first-state'])";
     must_ref(pangine, &format!("['eligible-order-reports'] = (['reports']['condition'] @ {report_question})"));
-    must_ref(pangine, "['outcome-first-conclusion'] = ^['outcome-first-state']");
-    must_ref(pangine, "['selected-record-event'] = ^['record-event']");
+    must_ref(pangine, "['outcome-first-choice-input'] = $['outcome-first-state']; ['outcome-first-conclusion'] = ^['outcome-first-choice-input']");
+    must_ref(pangine, "['record-event-choice-input'] = $['record-event']; ['selected-record-event'] = ^['record-event-choice-input']");
     must_ref(pangine, "['selected-record-event-link'] = [selected]->$['selected-record-event']");
 
     let event_first_question = "([selected]->['record-event-first-event'])(['record-event-first-report']->[topaz]->['record-event-first-condition'])([lantern]->[cobalt]->['record-event-first-condition'])(['record-event-first-report']->[indigo]->['record-event-first-event'])(['record-event-first-event']->[saffron]->['event-first-state'])";
     must_ref(pangine, &format!("['selected-record-event-link']['reports']['condition'] @ {event_first_question}"));
-    must_ref(pangine, "['event-first-conclusion'] = ^['event-first-state']");
+    must_ref(pangine, "['event-first-choice-input'] = $['event-first-state']; ['event-first-conclusion'] = ^['event-first-choice-input']");
 
     must_ref(
         pangine,
@@ -5485,11 +5542,13 @@ fn run_represented_question_order_program(pangine: &mut Pangine) {
         "['order-guidance']['reasoning-context'] @
            (['guidance-context']->[guides]->['relevant-order'])
            ([request]->[context]->['guidance-context']);
-         ['selected-reasoning-order'] = [selected-order]->^['relevant-order'];
+         ['relevant-order-choice-input'] = $['relevant-order'];
+         ['selected-reasoning-order'] = [selected-order]->^['relevant-order-choice-input'];
          ['question-order-record']['selected-reasoning-order'] @
            (['represented-order']->[candidates]->['represented-order-state'])
            ([selected-order]->['represented-order']);
-         ['represented-order-choice'] = ^['represented-order-state']",
+         ['represented-order-choice-input'] = $['represented-order-state'];
+         ['represented-order-choice'] = ^['represented-order-choice-input']",
     );
 }
 
@@ -5865,11 +5924,13 @@ fn run_episode_question_order_program(pangine: &mut Pangine) {
            (['past-episode']->[indigo]->['past-consequence'])
            ([request]->[cobalt]->['past-context'])
            ([request]->[saffron]->['past-consequence']);
-         ['selected-episode-order'] = [selected-order]->^['episode-order'];
+         ['episode-order-choice-input'] = $['episode-order'];
+         ['selected-episode-order'] = [selected-order]->^['episode-order-choice-input'];
          ['question-order-record']['selected-episode-order'] @
            (['represented-episode-order']->[candidates]->['episode-order-state'])
            ([selected-order]->['represented-episode-order']);
-         ['episode-order-choice'] = ^['episode-order-state']",
+         ['episode-order-state-choice-input'] = $['episode-order-state'];
+         ['episode-order-choice'] = ^['episode-order-state-choice-input']",
     );
 }
 
@@ -5896,11 +5957,13 @@ fn run_stance_question_order_program(pangine: &mut Pangine) {
            (['negative-consequence']->[role]->[negative]);
          ['episode-order-net'] = $['positive-order'];
          ['episode-order-net'] /= $['negative-order'];
-         ['selected-episode-order'] = [selected-order]->^['episode-order-net'];
+         ['episode-order-net-choice-input'] = $['episode-order-net'];
+         ['selected-episode-order'] = [selected-order]->^['episode-order-net-choice-input'];
          ['question-order-record']['selected-episode-order'] @
            (['represented-episode-order']->[candidates]->['episode-order-state'])
            ([selected-order]->['represented-episode-order']);
-         ['episode-order-choice'] = ^['episode-order-state']",
+         ['episode-order-state-choice-input'] = $['episode-order-state'];
+         ['episode-order-choice'] = ^['episode-order-state-choice-input']",
     );
 }
 
@@ -5925,11 +5988,13 @@ fn run_valuation_report_question_order_program(pangine: &mut Pangine) {
                (['negative-report']->[report-role]->[negative]);
              ['episode-order-net'] = $['positive-order'];
              ['episode-order-net'] /= $['negative-order'];
-             ['selected-episode-order'] = [selected-order]->^['episode-order-net'];
+             ['episode-order-net-choice-input'] = $['episode-order-net'];
+             ['selected-episode-order'] = [selected-order]->^['episode-order-net-choice-input'];
              ['question-order-record']['selected-episode-order'] @
                (['represented-episode-order']->[candidates]->['episode-order-state'])
                ([selected-order]->['represented-episode-order']);
-             ['episode-order-choice'] = ^['episode-order-state']",
+             ['episode-order-state-choice-input'] = $['episode-order-state'];
+             ['episode-order-choice'] = ^['episode-order-state-choice-input']",
         )
         .expect("valid source-identified valuation-report question-order program");
 }
@@ -5961,11 +6026,13 @@ fn run_complete_valuation_observation_question_order_program(pangine: &mut Pangi
            ([request]->[cobalt]->['negative-context']);
          ['episode-order-net'] = $['positive-order'];
          ['episode-order-net'] /= $['negative-order'];
-         ['selected-episode-order'] = [selected-order]->^['episode-order-net'];
+         ['episode-order-net-choice-input'] = $['episode-order-net'];
+         ['selected-episode-order'] = [selected-order]->^['episode-order-net-choice-input'];
          ['question-order-record']['selected-episode-order'] @
            (['represented-episode-order']->[candidates]->['episode-order-state'])
            ([selected-order]->['represented-episode-order']);
-         ['episode-order-choice'] = ^['episode-order-state']",
+         ['episode-order-state-choice-input'] = $['episode-order-state'];
+         ['episode-order-choice'] = ^['episode-order-state-choice-input']",
     );
 }
 
@@ -6025,11 +6092,13 @@ fn run_staged_valuation_observation_question_order_program(pangine: &mut Pangine
         pangine,
         "['staged-episode-order-net'] = $['staged-positive-order'];
          ['staged-episode-order-net'] /= $['staged-negative-order'];
-         ['staged-selected-episode-order'] = [selected-order]->^['staged-episode-order-net'];
+         ['staged-order-net-choice-input'] = $['staged-episode-order-net'];
+         ['staged-selected-episode-order'] = [selected-order]->^['staged-order-net-choice-input'];
          ['question-order-record']['staged-selected-episode-order'] @
            (['staged-represented-episode-order']->[candidates]->['staged-episode-order-state'])
            ([selected-order]->['staged-represented-episode-order']);
-         ['staged-episode-order-choice'] = ^['staged-episode-order-state']",
+         ['staged-order-state-choice-input'] = $['staged-episode-order-state'];
+         ['staged-episode-order-choice'] = ^['staged-order-state-choice-input']",
     );
 }
 
@@ -6108,11 +6177,13 @@ fn run_provenance_routed_valuation_observation_question_order_program(pangine: &
          ['provenance-negative-order'] *= $['same-occurrence-negative-order'];
          ['provenance-episode-order-net'] = $['provenance-positive-order'];
          ['provenance-episode-order-net'] /= $['provenance-negative-order'];
-         ['provenance-selected-episode-order'] = [selected-order]->^['provenance-episode-order-net'];
+         ['provenance-order-net-choice-input'] = $['provenance-episode-order-net'];
+         ['provenance-selected-episode-order'] = [selected-order]->^['provenance-order-net-choice-input'];
          ['question-order-record']['provenance-selected-episode-order'] @
            (['provenance-represented-episode-order']->[candidates]->['provenance-episode-order-state'])
            ([selected-order]->['provenance-represented-episode-order']);
-         ['provenance-episode-order-choice'] = ^['provenance-episode-order-state']",
+         ['provenance-order-state-choice-input'] = $['provenance-episode-order-state'];
+         ['provenance-episode-order-choice'] = ^['provenance-order-state-choice-input']",
     );
 }
 
@@ -6152,7 +6223,11 @@ fn run_origin_first_valuation_observation_question_order_program(pangine: &mut P
          ([request]->[cobalt]->['origin-negative-context'])";
     must_run(pangine, &format!("{sources} @ {negative_origin_question}"));
 
-    must_ref(pangine, "['origin-first-selected-positive-origin'] = [selected-origin]->^['origin-positive-origin']");
+    must_ref(
+        pangine,
+        "['origin-positive-choice-input'] = $['origin-positive-origin'];
+         ['origin-first-selected-positive-origin'] = [selected-origin]->^['origin-positive-choice-input']",
+    );
     let selected_positive_sources = format!("['origin-first-selected-positive-origin']{sources}");
     let selected_positive_question = "([selected-origin]->['origin-first-positive-origin'])
          (['origin-first-positive-observation']->[report-source]->['origin-first-positive-source'])
@@ -6170,7 +6245,11 @@ fn run_origin_first_valuation_observation_question_order_program(pangine: &mut P
          ([request]->[cobalt]->['origin-first-positive-context'])";
     must_run(pangine, &format!("{selected_positive_sources} @ {selected_positive_question}"));
 
-    must_ref(pangine, "['origin-first-selected-negative-origin'] = [selected-origin]->^['origin-negative-origin']");
+    must_ref(
+        pangine,
+        "['origin-negative-choice-input'] = $['origin-negative-origin'];
+         ['origin-first-selected-negative-origin'] = [selected-origin]->^['origin-negative-choice-input']",
+    );
     let selected_negative_sources = format!("['origin-first-selected-negative-origin']{sources}");
     let selected_negative_question = "([selected-origin]->['origin-first-negative-origin'])
          (['origin-first-negative-observation']->[report-source]->['origin-first-negative-source'])
@@ -6193,14 +6272,22 @@ fn run_origin_first_valuation_observation_question_order_program(pangine: &mut P
 }
 
 fn retrieve_origin_first_question_order_choice(pangine: &mut Pangine) {
-    must_ref(pangine, "['origin-first-selected-episode-order'] = [selected-order]->^['origin-first-episode-order-net']");
+    must_ref(
+        pangine,
+        "['origin-first-order-net-choice-input'] = $['origin-first-episode-order-net'];
+         ['origin-first-selected-episode-order'] = [selected-order]->^['origin-first-order-net-choice-input']",
+    );
     must_ref(
         pangine,
         "['question-order-record']['origin-first-selected-episode-order'] @
            (['origin-first-represented-episode-order']->[candidates]->['origin-first-episode-order-state'])
            ([selected-order]->['origin-first-represented-episode-order'])",
     );
-    must_ref(pangine, "['origin-first-episode-order-choice'] = ^['origin-first-episode-order-state']");
+    must_ref(
+        pangine,
+        "['origin-first-order-state-choice-input'] = $['origin-first-episode-order-state'];
+         ['origin-first-episode-order-choice'] = ^['origin-first-order-state-choice-input']",
+    );
 }
 
 fn run_all_origins_valuation_observation_question_order_program(pangine: &mut Pangine) {
@@ -6266,14 +6353,22 @@ fn run_all_origins_valuation_observation_question_order_program(pangine: &mut Pa
 }
 
 fn retrieve_all_origins_question_order_choice(pangine: &mut Pangine) {
-    must_ref(pangine, "['all-origin-selected-episode-order'] = [selected-order]->^['all-origin-episode-order-net']");
+    must_ref(
+        pangine,
+        "['all-origin-order-net-choice-input'] = $['all-origin-episode-order-net'];
+         ['all-origin-selected-episode-order'] = [selected-order]->^['all-origin-order-net-choice-input']",
+    );
     must_ref(
         pangine,
         "['question-order-record']['all-origin-selected-episode-order'] @
            (['all-origin-represented-episode-order']->[candidates]->['all-origin-episode-order-state'])
            ([selected-order]->['all-origin-represented-episode-order'])",
     );
-    must_ref(pangine, "['all-origin-episode-order-choice'] = ^['all-origin-episode-order-state']");
+    must_ref(
+        pangine,
+        "['all-origin-order-state-choice-input'] = $['all-origin-episode-order-state'];
+         ['all-origin-episode-order-choice'] = ^['all-origin-order-state-choice-input']",
+    );
 }
 
 fn run_enclosed_origin_report_row_program(pangine: &mut Pangine) {
@@ -6324,7 +6419,8 @@ fn materialize_referenced_origin_report_rows(pangine: &mut Pangine) {
 }
 
 fn run_referenced_origin_report_row_rejoin_program(pangine: &mut Pangine) {
-    let sources = "^['referenced-original-source']['validated-observation-keys']['episode-context']['referenced-origin-report-rows']";
+    must_ref(pangine, "['referenced-source-choice-input'] = $['referenced-original-source']");
+    let sources = "^['referenced-source-choice-input']['validated-observation-keys']['episode-context']['referenced-origin-report-rows']";
     let positive_question = "(['referenced-positive-report']->[report-source]->['referenced-positive-source'])
          (['referenced-positive-report']->[reported-episode]->['referenced-positive-episode'])
          (['referenced-positive-report']->[reported-context]->['referenced-positive-context'])
@@ -6355,14 +6451,22 @@ fn run_referenced_origin_report_row_rejoin_program(pangine: &mut Pangine) {
 
     must_ref(pangine, "['referenced-episode-order-net'] = $['referenced-positive-order']");
     must_run(pangine, "['referenced-episode-order-net'] /= $['referenced-negative-order']");
-    must_ref(pangine, "['referenced-selected-episode-order'] = [selected-order]->^['referenced-episode-order-net']");
+    must_ref(
+        pangine,
+        "['referenced-order-net-choice-input'] = $['referenced-episode-order-net'];
+         ['referenced-selected-episode-order'] = [selected-order]->^['referenced-order-net-choice-input']",
+    );
     must_ref(
         pangine,
         "['question-order-record']['referenced-selected-episode-order'] @
            (['referenced-represented-episode-order']->[candidates]->['referenced-episode-order-state'])
            ([selected-order]->['referenced-represented-episode-order'])",
     );
-    must_ref(pangine, "['referenced-episode-order-choice'] = ^['referenced-episode-order-state']");
+    must_ref(
+        pangine,
+        "['referenced-order-state-choice-input'] = $['referenced-episode-order-state'];
+         ['referenced-episode-order-choice'] = ^['referenced-order-state-choice-input']",
+    );
 }
 
 fn remember_source_scoped_report(pangine: &mut Pangine, memory: &str, report: &str, store: &str, answer: &str, repetitions: usize) {
@@ -6566,9 +6670,21 @@ fn read_decision(pangine: &mut Pangine) -> DecisionResult {
 }
 
 fn read_named_decision(pangine: &mut Pangine, choice_name: &str) -> DecisionResult {
-    let candidates = read_named_weights(pangine, choice_name);
+    // Project through `$` so a previously collapsed output still reports the
+    // full current answer when another linked output has not collapsed it.
+    let value = pangine.reference_concept(&format!("$['{choice_name}']")).expect("valid represented decision read");
+    let candidates = value
+        .iter()
+        .flat_map(|value| pangine.get_relevance_map(value))
+        .map(|(relevance, candidate)| (pangine.format_concept(&candidate, false), relevance))
+        .collect();
+    // These warning fixtures compare several decision views in one engine.
+    // Choose a detached copy so inspecting one view does not collapse the live
+    // question state needed by a later comparison.
+    let probe = pangine.reference_percept("represented-choice-decision-probe");
+    assert!(pangine.set_percept_value(&probe, value));
     let selected = pangine
-        .reference_concept(&format!("^['{choice_name}']"))
+        .reference_concept("^['represented-choice-decision-probe']")
         .expect("valid represented decision")
         .map(|candidate| pangine.format_concept(&candidate, false));
     DecisionResult { candidates, selected }

@@ -144,15 +144,24 @@ fn an_unchanged_source_version_preserves_exact_history_and_can_be_selected_throu
     assert_eq!(decision_state(&mut pangine, "indirect-negative"), state(&[], None));
     assert_eq!(decision_state(&mut pangine, "indirect-net"), state(&[], None));
 
-    run_stance_program(&mut pangine, "^['record-source']^['record-stance']", "record-selected");
+    must_ref(&mut pangine, "['record-source-choice-input'] = $['record-source']; ['record-stance-choice-input'] = $['record-stance']");
+    run_stance_program(&mut pangine, "^['record-source-choice-input']^['record-stance-choice-input']", "record-selected");
     assert_eq!(decision_state(&mut pangine, "record-selected-net"), state(&[("[A]", 1), ("[B]", -2)], Some("[A]")));
 
     must_ref(&mut pangine, "($['record-source']) @ ['evaluated-event']->['evaluated-relation']->['evaluated-choice']");
-    assert_eq!(decision_state(&mut pangine, "evaluated-choice"), state(&[("[A]", 1), ("[B]", 1)], Some("[A]")));
+    assert_eq!(
+        decision_state(&mut pangine, "evaluated-choice"),
+        state(&[("[A]", 7), ("[B]", 8)], Some("[B]")),
+        "the linked output keeps the selected live source reference, whose current experience then supplies the answer amounts"
+    );
     run_stance_program(&mut pangine, "($['record-source'])($['record-stance'])", "evaluated-pointer");
-    assert_eq!(decision_state(&mut pangine, "evaluated-pointer-positive"), state(&[], None));
-    assert_eq!(decision_state(&mut pangine, "evaluated-pointer-negative"), state(&[], None));
-    assert_eq!(decision_state(&mut pangine, "evaluated-pointer-net"), state(&[], None));
+    assert_eq!(decision_state(&mut pangine, "evaluated-pointer-positive"), state(&[("[A]", 4), ("[B]", 3)], Some("[A]")));
+    assert_eq!(decision_state(&mut pangine, "evaluated-pointer-negative"), state(&[("[A]", 3), ("[B]", 5)], Some("[B]")));
+    assert_eq!(
+        decision_state(&mut pangine, "evaluated-pointer-net"),
+        state(&[("[A]", 1), ("[B]", -2)], Some("[A]")),
+        "linked source and stance outputs remain usable as live references in a later Pangine question"
+    );
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -275,15 +284,20 @@ fn source_coefficients() -> BTreeMap<String, Relevance> {
 }
 
 fn decision_state(pangine: &mut Pangine, name: &str) -> DecisionState {
-    let percept = pangine.reference_percept(name);
-    let candidates = pangine
-        .get_value(&percept)
-        .into_iter()
-        .flat_map(|value| pangine.get_relevance_map(&value))
+    let value = pangine.reference_concept(&format!("$['{name}']")).expect("valid decision-record read");
+    let candidates = value
+        .iter()
+        .flat_map(|value| pangine.get_relevance_map(value))
         .map(|(relevance, candidate)| (pangine.format_concept(&candidate, false), relevance))
         .collect();
-    let selected =
-        pangine.reference_concept(&format!("^['{name}']")).expect("valid decision-record choice").map(|candidate| pangine.format_concept(&candidate, false));
+    // Record comparisons inspect several views in sequence. Choose a detached
+    // copy so inspection does not collapse a live answer used by a later view.
+    let probe = pangine.reference_percept("decision-record-choice-probe");
+    assert!(pangine.set_percept_value(&probe, value));
+    let selected = pangine
+        .reference_concept("^['decision-record-choice-probe']")
+        .expect("valid decision-record choice")
+        .map(|candidate| pangine.format_concept(&candidate, false));
     DecisionState { candidates, selected }
 }
 

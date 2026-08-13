@@ -138,11 +138,82 @@ command> $['answer']
   [traffic]
 command> ^['answer']
   [birds]
+command> $['answer']
+  x2 [birds]
 ```
 
 `x2` is the compact form of two equal unordered members. An implied `x1` is not printed. The current prototype also uses these signed integers to expose how strongly retained experience supported an output.
 
-I think of `@` as leaving the possible answers together and `^` as the point where that state is collapsed to one answer. The present `^` rule is only a deterministic placeholder: choose the greatest positive weight, then use canonical order to break a tie. It is not sampling from logits, a probability calculation, or a finished theory of relevance.
+I think of `@` as leaving the possible answers together and `^` as the point where that state is collapsed to one answer. After the choice, the output Percept contains only the surviving answer. The present `^` rule is only a deterministic placeholder: choose the greatest positive weight, then use canonical order to break a tie. It is not sampling from logits, a probability calculation, or a finished theory of relevance.
+
+## Several outputs share one answer
+
+The output Percepts from one question remain connected to the same complete answer. `&` reveals the answer shape, `$` reads any part of it without changing it, and `^` chooses a value and removes complete answers that do not fit that choice.
+
+This setup gives `cat-fish` one remembered occurrence, `cat-milk` two, and `dog-fish` three:
+
+```text
+['memory'] ~= [cat]->[fish]
+['memory'] ~= [cat]->[milk]
+['memory'] ~= [cat]->[milk]
+['memory'] ~= [dog]->[fish]
+['memory'] ~= [dog]->[fish]
+['memory'] ~= [dog]->[fish]
+```
+
+Now ask one question with two outputs:
+
+```text
+command> ['memory'] @ ['animal']->['food']
+  {[cat]->[fish]}
+  {[cat]->[milk]}
+  {[dog]->[fish]}
+command> &['animal']
+  {['animal']->['food']}
+command> $(&['animal'])
+  x3 {[dog]->[fish]}
+  x2 {[cat]->[milk]}
+  {[cat]->[fish]}
+command> $['animal']
+  x3 [cat]
+  x3 [dog]
+command> $['food']
+  x4 [fish]
+  x2 [milk]
+command> ^['animal']
+  [cat]
+command> $['food']
+  x2 [milk]
+  [fish]
+command> ^['food']
+  [milk]
+command> $(&['animal'])
+  x2 {[cat]->[milk]}
+```
+
+`&['animal']` returns the question shape shared by `animal` and `food`. It does not read or change the answer. Passing that shape to `$` reads every complete possibility with its current strength. Choosing `animal` then removes the `dog-fish` row. Pangine counts `food` again from the two surviving cat rows, so milk becomes stronger than fish.
+
+The choice can also contain several outputs. Starting from the same setup, `^(['animal']->['food'])` chooses one complete animal-food pair at once. With the current greatest-weight rule it chooses `dog-fish`. Choosing food first and animal second also ends at `dog-fish`, while choosing animal first and food second ends at `cat-milk`. The order is visible because each deterministic choice changes what remains before the next choice.
+
+If a program needs an independent branch for comparison, it can copy a read first, as in `['animal-copy'] = $['animal']`, and choose the copy. Assignment makes that a detached value, so `^['animal-copy']` does not collapse the original question.
+
+A later question can reuse part of a shared answer:
+
+```text
+command> ([cat]->[eats]->[fish])([dog]->[eats]->[bone]) @ ['animal']->[eats]->['food']
+  {[cat]->[eats]->[fish]}
+  {[dog]->[eats]->[bone]}
+command> ([cat]->[lives-in]->[house])([dog]->[lives-in]->[yard]) @ ['animal']->[lives-in]->['home']
+  {[cat]->[eats]->[fish]}{[cat]->[lives-in]->[house]}
+  {[dog]->[eats]->[bone]}{[dog]->[lives-in]->[yard]}
+command> &['animal']
+  {['animal']->[eats]->['food']}
+  {['animal']->[lives-in]->['home']}
+```
+
+The repeated `animal` is the same blank, so Pangine joins only compatible complete answers and links `animal`, `food`, and `home` to the larger result. `$(&['animal'])` reads the complete combined possibilities. A question can also connect two existing shared answers this way. If an extension has no compatible result, it returns `[]` without changing either answer. Asking again with every output from one answer starts a new answer cycle instead of trapping the program in its previous collapse.
+
+This does not settle what Relevance should eventually be. Pangine keeps the remembered support behind each possible row, then the current integer rule combines that support when a view is read or chosen. That leaves room to research a richer Relevance without throwing away the complete answer first.
 
 ## Capture current input values as experience
 
@@ -185,8 +256,9 @@ Rust callers can validate and set a complete input group with `set_percept_value
 | `['memory'] = expression` | Replace a Percept's value |
 | `['memory'] ~= expression` | Capture assigned inputs, then remember one complete expression |
 | `subject @ question` | Fill the question's Percept blanks from the subject |
-| `$operand` | Evaluate the Percepts inside an expression |
-| `^['choice']` | Use the current deterministic choice placeholder |
+| `&operand` | Return the shared answer shape for linked Percepts |
+| `$operand` | Read one or more Percepts without changing their shared answer |
+| `^operand` | Choose one result and update every linked output Percept |
 | `$['*']` | Inspect the ordinary Concepts currently live in the engine |
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the complete compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for more literal console transcripts.
@@ -201,6 +273,7 @@ The Rust prototype currently includes:
 - Questions over one Concept, one Percept, or several selected Percepts
 - Questions made from one relationship or several relationships joined through shared blanks
 - Complete answer rows that remain ordinary Concepts and can be questioned again
+- Visible shared answer shapes, compatible question extension, one- or several-output reads, and collapse
 - Matching inside unordered groups and contiguous ordered paths without unsupported cross-pairing
 - Grouped Rust input updates, experience capture, explicit evaluation, and readable output Percepts
 - A deterministic placeholder behind `^`
@@ -212,7 +285,7 @@ Pangine began as an intuition about a Bayesian semantic hypergraph. I still care
 
 The application provides observations, current values, timing, and represented context, so that experience shapes the answer. I still want the Pangine program to form the candidates and choose among them instead of hiding that work in the application. I do not want to make this a strict boundary while the integration is still being worked out.
 
-A real Rust caller is the next place to exercise the input-to-experience-to-output loop. An LLM could eventually participate as an identified source of experience or as a consumer of an output Percept. It should not silently become Pangine's question selector, relevance calculator, or final judge.
+The next work is to learn how far this shared answer and collapse model can go before adding another layer. An LLM could eventually participate as an identified source of experience or as a consumer of an output Percept. It should not silently become Pangine's question selector, relevance calculator, or final judge.
 
 A learned decision step, a logit sampler, probabilities, persistence, automatic application callbacks, and a distributed runtime are not implemented yet. The ignored research fixtures contain the detailed experiments and open questions.
 

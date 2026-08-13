@@ -85,8 +85,8 @@ fn repeated_concept_under_different_percepts_increases_current_support() {
 }
 
 #[test]
-#[ignore = "warning: deciding over the members of one composite answer is provisional"]
-fn current_decision_opens_one_composite_answer_without_a_special_wrapper() {
+#[ignore = "warning: shared collapse treats one composite output binding as one complete candidate"]
+fn current_decision_keeps_one_composite_output_binding_whole() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "memory", "[A][B][C]");
 
@@ -95,8 +95,8 @@ fn current_decision_opens_one_composite_answer_without_a_special_wrapper() {
     let remainder = must_ref(&mut pangine, "[A][C]");
     let remainder_percept = pangine.reference_percept("remainder");
     assert_eq!(must_ref(&mut pangine, "$['remainder']"), remainder);
-    assert_eq!(pangine.get_relevance_map(&remainder_percept), vec![(Relevance::DEFAULT, remainder)]);
-    assert_eq!(must_ref(&mut pangine, "^['remainder']"), must_ref(&mut pangine, "[A]"));
+    assert_eq!(pangine.get_relevance_map(&remainder_percept), vec![(Relevance::DEFAULT, remainder.clone())]);
+    assert_eq!(must_ref(&mut pangine, "^['remainder']"), remainder);
 }
 
 fn experience(pangine: &mut Pangine, percept: &str, concept: &str) {
