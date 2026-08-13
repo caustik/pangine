@@ -1,6 +1,139 @@
 use super::{ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionCandidateWitnesses, QuestionSourceView};
 use crate::Relevance;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// Identifies one proper contiguous ordered window projected from a complete
+/// ordered source Concept.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionOrderedWindow {
+    pub(super) parent: ConceptId,
+    pub(super) parent_occurrence: Vec<CompletionOrderedStep>,
+    pub(super) start: usize,
+    pub(super) width: usize,
+}
+
+impl CompletionOrderedWindow {
+    /// Returns the complete ordered Concept containing the projected window.
+    pub fn parent(&self) -> &ConceptId {
+        &self.parent
+    }
+
+    /// Iterates over the ordered component steps locating `parent` inside the
+    /// complete source Concept.
+    pub fn parent_occurrence(&self) -> impl Iterator<Item = &CompletionOrderedStep> {
+        self.parent_occurrence.iter()
+    }
+
+    /// Returns the zero-based component at which the window begins.
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Returns the number of ordered components in the window.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+}
+
+/// Identifies one ordered-component descent on the way to a projected window.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionOrderedStep {
+    pub(super) parent: ConceptId,
+    pub(super) position: usize,
+}
+
+impl CompletionOrderedStep {
+    /// Returns the ordered Concept containing this component occurrence.
+    pub fn parent(&self) -> &ConceptId {
+        &self.parent
+    }
+
+    /// Returns the zero-based component position selected from `parent`.
+    pub fn position(&self) -> usize {
+        self.position
+    }
+}
+
+/// Identifies the represented source occurrence that supplied one Percept
+/// binding along a route.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionBindingOrigin {
+    pub(super) parent: ConceptId,
+    pub(super) parent_occurrence: Vec<CompletionOrderedStep>,
+    pub(super) span_start: usize,
+    pub(super) span_width: usize,
+    pub(super) nested_path: Vec<usize>,
+}
+
+impl CompletionBindingOrigin {
+    /// Returns the complete ordered Concept containing the bound occurrence.
+    pub fn parent(&self) -> &ConceptId {
+        &self.parent
+    }
+
+    /// Iterates over the ordered component steps locating `parent` inside the
+    /// complete source Concept.
+    pub fn parent_occurrence(&self) -> impl Iterator<Item = &CompletionOrderedStep> {
+        self.parent_occurrence.iter()
+    }
+
+    /// Returns the zero-based start of the bound span inside `parent`.
+    pub fn span_start(&self) -> usize {
+        self.span_start
+    }
+
+    /// Returns the width of the bound span inside `parent`.
+    pub fn span_width(&self) -> usize {
+        self.span_width
+    }
+
+    /// Returns any ordered-component path nested beneath the selected span.
+    pub fn nested_path(&self) -> &[usize] {
+        &self.nested_path
+    }
+}
+
+/// One correlated route by which a source view can participate in a
+/// completion.
+///
+/// Selected entries and binding origins constrain same-source joins.
+/// Coefficient ancestors and ordered-window descriptions remain annotations;
+/// none is interpreted as a count, score, or new Concept identity.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionRoute {
+    pub(super) coefficient_ancestors: BTreeSet<ConceptId>,
+    pub(super) selected_entries: BTreeMap<ConceptId, ConceptId>,
+    pub(super) ordered_windows: BTreeSet<CompletionOrderedWindow>,
+    pub(super) binding_origins: BTreeMap<ConceptId, BTreeSet<CompletionBindingOrigin>>,
+}
+
+impl CompletionRoute {
+    /// Iterates over coefficient-bearing Concepts crossed along this route.
+    pub fn coefficient_ancestors(&self) -> impl Iterator<Item = &ConceptId> {
+        self.coefficient_ancestors.iter()
+    }
+
+    /// Iterates over `(container, selected entry)` commitments on this route.
+    pub fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
+        self.selected_entries.iter()
+    }
+
+    /// Iterates over proper ordered windows projected along this route.
+    pub fn ordered_windows(&self) -> impl Iterator<Item = &CompletionOrderedWindow> {
+        self.ordered_windows.iter()
+    }
+
+    /// Iterates over the source occurrences associated with each constrained
+    /// Percept binding on this route.
+    ///
+    /// A missing Percept has no occurrence constraint. Several origins for one
+    /// Percept are alternatives; same-source route joins retain their
+    /// intersection.
+    pub fn binding_origins(&self) -> impl Iterator<Item = (&ConceptId, &BTreeSet<CompletionBindingOrigin>)> {
+        self.binding_origins.iter()
+    }
+}
 
 /// Identifies which side of a structural match supplied an unmatched remainder.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -36,10 +169,31 @@ impl CompletionRemainder {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone)]
 struct StructuralCompletion {
     assignment: ProjectionAssignment,
+    binding_paths: BTreeMap<ConceptId, BTreeSet<Vec<usize>>>,
     remainders: BTreeSet<CompletionRemainder>,
+}
+
+impl PartialEq for StructuralCompletion {
+    fn eq(&self, other: &Self) -> bool {
+        self.assignment == other.assignment && self.remainders == other.remainders
+    }
+}
+
+impl Eq for StructuralCompletion {}
+
+impl PartialOrd for StructuralCompletion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StructuralCompletion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.assignment.cmp(&other.assignment).then_with(|| self.remainders.cmp(&other.remainders))
+    }
 }
 
 /// Describes one selected source fragment participating in a completion.
@@ -47,6 +201,7 @@ struct StructuralCompletion {
 pub struct CompletionEvidence {
     clause: ConceptId,
     source_view: QuestionSourceView,
+    source_route_products: BTreeSet<CompletionRoute>,
     assignment: ProjectionAssignment,
     remainders: BTreeSet<CompletionRemainder>,
 }
@@ -92,6 +247,65 @@ impl CompletionEvidence {
         &self.source_view.matched
     }
 
+    /// Iterates over the alternative correlated routes to this matched source
+    /// view before it joins the other clauses in the completion.
+    pub fn routes(&self) -> impl Iterator<Item = &CompletionRoute> {
+        self.source_view.routes.iter()
+    }
+
+    /// Iterates over the surviving route constraints for this complete source
+    /// participation after all same-source clauses have joined.
+    ///
+    /// Every evidence fragment from the same source in one completion exposes
+    /// the same set. These compact products retain selected entries and the
+    /// binding origins shared across clauses. Full coefficient and window
+    /// annotations remain on each fragment's [`Self::routes`] and can be kept
+    /// factorized by fragment identity rather than expanded as a Cartesian
+    /// product during recognition.
+    pub fn source_route_products(&self) -> impl Iterator<Item = &CompletionRoute> {
+        self.source_route_products.iter()
+    }
+
+    /// Iterates over the alternative coefficient-ancestor routes that reached
+    /// this canonical matched source view.
+    ///
+    /// Each inner set contains ordinary Concepts such as `x2(F)` crossed along
+    /// one route. Different inner sets are alternatives, not simultaneous
+    /// factors. A route for an exact wrapper match is empty because it crosses
+    /// no coefficient boundary.
+    pub fn coefficient_ancestor_routes(&self) -> impl Iterator<Item = &BTreeSet<ConceptId>> {
+        self.source_view.routes.iter().map(|route| &route.coefficient_ancestors)
+    }
+
+    /// Iterates over coefficient-bearing ancestors across every alternative
+    /// route to this matched view.
+    ///
+    /// An ancestor shared by several routes can occur more than once. Use
+    /// [`Self::coefficient_ancestor_routes`] when the distinction between
+    /// alternatives matters. Equal ancestors under distinct source owners are
+    /// distinguishable only when paired with this evidence's source fields.
+    /// Nothing interprets a coefficient as occurrences, support, or a score.
+    pub fn coefficient_ancestors(&self) -> impl Iterator<Item = &ConceptId> {
+        self.source_view.routes.iter().flat_map(|route| route.coefficient_ancestors.iter())
+    }
+
+    /// Iterates over complete source entries selected while reaching this view.
+    ///
+    /// Each pair is `(containing Concept, selected entry)`. Evidence fragments
+    /// from the same source can join only when they select the same entry for a
+    /// shared container. Direct grouped unordered entries are selected
+    /// immediately. A complete ordered entry is selected when one of its proper
+    /// windows participates, and a coefficient around either entry preserves
+    /// that boundary. Flat relation atoms, including atoms that merely contain
+    /// a nested group, add no selection. This flattened compatibility view can
+    /// repeat or discard correlations across alternative routes; use
+    /// [`Self::routes`] for exact route-local selections. Both values are
+    /// ordinary Concepts, so this is derived provenance rather than a new
+    /// stored value type.
+    pub fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
+        self.source_view.routes.iter().flat_map(|route| route.selected_entries.iter())
+    }
+
     /// Returns the value assigned to `percept` by this evidence fragment.
     pub fn binding(&self, percept: &ConceptId) -> Option<&ConceptId> {
         self.assignment.get(percept)
@@ -103,7 +317,9 @@ impl CompletionEvidence {
     }
 }
 
-/// One correlated grounding of every Percept hole in a question.
+/// One proof-bearing correlated grounding of every Percept hole in a question.
+/// Distinct clause-to-source proofs can therefore produce distinct completions
+/// with the same grounded assignment.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Completion {
     assignment: ProjectionAssignment,
@@ -127,7 +343,7 @@ impl Completion {
     }
 }
 
-/// A structural question and all of its complete correlated groundings.
+/// A structural question and all of its proof-bearing correlated groundings.
 #[derive(Clone)]
 pub struct CompletionResult {
     question: ConceptId,
@@ -140,13 +356,13 @@ impl CompletionResult {
         &self.question
     }
 
-    /// Returns every complete correlated grounding in canonical order.
+    /// Returns every proof-bearing correlated grounding in canonical order.
     pub fn completions(&self) -> &[Completion] {
         &self.completions
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Injection {
     completion: StructuralCompletion,
     used_candidates: BTreeSet<usize>,
@@ -188,14 +404,22 @@ impl Pangine {
 
     pub(super) fn complete_question_snapshot(&mut self, question: &ConceptId, snapshot: &super::QuestionSnapshot) -> CompletionResult {
         let clauses = question_clauses(question);
+        let shared_percepts = self.shared_clause_percepts(&clauses);
         let mut products = BTreeSet::from([Completion { assignment: ProjectionAssignment::new(), evidence: Vec::new() }]);
 
         for clause in clauses {
             let mut clause_evidence = BTreeSet::new();
-            for source_view in &snapshot.source_views {
-                for completion in self.structural_completions(&source_view.matched, &clause, &mut Vec::new()) {
+            for ((source, matched, _), routes) in &snapshot.source_views {
+                for completion in self.source_view_completions(matched, &clause) {
+                    let source_view = QuestionSourceView {
+                        source: source.clone(),
+                        matched: matched.clone(),
+                        routes: routes_with_binding_origins(routes, &completion.binding_paths),
+                    };
+                    let source_route_products = source_route_constraints(&source_view.routes, &shared_percepts);
                     clause_evidence.insert(CompletionEvidence {
                         clause: clause.clone(),
+                        source_route_products,
                         source_view: source_view.clone(),
                         assignment: completion.assignment,
                         remainders: completion.remainders,
@@ -210,7 +434,25 @@ impl Pangine {
                         continue;
                     };
                     let mut joined_evidence = product.evidence.clone();
-                    joined_evidence.push(evidence.clone());
+                    let existing_routes = joined_evidence
+                        .iter()
+                        .find(|joined| joined.source_view.source == evidence.source_view.source)
+                        .map(|joined| &joined.source_route_products);
+                    let source_route_products = match existing_routes {
+                        Some(existing_routes) => join_source_route_relations(existing_routes, &evidence.source_route_products),
+                        None => evidence.source_route_products.clone(),
+                    };
+                    if source_route_products.is_empty() {
+                        continue;
+                    }
+                    for joined in &mut joined_evidence {
+                        if joined.source_view.source == evidence.source_view.source {
+                            joined.source_route_products = source_route_products.clone();
+                        }
+                    }
+                    let mut evidence = evidence.clone();
+                    evidence.source_route_products = source_route_products;
+                    joined_evidence.push(evidence);
                     next.insert(Completion { assignment, evidence: joined_evidence });
                 }
             }
@@ -224,6 +466,18 @@ impl Pangine {
         self.collect_output_percepts(question, &mut outputs);
         let completions = products.into_iter().filter(|completion| outputs.iter().all(|output| completion.assignment.contains_key(output))).collect();
         CompletionResult { question: question.clone(), completions }
+    }
+
+    fn shared_clause_percepts(&self, clauses: &[ConceptId]) -> BTreeSet<ConceptId> {
+        let mut counts = BTreeMap::new();
+        for clause in clauses {
+            let mut percepts = BTreeSet::new();
+            self.collect_output_percepts(clause, &mut percepts);
+            for percept in percepts {
+                *counts.entry(percept).or_insert(0_usize) += 1;
+            }
+        }
+        counts.into_iter().filter_map(|(percept, count)| (count > 1).then_some(percept)).collect()
     }
 
     /// Instantiates any ordinary Concept template from one correlated completion.
@@ -265,10 +519,16 @@ impl Pangine {
         self.reference_map(&rows)
     }
 
+    fn source_view_completions(&mut self, source: &ConceptId, question: &ConceptId) -> BTreeSet<StructuralCompletion> {
+        let mut ordered_path = Vec::new();
+        self.structural_completions(source, question, &mut ordered_path)
+    }
+
     fn structural_completions(&mut self, source: &ConceptId, question: &ConceptId, ordered_path: &mut Vec<usize>) -> BTreeSet<StructuralCompletion> {
         if self.is_percept(question) {
             return BTreeSet::from([StructuralCompletion {
                 assignment: ProjectionAssignment::from([(question.clone(), source.clone())]),
+                binding_paths: BTreeMap::from([(question.clone(), BTreeSet::from([ordered_path.clone()]))]),
                 remainders: BTreeSet::new(),
             }]);
         }
@@ -326,7 +586,7 @@ impl Pangine {
                 if question_outputs.is_empty() {
                     let mut completion = injection.completion;
                     self.add_completion_remainder(&mut completion, CompletionRemainderSide::Source, ordered_path, &remaining);
-                    completions.insert(completion);
+                    insert_structural_completion(&mut completions, completion);
                 } else if question_outputs.len() == 1 {
                     let Some(remainder) = self.reference_completion_members(&remaining) else {
                         continue;
@@ -336,15 +596,21 @@ impl Pangine {
                     let Some(assignment) = Self::merge_projection_assignments(&injection.completion.assignment, &output_assignment) else {
                         continue;
                     };
-                    completions.insert(StructuralCompletion { assignment, remainders: injection.completion.remainders });
+                    let mut binding_paths = injection.completion.binding_paths;
+                    binding_paths.entry(output.clone()).or_default().insert(ordered_path.to_vec());
+                    insert_structural_completion(
+                        &mut completions,
+                        StructuralCompletion { assignment, binding_paths, remainders: injection.completion.remainders },
+                    );
                 } else if remaining.len() == question_outputs.len() {
                     for outputs in self.inject_members(&question_outputs, &remaining, true, ordered_path) {
                         let Some(assignment) = Self::merge_projection_assignments(&injection.completion.assignment, &outputs.completion.assignment) else {
                             continue;
                         };
+                        let binding_paths = merge_binding_paths(&injection.completion.binding_paths, &outputs.completion.binding_paths);
                         let mut remainders = injection.completion.remainders.clone();
                         remainders.extend(outputs.completion.remainders);
-                        completions.insert(StructuralCompletion { assignment, remainders });
+                        insert_structural_completion(&mut completions, StructuralCompletion { assignment, binding_paths, remainders });
                     }
                 }
             }
@@ -355,20 +621,26 @@ impl Pangine {
                 let remaining = unused_members(&question_fixed, &injection.used_candidates);
                 let mut completion = injection.completion;
                 self.add_completion_remainder(&mut completion, CompletionRemainderSide::Question, ordered_path, &remaining);
-                completions.insert(completion);
+                insert_structural_completion(&mut completions, completion);
             }
         }
 
         completions
     }
 
-    fn inject_members(&mut self, patterns: &[ConceptId], candidates: &[ConceptId], patterns_are_questions: bool, ordered_path: &[usize]) -> Vec<Injection> {
-        let mut injections = vec![Injection {
-            completion: StructuralCompletion { assignment: ProjectionAssignment::new(), remainders: BTreeSet::new() },
+    fn inject_members(
+        &mut self,
+        patterns: &[ConceptId],
+        candidates: &[ConceptId],
+        patterns_are_questions: bool,
+        ordered_path: &[usize],
+    ) -> BTreeSet<Injection> {
+        let mut injections = BTreeSet::from([Injection {
+            completion: StructuralCompletion { assignment: ProjectionAssignment::new(), binding_paths: BTreeMap::new(), remainders: BTreeSet::new() },
             used_candidates: BTreeSet::new(),
-        }];
+        }]);
         for pattern in patterns {
-            let mut next = Vec::new();
+            let mut next = BTreeSet::new();
             for injection in injections {
                 for (candidate_index, candidate) in candidates.iter().enumerate() {
                     if injection.used_candidates.contains(&candidate_index) {
@@ -384,11 +656,12 @@ impl Pangine {
                         let Some(assignment) = Self::merge_projection_assignments(&injection.completion.assignment, &matched.assignment) else {
                             continue;
                         };
+                        let binding_paths = merge_binding_paths(&injection.completion.binding_paths, &matched.binding_paths);
                         let mut remainders = injection.completion.remainders.clone();
                         remainders.extend(matched.remainders);
                         let mut used_candidates = injection.used_candidates.clone();
                         used_candidates.insert(candidate_index);
-                        next.push(Injection { completion: StructuralCompletion { assignment, remainders }, used_candidates });
+                        insert_injection(&mut next, Injection { completion: StructuralCompletion { assignment, binding_paths, remainders }, used_candidates });
                     }
                 }
             }
@@ -454,8 +727,40 @@ fn question_clauses(question: &ConceptId) -> Vec<ConceptId> {
     vec![question.clone()]
 }
 
+fn join_source_route_relations(left: &BTreeSet<CompletionRoute>, right: &BTreeSet<CompletionRoute>) -> BTreeSet<CompletionRoute> {
+    let mut products = BTreeSet::new();
+    for left in left {
+        for right in right {
+            if left.selected_entries.iter().any(|(container, entry)| right.selected_entries.get(container).is_some_and(|other| other != entry)) {
+                continue;
+            }
+            let mut product = left.clone();
+            let mut compatible = true;
+            for (percept, right_origins) in &right.binding_origins {
+                if let Some(left_origins) = product.binding_origins.get_mut(percept) {
+                    left_origins.retain(|origin| right_origins.contains(origin));
+                    if left_origins.is_empty() {
+                        compatible = false;
+                        break;
+                    }
+                } else {
+                    product.binding_origins.insert(percept.clone(), right_origins.clone());
+                }
+            }
+            if !compatible {
+                continue;
+            }
+            product.coefficient_ancestors.extend(right.coefficient_ancestors.iter().cloned());
+            product.selected_entries.extend(right.selected_entries.iter().map(|(container, entry)| (container.clone(), entry.clone())));
+            product.ordered_windows.extend(right.ordered_windows.iter().cloned());
+            products.insert(product);
+        }
+    }
+    products
+}
+
 fn exact_structural_completion() -> BTreeSet<StructuralCompletion> {
-    BTreeSet::from([StructuralCompletion { assignment: ProjectionAssignment::new(), remainders: BTreeSet::new() }])
+    BTreeSet::from([StructuralCompletion { assignment: ProjectionAssignment::new(), binding_paths: BTreeMap::new(), remainders: BTreeSet::new() }])
 }
 
 fn multiply_structural_completions(left: &BTreeSet<StructuralCompletion>, right: &BTreeSet<StructuralCompletion>) -> BTreeSet<StructuralCompletion> {
@@ -465,14 +770,166 @@ fn multiply_structural_completions(left: &BTreeSet<StructuralCompletion>, right:
             let Some(assignment) = Pangine::merge_projection_assignments(&left.assignment, &right.assignment) else {
                 continue;
             };
+            let binding_paths = merge_binding_paths(&left.binding_paths, &right.binding_paths);
             let mut remainders = left.remainders.clone();
             remainders.extend(right.remainders.iter().cloned());
-            products.insert(StructuralCompletion { assignment, remainders });
+            insert_structural_completion(&mut products, StructuralCompletion { assignment, binding_paths, remainders });
         }
     }
     products
 }
 
+fn merge_binding_paths(
+    left: &BTreeMap<ConceptId, BTreeSet<Vec<usize>>>,
+    right: &BTreeMap<ConceptId, BTreeSet<Vec<usize>>>,
+) -> BTreeMap<ConceptId, BTreeSet<Vec<usize>>> {
+    let mut merged = left.clone();
+    for (percept, paths) in right {
+        merged.entry(percept.clone()).or_default().extend(paths.iter().cloned());
+    }
+    merged
+}
+
+fn insert_structural_completion(completions: &mut BTreeSet<StructuralCompletion>, mut completion: StructuralCompletion) {
+    if let Some(previous) = completions.take(&completion) {
+        completion.binding_paths = merge_binding_paths(&previous.binding_paths, &completion.binding_paths);
+    }
+    completions.insert(completion);
+}
+
+fn insert_injection(injections: &mut BTreeSet<Injection>, mut injection: Injection) {
+    if let Some(previous) = injections.take(&injection) {
+        injection.completion.binding_paths = merge_binding_paths(&previous.completion.binding_paths, &injection.completion.binding_paths);
+    }
+    injections.insert(injection);
+}
+
+fn routes_with_binding_origins(routes: &BTreeSet<CompletionRoute>, binding_paths: &BTreeMap<ConceptId, BTreeSet<Vec<usize>>>) -> BTreeSet<CompletionRoute> {
+    routes
+        .iter()
+        .map(|route| {
+            let mut route = route.clone();
+            for window in route.ordered_windows.clone() {
+                for (percept, paths) in binding_paths {
+                    for path in paths {
+                        let (span_start, span_width, nested_path) = match path.split_first() {
+                            Some((position, nested_path)) => (window.start + position, 1, nested_path.to_vec()),
+                            None => (window.start, window.width, Vec::new()),
+                        };
+                        route.binding_origins.entry(percept.clone()).or_default().insert(CompletionBindingOrigin {
+                            parent: window.parent.clone(),
+                            parent_occurrence: window.parent_occurrence.clone(),
+                            span_start,
+                            span_width,
+                            nested_path,
+                        });
+                    }
+                }
+            }
+            route
+        })
+        .collect()
+}
+
+fn source_route_constraints(routes: &BTreeSet<CompletionRoute>, shared_percepts: &BTreeSet<ConceptId>) -> BTreeSet<CompletionRoute> {
+    routes
+        .iter()
+        .map(|route| CompletionRoute {
+            selected_entries: route.selected_entries.clone(),
+            binding_origins: route
+                .binding_origins
+                .iter()
+                .filter(|(percept, _)| shared_percepts.contains(*percept))
+                .map(|(percept, origins)| (percept.clone(), origins.clone()))
+                .collect(),
+            ..CompletionRoute::default()
+        })
+        .collect()
+}
+
 fn unused_members(members: &[ConceptId], used: &BTreeSet<usize>) -> Vec<ConceptId> {
     members.iter().enumerate().filter(|(index, _)| !used.contains(index)).map(|(_, concept)| concept.clone()).collect()
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[test]
+    fn route_relation_join_requires_one_globally_consistent_selection() {
+        let mut pangine = Pangine::new();
+        let container = pangine.reference_concept("[container]").unwrap().unwrap();
+        let a = pangine.reference_concept("[A]").unwrap().unwrap();
+        let b = pangine.reference_concept("[B]").unwrap().unwrap();
+        let c = pangine.reference_concept("[C]").unwrap().unwrap();
+        let relation = |entries: &[ConceptId]| {
+            entries
+                .iter()
+                .map(|entry| CompletionRoute { selected_entries: BTreeMap::from([(container.clone(), entry.clone())]), ..CompletionRoute::default() })
+                .collect::<BTreeSet<_>>()
+        };
+        let ab = relation(&[a.clone(), b.clone()]);
+        let bc = relation(&[b.clone(), c.clone()]);
+        let ac = relation(&[a, c]);
+
+        assert!(!join_source_route_relations(&ab, &bc).is_empty());
+        assert!(!join_source_route_relations(&bc, &ac).is_empty());
+        assert!(!join_source_route_relations(&ab, &ac).is_empty());
+        let first_two = join_source_route_relations(&ab, &bc);
+        assert!(join_source_route_relations(&first_two, &ac).is_empty(), "pairwise-compatible fragments need not have one global source route");
+    }
+
+    #[test]
+    fn singleton_route_relation_join_is_associative_commutative_and_idempotent() {
+        let mut pangine = Pangine::new();
+        let container = pangine.reference_concept("[container]").unwrap().unwrap();
+        let entry = pangine.reference_concept("[entry]").unwrap().unwrap();
+        let left_coefficient = pangine.reference_concept("x2[left]").unwrap().unwrap();
+        let right_coefficient = pangine.reference_concept("x3[right]").unwrap().unwrap();
+        let parent = pangine.reference_concept("[A]->[r]->[B]->[s]->[C]").unwrap().unwrap();
+        let left = BTreeSet::from([CompletionRoute {
+            coefficient_ancestors: BTreeSet::from([left_coefficient]),
+            selected_entries: BTreeMap::from([(container.clone(), entry.clone())]),
+            ordered_windows: BTreeSet::from([CompletionOrderedWindow { parent: parent.clone(), parent_occurrence: Vec::new(), start: 0, width: 3 }]),
+            binding_origins: BTreeMap::new(),
+        }]);
+        let right = BTreeSet::from([CompletionRoute {
+            coefficient_ancestors: BTreeSet::from([right_coefficient]),
+            selected_entries: BTreeMap::from([(container, entry)]),
+            ordered_windows: BTreeSet::from([CompletionOrderedWindow { parent, parent_occurrence: Vec::new(), start: 2, width: 3 }]),
+            binding_origins: BTreeMap::new(),
+        }]);
+
+        let forward = join_source_route_relations(&left, &right);
+        assert_eq!(forward, join_source_route_relations(&right, &left));
+        assert_eq!(join_source_route_relations(&forward, &left), forward, "a singleton constraint relation is idempotent");
+        assert_eq!(
+            join_source_route_relations(&join_source_route_relations(&left, &right), &left),
+            join_source_route_relations(&left, &join_source_route_relations(&right, &left))
+        );
+    }
+
+    #[test]
+    fn binding_origin_join_requires_one_globally_shared_occurrence() {
+        let mut pangine = Pangine::new();
+        let percept = pangine.reference_percept("shared-origin");
+        let parent = pangine.reference_concept("[A]->[r]->[B]->[s]->[C]").unwrap().unwrap();
+        let origin =
+            |span_start| CompletionBindingOrigin { parent: parent.clone(), parent_occurrence: Vec::new(), span_start, span_width: 1, nested_path: Vec::new() };
+        let relation = |positions: &[usize]| {
+            BTreeSet::from([CompletionRoute {
+                binding_origins: BTreeMap::from([(percept.clone(), positions.iter().copied().map(origin).collect())]),
+                ..CompletionRoute::default()
+            }])
+        };
+        let ab = relation(&[0, 1]);
+        let bc = relation(&[1, 2]);
+        let ac = relation(&[0, 2]);
+
+        assert!(!join_source_route_relations(&ab, &bc).is_empty());
+        assert!(!join_source_route_relations(&bc, &ac).is_empty());
+        assert!(!join_source_route_relations(&ab, &ac).is_empty());
+        assert!(join_source_route_relations(&join_source_route_relations(&ab, &bc), &ac).is_empty());
+        assert!(join_source_route_relations(&ab, &join_source_route_relations(&bc, &ac)).is_empty());
+    }
 }

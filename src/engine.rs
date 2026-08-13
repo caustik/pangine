@@ -12,7 +12,10 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 mod completion;
 mod concept_map;
 
-pub use completion::{Completion, CompletionEvidence, CompletionRemainder, CompletionRemainderSide, CompletionResult};
+pub use completion::{
+    Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
+    CompletionResult, CompletionRoute,
+};
 use concept_map::ConceptMap;
 
 type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
@@ -21,6 +24,9 @@ type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
 // to its relevance. Recursive views and completion rows leading to the same
 // answer from that source Concept collapse here.
 type QuestionCandidateWitnesses = BTreeMap<ConceptId, BTreeMap<ConceptId, BTreeSet<QuestionSource>>>;
+type QuestionSourceViewKey = (QuestionSource, ConceptId, BTreeMap<ConceptId, ConceptId>);
+type QuestionSourceViewVisit = (ConceptId, CompletionRoute, Option<(ConceptId, ConceptId)>, Vec<CompletionOrderedStep>);
+type QuestionSourceViews = BTreeMap<QuestionSourceViewKey, BTreeSet<CompletionRoute>>;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ConceptShape {
@@ -75,11 +81,20 @@ enum QuestionSelector {
 struct QuestionSourceView {
     source: QuestionSource,
     matched: ConceptId,
+    routes: BTreeSet<CompletionRoute>,
 }
 
 #[derive(Default)]
 struct QuestionSnapshot {
-    source_views: BTreeSet<QuestionSourceView>,
+    source_views: QuestionSourceViews,
+}
+
+struct QuestionSourceViewTraversal<'a> {
+    ordered_widths: &'a BTreeSet<usize>,
+    source_shapes: Option<&'a BTreeSet<ConceptShape>>,
+    track_ordered_occurrences: bool,
+    visited: BTreeSet<QuestionSourceViewVisit>,
+    source_views: &'a mut QuestionSourceViews,
 }
 
 static NEXT_PANGINE_ID: AtomicUsize = AtomicUsize::new(0);
@@ -181,6 +196,28 @@ impl From<io::Error> for ParseError {
     }
 }
 
+/// An error produced while composing an ordinary Concept from existing
+/// engine-owned Concept handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConceptConstructionError {
+    /// At least one supplied handle belongs to a different engine.
+    ForeignConcept,
+    /// Coefficient normalization exceeded the signed 64-bit relevance range.
+    RelevanceOverflow,
+}
+
+impl std::fmt::Display for ConceptConstructionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForeignConcept => formatter.write_str("concept belongs to a different engine"),
+            Self::RelevanceOverflow => formatter.write_str("relevance coefficient exceeds the signed 64-bit range"),
+        }
+    }
+}
+
+impl std::error::Error for ConceptConstructionError {}
+
 /// An engine-scoped handle to an interned concept.
 #[derive(Clone)]
 pub struct ConceptId(Rc<Concept>);
@@ -275,6 +312,14 @@ impl Concept {
         }
     }
 
+    fn coefficient_operand(&self) -> Option<(Relevance, &ConceptId)> {
+        if !matches!(self.kind, ConceptKind::Unordered) || self.subconcepts.len() != 1 {
+            return None;
+        }
+        let (concept, relevance) = self.subconcepts.first_key_value().unwrap();
+        (*relevance != Relevance::DEFAULT).then_some((*relevance, concept))
+    }
+
     fn children(&self) -> impl Iterator<Item = (&ConceptId, Relevance)> {
         let ordered = match &self.kind {
             ConceptKind::Ordered { components } => components.as_slice(),
@@ -346,6 +391,48 @@ impl Pangine {
     /// Parses and executes a Pangine statement or expression.
     pub fn reference_concept(&mut self, script: &str) -> ParseResult<Option<ConceptId>> {
         self.parse_statement_text(script)
+    }
+
+    /// Composes complete Concept operands using the same unordered adjacency
+    /// and coefficient normalization as parsed Pangine syntax.
+    ///
+    /// An empty slice produces no Concept. Nonempty operands can also normalize
+    /// to no Concept when their coefficients cancel. One default-weight operand
+    /// returns that operand directly. A nested multi-member unordered Concept
+    /// remains one complete operand; this operation does not perform `*`
+    /// merging.
+    ///
+    /// Returns [`ConceptConstructionError::ForeignConcept`] when an operand is
+    /// not owned by this engine, or
+    /// [`ConceptConstructionError::RelevanceOverflow`] when coefficient
+    /// normalization exceeds the relevance range. Either error leaves the
+    /// engine unchanged.
+    pub fn compose_union(&mut self, operands: &[(Relevance, ConceptId)]) -> Result<Option<ConceptId>, ConceptConstructionError> {
+        if operands.iter().any(|(_, concept)| !self.owns(concept)) {
+            return Err(ConceptConstructionError::ForeignConcept);
+        }
+
+        let mut map = ConceptMap::new();
+        for (relevance, concept) in operands {
+            self.add_union_concept(&mut map, concept.clone(), false, *relevance).ok_or(ConceptConstructionError::RelevanceOverflow)?;
+        }
+        Ok(self.reference_map(&map))
+    }
+
+    /// Composes ordered component occurrences using the same canonical
+    /// identity as an arrow chain in Pangine syntax.
+    ///
+    /// An empty slice produces no Concept, and a one-component composition
+    /// returns that component directly. A supplied ordered Concept remains one
+    /// complete component, matching a parenthesized operand in surface syntax.
+    ///
+    /// Returns [`ConceptConstructionError::ForeignConcept`] when a component is
+    /// not owned by this engine. The error leaves the engine unchanged.
+    pub fn compose_ordered(&mut self, components: &[ConceptId]) -> Result<Option<ConceptId>, ConceptConstructionError> {
+        if components.iter().any(|concept| !self.owns(concept)) {
+            return Err(ConceptConstructionError::ForeignConcept);
+        }
+        Ok((!components.is_empty()).then(|| self.reference_ordered(components.to_vec())))
     }
 
     /// Parses and executes every statement in a script string.
@@ -1290,16 +1377,17 @@ impl Pangine {
             (!patterns.iter().any(|pattern| self.is_percept(pattern))).then(|| patterns.iter().map(|pattern| pattern.0.shape()).collect::<BTreeSet<_>>());
         let mut ordered_widths = BTreeSet::new();
         self.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
+        let track_ordered_occurrences = self.question_has_shared_clause_percept(question);
         let mut snapshot = QuestionSnapshot::default();
         for source in sources {
-            self.add_question_source_views_rec(
-                &source,
-                &source.concept,
-                &ordered_widths,
-                source_shapes.as_ref(),
-                &mut BTreeSet::new(),
-                &mut snapshot.source_views,
-            );
+            let mut traversal = QuestionSourceViewTraversal {
+                ordered_widths: &ordered_widths,
+                source_shapes: source_shapes.as_ref(),
+                track_ordered_occurrences,
+                visited: BTreeSet::new(),
+                source_views: &mut snapshot.source_views,
+            };
+            self.add_question_source_views_rec(&source, &source.concept, &CompletionRoute::default(), None, &[], &mut traversal);
         }
         snapshot
     }
@@ -1327,32 +1415,65 @@ impl Pangine {
         &mut self,
         source: &QuestionSource,
         concept: &ConceptId,
-        ordered_widths: &BTreeSet<usize>,
-        source_shapes: Option<&BTreeSet<ConceptShape>>,
-        visited: &mut BTreeSet<ConceptId>,
-        source_views: &mut BTreeSet<QuestionSourceView>,
+        route: &CompletionRoute,
+        latent_ordered_entry: Option<&(ConceptId, ConceptId)>,
+        ordered_occurrence: &[CompletionOrderedStep],
+        traversal: &mut QuestionSourceViewTraversal<'_>,
     ) {
-        if !visited.insert(concept.clone()) {
+        if !traversal.visited.insert((concept.clone(), route.clone(), latent_ordered_entry.cloned(), ordered_occurrence.to_vec())) {
             return;
         }
-        if source_shapes.is_none_or(|shapes| shapes.contains(&concept.0.shape())) {
-            source_views.insert(QuestionSourceView { source: source.clone(), matched: concept.clone() });
+        if traversal.source_shapes.is_none_or(|shapes| shapes.contains(&concept.0.shape())) {
+            traversal.source_views.entry((source.clone(), concept.clone(), route.selected_entries.clone())).or_default().insert(route.clone());
+        }
+
+        // A sole non-default unordered edge is one coefficient-bearing source
+        // boundary. Recursive source-view discovery may inspect its ordinary
+        // operand and descendants while retaining the wrapper itself as a view.
+        // Carry the complete wrapper beside disposable source views. A later
+        // projection may choose how to group that provenance; matching does not
+        // copy the coefficient into clause count, row relevance, or support.
+        if let Some((_, operand)) = concept.0.coefficient_operand() {
+            let mut operand_route = route.clone();
+            operand_route.coefficient_ancestors.insert(concept.clone());
+            self.add_question_source_views_rec(source, operand, &operand_route, latent_ordered_entry, ordered_occurrence, traversal);
+            return;
         }
 
         match &concept.0.kind {
             ConceptKind::Ordered { components } => {
                 let components = components.clone();
-                for &width in ordered_widths.range(2..components.len()) {
-                    if source_shapes.is_some_and(|shapes| !shapes.contains(&ConceptShape::Ordered(width))) {
+                for &width in traversal.ordered_widths.range(2..components.len()) {
+                    if traversal.source_shapes.is_some_and(|shapes| !shapes.contains(&ConceptShape::Ordered(width))) {
                         continue;
                     }
-                    for window in components.windows(width) {
+                    for (start, window) in components.windows(width).enumerate() {
                         let matched = self.reference_ordered(window.to_vec());
-                        source_views.insert(QuestionSourceView { source: source.clone(), matched });
+                        let mut window_route = route.clone();
+                        if let Some((container, entry)) = latent_ordered_entry {
+                            if window_route.selected_entries.get(container).is_some_and(|selected| selected != entry) {
+                                continue;
+                            }
+                            window_route.selected_entries.insert(container.clone(), entry.clone());
+                        }
+                        window_route.ordered_windows.insert(CompletionOrderedWindow {
+                            parent: concept.clone(),
+                            parent_occurrence: ordered_occurrence.to_vec(),
+                            start,
+                            width,
+                        });
+                        traversal.source_views.entry((source.clone(), matched, window_route.selected_entries.clone())).or_default().insert(window_route);
                     }
                 }
-                for child in components {
-                    self.add_question_source_views_rec(source, &child, ordered_widths, source_shapes, visited, source_views);
+                for (position, child) in components.into_iter().enumerate() {
+                    let child_occurrence = if traversal.track_ordered_occurrences {
+                        let mut child_occurrence = ordered_occurrence.to_vec();
+                        child_occurrence.push(CompletionOrderedStep { parent: concept.clone(), position });
+                        child_occurrence
+                    } else {
+                        Vec::new()
+                    };
+                    self.add_question_source_views_rec(source, &child, route, None, &child_occurrence, traversal);
                 }
             }
             ConceptKind::Unordered => {
@@ -1363,12 +1484,54 @@ impl Pangine {
                     let coefficient_concept =
                         if relevance == Relevance::DEFAULT { Some(child) } else { self.reference_map(&ConceptMap::from([(child, relevance)])) };
                     if let Some(coefficient_concept) = coefficient_concept {
-                        self.add_question_source_views_rec(source, &coefficient_concept, ordered_widths, source_shapes, visited, source_views);
+                        let mut child_route = route.clone();
+                        if Self::is_grouped_entry(&coefficient_concept) {
+                            if child_route.selected_entries.get(concept).is_some_and(|selected| selected != &coefficient_concept) {
+                                continue;
+                            }
+                            child_route.selected_entries.insert(concept.clone(), coefficient_concept.clone());
+                        }
+                        let child_latent_ordered_entry = (concept.clone(), coefficient_concept.clone());
+                        self.add_question_source_views_rec(
+                            source,
+                            &coefficient_concept,
+                            &child_route,
+                            Some(&child_latent_ordered_entry),
+                            ordered_occurrence,
+                            traversal,
+                        );
                     }
                 }
             }
             ConceptKind::Named(_) | ConceptKind::Percept { .. } => {}
         }
+    }
+
+    fn is_grouped_entry(concept: &ConceptId) -> bool {
+        if matches!(concept.0.kind, ConceptKind::Unordered) && concept.0.subconcepts.len() > 1 {
+            return true;
+        }
+        concept.0.coefficient_operand().is_some_and(|(_, operand)| matches!(operand.0.kind, ConceptKind::Unordered) && operand.0.subconcepts.len() > 1)
+    }
+
+    fn question_has_shared_clause_percept(&self, question: &ConceptId) -> bool {
+        if !matches!(question.0.kind, ConceptKind::Unordered)
+            || question.0.subconcepts.len() < 2
+            || question.0.subconcepts.values().any(|relevance| *relevance != Relevance::DEFAULT)
+            || question.0.subconcepts.keys().any(|concept| !matches!(concept.0.kind, ConceptKind::Ordered { .. }))
+        {
+            return false;
+        }
+
+        let mut seen = BTreeSet::new();
+        for clause in question.0.subconcepts.keys() {
+            let mut percepts = BTreeSet::new();
+            self.collect_output_percepts(clause, &mut percepts);
+            if percepts.into_iter().any(|percept| !seen.insert(percept)) {
+                return true;
+            }
+        }
+        false
     }
 
     fn evaluate_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
@@ -2040,9 +2203,17 @@ mod tests {
             .collect::<Vec<_>>();
         let mut ordered_widths = BTreeSet::new();
         pangine.collect_ordered_question_widths(question, &mut BTreeSet::new(), &mut BTreeMap::new(), &mut ordered_widths);
+        let track_ordered_occurrences = pangine.question_has_shared_clause_percept(question);
         let mut snapshot = QuestionSnapshot::default();
         for source in sources {
-            pangine.add_question_source_views_rec(&source, &source.concept, &ordered_widths, None, &mut BTreeSet::new(), &mut snapshot.source_views);
+            let mut traversal = QuestionSourceViewTraversal {
+                ordered_widths: &ordered_widths,
+                source_shapes: None,
+                track_ordered_occurrences,
+                visited: BTreeSet::new(),
+                source_views: &mut snapshot.source_views,
+            };
+            pangine.add_question_source_views_rec(&source, &source.concept, &CompletionRoute::default(), None, &[], &mut traversal);
         }
         snapshot
     }
@@ -2175,19 +2346,35 @@ mod tests {
     #[test]
     fn question_snapshot_drops_only_work_the_question_cannot_use() {
         let mut pangine = Pangine::new();
-        for concept in
-            ["[C]->[bridge]->[E]", "[C]->[sound]->[quiet]", "[E]->[sound]->[loud]", "[C]*[sound]*[calm]", "[C]x2[bridge]", "[bridge]![E]", "{[C]->{[A]->[Z]}}"]
-        {
+        for concept in [
+            "[C]->[bridge]->[E]",
+            "[C]->[sound]->[quiet]",
+            "[E]->[sound]->[loud]",
+            "[C]*[sound]*[calm]",
+            "[C]x2[bridge]",
+            "[bridge]![E]",
+            "{[C]->{[A]->[Z]}}",
+            "x2(([weighted-left]->[A])([weighted-right]->[A]))",
+        ] {
             let command = format!("['world'] ~= {concept}");
             assert!(pangine.reference_concept(&command).unwrap().is_some());
         }
 
         let source = pangine.reference_percept("world");
-        for question_text in ["[C]*[sound]*['unordered-answer']", "[C]->[sound]->['ordered-answer']", "{['who']->{[A]->[Z]}}", "['anything']"] {
+        for question_text in [
+            "[C]*[sound]*['unordered-answer']",
+            "[C]->[sound]->['ordered-answer']",
+            "{['who']->{[A]->[Z]}}",
+            "([weighted-left]->['weighted-answer'])([weighted-right]->['weighted-answer'])",
+            "['anything']",
+        ] {
             let question = pangine.reference_concept(question_text).unwrap().unwrap();
             let filtered = pangine.question_snapshot(std::slice::from_ref(&source), &question);
             let full = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &question);
-            assert!(filtered.source_views.is_subset(&full.source_views));
+            assert!(filtered
+                .source_views
+                .iter()
+                .all(|(key, ancestors)| { full.source_views.get(key).is_some_and(|full_ancestors| ancestors.is_subset(full_ancestors)) }));
 
             let filtered_results = pangine.complete_question_snapshot(&question, &filtered);
             let full_results = pangine.complete_question_snapshot(&question, &full);
@@ -2196,11 +2383,11 @@ mod tests {
 
         let unordered = pangine.reference_concept("[C]*[sound]*['unordered-answer']").unwrap().unwrap();
         let unordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &unordered);
-        assert!(unordered_snapshot.source_views.iter().all(|source_view| source_view.matched.0.shape() == ConceptShape::Unordered));
+        assert!(unordered_snapshot.source_views.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Unordered));
 
         let ordered = pangine.reference_concept("[C]->[sound]->['ordered-answer']").unwrap().unwrap();
         let ordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &ordered);
-        assert!(ordered_snapshot.source_views.iter().all(|source_view| source_view.matched.0.shape() == ConceptShape::Ordered(3)));
+        assert!(ordered_snapshot.source_views.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Ordered(3)));
 
         let wildcard = pangine.reference_percept("anything");
         let wildcard_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &wildcard);

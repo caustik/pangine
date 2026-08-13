@@ -1,25 +1,21 @@
 # Pangine research warning checks
 
-The checks in this directory preserve useful behavior examples without declaring their exact outputs to be permanent Pangine semantics. They are compiled but ignored during the normal test run, which makes an unresolved boundary visible without blocking an intentional experiment.
+These ignored checks preserve a few unresolved behaviors without making their exact outputs permanent Pangine semantics.
 
-Run every integration warning check explicitly with:
+Run them explicitly with:
 
 ```sh
 cargo test --test research --release -- --ignored
 ```
 
-The current groups are:
+The files are intentionally small:
 
-- `question_support.rs`: how direct Percept-member relevance is currently projected into answer coefficients;
-- `decision_fallback.rs`: the placeholder positive filter and canonical tie rule behind `^`; and
-- `matcher_boundaries.rs`: current selector, nesting, and inferred-answer restrictions.
+- `matcher_boundaries.rs` keeps four open matcher questions: ordered nesting, valid `@` subjects, unseen wholes assembled from partial experience, and the unresolved correlation between an exact enclosing ordered entry and one nested descendant.
+- `question_support.rs` records how direct Percept-member weight is currently projected into output coefficients.
+- `decision_fallback.rs` records the placeholder positive filter and canonical tie rule behind `^`.
 
-The accepted, application-independent completion behavior is in the ordinary suite at `pangine/tests/completion_questions.rs`. Syllogism-shaped composition, Rule 110, symbolic residual, correlation, and evidence-factor cases are kept together there because they are compatibility probes of one production evaluator, not separate research matchers.
+Accepted current completion capabilities belong in the ordinary suite at `pangine/tests/completion_questions.rs`. That file covers explicit multi-relation questions, Rule 110, residuals, correlated rows, coefficient-bearing sources, grouped entries, occurrence-aware ordered paths, result closure, and separate Bayesian-shaped evidence factors.
 
-One ignored internal check applies an external product oracle to retained completion factors:
+The former completion-projection, symbolic-annotation, and represented-reduction frameworks were removed after their durable conclusions were summarized in `design/pangine-research.md`. They were large test-local interpreters, not production Pangine behavior.
 
-```sh
-cargo test --lib completion_calculus --release -- --ignored
-```
-
-That check demonstrates retained information, not Pangine probability semantics. A failure in any warning check means that provisional behavior changed. Review the input and the new behavior before deciding whether the implementation, the check, or both should change.
+An ignored check failing after a deliberate experiment is a prompt to review the example. It is not automatic proof that the new behavior is wrong.

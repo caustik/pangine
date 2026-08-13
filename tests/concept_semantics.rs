@@ -1,6 +1,6 @@
 mod support;
 
-use pangine::{Pangine, Relevance};
+use pangine::{ConceptConstructionError, Pangine, Relevance};
 use support::{pairs, PangineTest};
 
 #[test]
@@ -113,6 +113,83 @@ fn ordered_and_unordered_compositions_are_canonical() {
         "x2([A]*[B])x3([B]*[A])x2{[C]->[D]}" => "x5([A][B])x2{[C]->[D]}",
     });
     test.exec(["{x2[A]x2[B]->[C]}"]);
+}
+
+#[test]
+fn direct_construction_reuses_parser_normalization_and_identity() {
+    let mut test = PangineTest::new();
+    let a = test.concept("[A]");
+    let b = test.concept("[B]");
+    let c = test.concept("[C]");
+    let d = test.concept("[D]");
+    let ab = test.concept("[A][B]");
+    let cd = test.concept("[C][D]");
+
+    let ordered = test.engine_mut().compose_ordered(&[a.clone(), b.clone()]).unwrap().unwrap();
+    assert_eq!(ordered, test.concept("[A]->[B]"));
+    let nested_ordered = test.engine_mut().compose_ordered(&[ordered.clone(), c.clone()]).unwrap().unwrap();
+    assert_eq!(nested_ordered, test.concept("([A]->[B])->[C]"));
+    assert_ne!(nested_ordered, test.concept("[A]->[B]->[C]"));
+    assert_eq!(test.engine_mut().compose_ordered(&[]).unwrap(), None);
+    assert_eq!(test.engine_mut().compose_ordered(std::slice::from_ref(&a)).unwrap(), Some(a.clone()));
+
+    let grouped = test.engine_mut().compose_union(&[(Relevance::DEFAULT, ab.clone()), (Relevance::DEFAULT, cd.clone())]).unwrap().unwrap();
+    assert_eq!(grouped, test.concept("([A][B])([C][D])"));
+    assert_ne!(grouped, test.concept("[A][B][C][D]"));
+    assert_eq!(test.engine_mut().compose_union(&[(Relevance::DEFAULT, cd), (Relevance::DEFAULT, ab.clone())]).unwrap(), Some(grouped.clone()));
+
+    let weighted = test.engine_mut().compose_union(&[(Relevance::new(2), ab)]).unwrap().unwrap();
+    assert_eq!(weighted, test.concept("x2([A][B])"));
+    assert_eq!(test.engine_mut().compose_union(&[]).unwrap(), None);
+
+    let flat = test
+        .engine_mut()
+        .compose_union(&[(Relevance::DEFAULT, a), (Relevance::DEFAULT, b), (Relevance::DEFAULT, c), (Relevance::DEFAULT, d)])
+        .unwrap()
+        .unwrap();
+    assert_eq!(flat, test.concept("[A][B][C][D]"));
+    assert_eq!(test.concept(&test.engine().format_concept(&grouped, false)), grouped);
+}
+
+#[test]
+fn direct_union_accumulates_coefficients_and_reports_overflow() {
+    let mut test = PangineTest::new();
+    let a = test.concept("[A]");
+    let x3_a = test.concept("x3[A]");
+
+    let accumulated = test.engine_mut().compose_union(&[(Relevance::new(2), a.clone()), (Relevance::new(4), a.clone())]).unwrap().unwrap();
+    assert_eq!(accumulated, test.concept("x6[A]"));
+    assert_eq!(test.engine_mut().compose_union(&[(Relevance::DEFAULT, a.clone()), (Relevance::new(-1), a.clone())]).unwrap(), None);
+    let count = test.engine().concept_count();
+    assert_eq!(
+        test.engine_mut().compose_union(&[(Relevance::new(i64::MAX), a.clone()), (Relevance::DEFAULT, a.clone())]),
+        Err(ConceptConstructionError::RelevanceOverflow)
+    );
+    assert_eq!(test.engine().concept_count(), count);
+    assert_eq!(test.engine_mut().compose_union(&[(Relevance::new(i64::MAX), x3_a.clone())]), Err(ConceptConstructionError::RelevanceOverflow));
+    assert_eq!(test.engine().concept_count(), count);
+}
+
+#[test]
+fn direct_construction_rejects_foreign_handles_and_does_not_evaluate_percepts() {
+    let mut first = Pangine::new();
+    let foreign = first.reference_concept("[foreign]").unwrap().unwrap();
+    let mut second = Pangine::new();
+    let local = second.reference_concept("[local]").unwrap().unwrap();
+    let count = second.concept_count();
+
+    assert_eq!(
+        second.compose_union(&[(Relevance::DEFAULT, local.clone()), (Relevance::DEFAULT, foreign.clone())]),
+        Err(ConceptConstructionError::ForeignConcept)
+    );
+    assert_eq!(second.compose_ordered(&[local.clone(), foreign]), Err(ConceptConstructionError::ForeignConcept));
+    assert_eq!(second.concept_count(), count);
+
+    let percept = second.reference_percept("live-child");
+    assert!(second.set_percept_value(&percept, Some(local.clone())));
+    let parent = second.compose_ordered(&[percept.clone(), local.clone()]).unwrap().unwrap();
+    assert_eq!(second.get_ordered_components(&parent), Some(vec![percept, local]));
+    assert_eq!(second.format_concept(&parent, false), "{['live-child']->[local]}");
 }
 
 #[test]

@@ -55,6 +55,24 @@ fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
     assert!(named_candidates(&mut pangine, "X").iter().any(|name| name == "E"));
 }
 
+#[test]
+#[ignore = "warning: an enclosing ordered entry and one nested descendant are not yet correlated"]
+fn enclosing_ordered_entries_do_not_yet_constrain_descendant_group_matches() {
+    let mut pangine = Pangine::new();
+    let question = must_ref(&mut pangine, "([row]->['selected-group'])([left]->['selected-left'])");
+    let subject = must_ref(&mut pangine, "([row]->(([left]->[A])([right]->[B]))) ([row]->(([left]->[B])([right]->[A])))");
+
+    let result = pangine.complete_subject(&subject, &question).unwrap();
+    assert_eq!(result.completions().len(), 4, "the current rule crosses the two intended diagonal pairings");
+
+    let weighted = must_ref(&mut pangine, "([row]->x2(([left]->[A])([right]->[B]))) ([row]->x3(([left]->[B])([right]->[A])))");
+    assert_eq!(
+        pangine.complete_subject(&weighted, &question).unwrap().completions().len(),
+        4,
+        "coefficient ancestry must not hide or accidentally resolve the same limitation"
+    );
+}
+
 fn named_candidates(pangine: &mut Pangine, percept: &str) -> Vec<String> {
     let Some(value) = pangine.reference_concept(&format!("$['{percept}']")).unwrap() else {
         return Vec::new();

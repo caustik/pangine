@@ -7,7 +7,7 @@ mod engine;
 mod relevance;
 
 pub use engine::{
-    Completion, CompletionEvidence, CompletionRemainder, CompletionRemainderSide, CompletionResult, ConceptId, ConceptKind, Pangine, ParseError, ParseResult,
-    GLOBAL_PERCEPT_NAME,
+    Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
+    CompletionResult, CompletionRoute, ConceptConstructionError, ConceptId, ConceptKind, Pangine, ParseError, ParseResult, GLOBAL_PERCEPT_NAME,
 };
 pub use relevance::Relevance;
