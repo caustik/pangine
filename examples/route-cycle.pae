@@ -1,0 +1,42 @@
+// Three possible two-step routes.
+['moves'] ~= [A]->[north]->[B]
+['moves'] ~= [B]->[east]->[D]
+['moves'] ~= [A]->[east]->[C]
+['moves'] ~= [C]->[north]->[D]
+['moves'] ~= [A]->[west]->[E]
+['moves'] ~= [E]->[south]->[D]
+
+// Earlier complete outcomes keep each result tied to its route.
+['episodes'] ~= ([east-success]->[from]->[A])([east-success]->[first-action]->[east])([east-success]->[middle]->[C])([east-success]->[second-action]->[north])([east-success]->[to]->[D])([east-success]->[outcome]->[success])
+['episodes'] ~= ([west-diverged]->[from]->[A])([west-diverged]->[first-action]->[west])([west-diverged]->[middle]->[E])([west-diverged]->[second-action]->[south])([west-diverged]->[to]->[D])([west-diverged]->[outcome]->[diverged])
+
+// These are the current inputs and the result meanings used below.
+['current-input'] = [A]
+['goal-input'] = [D]
+['positive-result'] = [positive]->[success]
+['negative-result'] = [negative]->[diverged]
+
+// Rebuild a working choice from the raw moves and episodes.
+['moves'] @ ($['current-input']->['base-first-action']->['base-middle'])(['base-middle']->['base-second-action']->$['goal-input'])
+['route-choice'] = $(['base-first-action']->['base-middle']->['base-second-action'])
+['episodes']['positive-result'] @ (['positive-episode']->[from]->$['current-input'])(['positive-episode']->[first-action]->['positive-first-action'])(['positive-episode']->[middle]->['positive-middle'])(['positive-episode']->[second-action]->['positive-second-action'])(['positive-episode']->[to]->$['goal-input'])(['positive-episode']->[outcome]->['positive-outcome'])([positive]->['positive-outcome'])
+['route-choice'] *= $(['positive-first-action']->['positive-middle']->['positive-second-action'])
+['episodes']['negative-result'] @ (['negative-episode']->[from]->$['current-input'])(['negative-episode']->[first-action]->['negative-first-action'])(['negative-episode']->[middle]->['negative-middle'])(['negative-episode']->[second-action]->['negative-second-action'])(['negative-episode']->[to]->$['goal-input'])(['negative-episode']->[outcome]->['negative-outcome'])([negative]->['negative-outcome'])
+['route-choice'] /= $(['negative-first-action']->['negative-middle']->['negative-second-action'])
+
+// Pangine chooses the complete route and supplies every route field.
+['selected-route'] = ^['route-choice']
+['selected-route'] @ ['chosen-first-action']->['chosen-middle']->['chosen-second-action']
+['recorded-first-action'] = $['chosen-first-action']
+['recorded-middle'] = $['chosen-middle']
+['recorded-second-action'] = $['chosen-second-action']
+
+// A caller supplies the result after carrying out the chosen route.
+['episode-id-input'] = [cycle-3]
+['result-input'] = [success]
+['episodes'] ~= (['episode-id-input']->[from]->['current-input'])(['episode-id-input']->[first-action]->['recorded-first-action'])(['episode-id-input']->[middle]->['recorded-middle'])(['episode-id-input']->[second-action]->['recorded-second-action'])(['episode-id-input']->[to]->['goal-input'])(['episode-id-input']->[outcome]->['result-input'])
+
+// The raw episode and the derived choice can both be read afterward.
+['episodes'] @ [cycle-3]->[outcome]->['recorded-outcome']
+$['recorded-outcome']
+$['selected-route']

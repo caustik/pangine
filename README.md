@@ -155,7 +155,7 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 ## Current scope
 
-The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, collapse, grouped input updates, a console, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
+The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
 
 The current signed integer and deterministic choice rule are useful placeholders. The open work is to compare better Relevance rules over the retained source evidence and learn how far complete shared answers can go in useful programs.
 
@@ -170,6 +170,14 @@ git clone https://github.com/caustik/pangine.git
 cd pangine
 cargo run --bin pangine-console
 ```
+
+Run the checked-in route cycle without typing each command:
+
+```sh
+cargo run --bin pangine-console -- examples/route-cycle.pae
+```
+
+The program keeps moves and complete episodes as Pangine experience, changes whole-route strengths from prior results, chooses a route with `^`, and remembers the supplied result. An application can replace the input Percept assignments and read `['selected-route']` without ranking the routes itself.
 
 Run the normal suite with:
 
