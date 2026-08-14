@@ -1,3 +1,5 @@
+#[path = "research/action_loop.rs"]
+mod action_loop;
 #[path = "research/application_choice.rs"]
 mod application_choice;
 #[path = "research/decision_contract.rs"]
@@ -12,6 +14,8 @@ mod interface_percepts;
 mod joint_answer_relevance;
 #[path = "research/matcher_boundaries.rs"]
 mod matcher_boundaries;
+#[path = "research/outcome_learning.rs"]
+mod outcome_learning;
 #[path = "research/question_support.rs"]
 mod question_support;
 #[path = "research/represented_choice.rs"]

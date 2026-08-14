@@ -144,6 +144,16 @@ fn ordinary_percept_mutation_operators_are_explicit() {
 }
 
 #[test]
+fn null_merge_adjustments_leave_the_current_value_unchanged() {
+    PangineTest::assert_script_results(pairs! {
+        "['value'] = [A]; ['missing'] = []; ['value'] *= $['missing']; $['value']" => "[A]",
+        "['value'] = [A]; ['missing'] = []; ['value'] /= $['missing']; $['value']" => "[A]",
+        "['value'] = [A]; ['left'] = []; ['right'] = []; ['value'] *= $(['left']->['right']); $['value']" => "[A]",
+        "['value'] = [A]; ['left'] = []; ['right'] = []; ['value'] /= $(['left']->['right']); $['value']" => "[A]",
+    });
+}
+
+#[test]
 fn experience_evaluates_nested_percepts_at_capture_time() {
     let mut pangine = Pangine::new();
     let first = pangine

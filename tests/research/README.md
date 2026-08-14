@@ -15,6 +15,7 @@ Research programs that compare independent views copy a `$` result into a detach
 
 ## File index
 
+- `action_loop.rs` forms and chooses a complete two-step route, continues from an observed position, and compares step evidence with complete-route experience without selecting a new Relevance rule.
 - `application_choice.rs` compares two application-side rules with Pangine's current additive result. The rules can reject a larger total or abstain, but the fixtures do not establish that the application should own decisions.
 - `decision_contract.rs` compares addition, multiplication, rescaling, ties, and distinct source histories. It keeps the information a future decision contract may need without choosing one formula.
 - `decision_fallback.rs` records the current positive filter and canonical tie rule behind `^`.
@@ -22,6 +23,7 @@ Research programs that compare independent views copy a `$` result into a detach
 - `interface_percepts.rs` exercises complete Rust input groups, assigned-input experience capture, output delivery, and a queued later cycle. It adds no callback registry, event loop, or LLM adapter.
 - `joint_answer_relevance.rs` keeps the current source-deduplication rule visible without treating additive integer support as the final Relevance model.
 - `matcher_boundaries.rs` keeps four open matcher questions: ordered nesting, valid `@` subjects, unseen wholes assembled from partial experience, and enclosing-entry correlation.
+- `outcome_learning.rs` compares actual transitions with identified episode outcomes, keeps untried routes through repeated regenerated choices, and shows why adjusted totals do not preserve source weights for linked questions.
 - `question_support.rs` records how direct Percept-member weights currently reach output coefficients.
 - `represented_choice.rs` keeps focused counterexamples for experience, current state, context, stance, question order, source identity, records, and coefficients without host-side scoring.
 - `row_choice.rs` shows that collapsing complete rows into totals can discard information needed by some decisions.
