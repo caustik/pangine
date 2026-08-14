@@ -171,13 +171,14 @@ cd pangine
 cargo run --bin pangine-console
 ```
 
-Run the checked-in route cycle without typing each command:
+Run the checked-in decision programs without typing each command:
 
 ```sh
 cargo run --bin pangine-console -- examples/route-cycle.pae
+cargo run --bin pangine-console -- examples/settings-choice.pae
 ```
 
-The program keeps moves and complete episodes as Pangine experience, changes whole-route strengths from prior results, chooses a route with `^`, and remembers the supplied result. An application can replace the input Percept assignments and read `['selected-route']` without ranking the routes itself.
+The route program records two failures, changes from the east route to the north route, then strengthens north after a success. The settings program keeps three output Percepts linked, chooses them together, and returns one complete setting Concept. Both remember the supplied result. An application can replace the input assignments and read the selected outputs without ranking the choices itself.
 
 Run the normal suite with:
 

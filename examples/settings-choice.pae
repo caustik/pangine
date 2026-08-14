@@ -1,0 +1,32 @@
+// Complete past episodes keep the context, settings, and result together.
+['setting-episodes'] ~= ([speech-1]->[content]->[speech])([speech-1]->[space]->[small])([speech-1]->[mode]->[gentle])([speech-1]->[amount]->[light])([speech-1]->[timing]->[slow])([speech-1]->[outcome]->[accepted])
+['setting-episodes'] ~= ([speech-2]->[content]->[speech])([speech-2]->[space]->[small])([speech-2]->[mode]->[gentle])([speech-2]->[amount]->[light])([speech-2]->[timing]->[slow])([speech-2]->[outcome]->[accepted])
+['setting-episodes'] ~= ([speech-3]->[content]->[speech])([speech-3]->[space]->[small])([speech-3]->[mode]->[gentle])([speech-3]->[amount]->[light])([speech-3]->[timing]->[slow])([speech-3]->[outcome]->[accepted])
+['setting-episodes'] ~= ([speech-4]->[content]->[speech])([speech-4]->[space]->[small])([speech-4]->[mode]->[firm])([speech-4]->[amount]->[deep])([speech-4]->[timing]->[fast])([speech-4]->[outcome]->[accepted])
+['setting-episodes'] ~= ([speech-5]->[content]->[speech])([speech-5]->[space]->[small])([speech-5]->[mode]->[firm])([speech-5]->[amount]->[deep])([speech-5]->[timing]->[fast])([speech-5]->[outcome]->[accepted])
+['setting-episodes'] ~= ([music-1]->[content]->[music])([music-1]->[space]->[large])([music-1]->[mode]->[open])([music-1]->[amount]->[medium])([music-1]->[timing]->[steady])([music-1]->[outcome]->[accepted])
+
+// The application supplies the current context. The program represents the wanted result.
+['content-input'] = [speech]
+['space-input'] = [small]
+['wanted-result'] = [wanted]->[accepted]
+
+// Ask for every complete setting group that worked in this context.
+['setting-episodes']['wanted-result'] @ (['matching-episode']->[content]->$['content-input'])(['matching-episode']->[space]->$['space-input'])(['matching-episode']->[mode]->['mode-choice'])(['matching-episode']->[amount]->['amount-choice'])(['matching-episode']->[timing]->['timing-choice'])(['matching-episode']->[outcome]->['matched-outcome'])([wanted]->['matched-outcome'])
+$(['mode-choice']['amount-choice']['timing-choice'])
+
+// Choose all three linked outputs at once. The result is one complete setting shape.
+['selected-settings'] = ^(([mode]->['mode-choice'])([amount]->['amount-choice'])([timing]->['timing-choice']))
+['selected-settings'] @ ([mode]->['selected-mode'])([amount]->['selected-amount'])([timing]->['selected-timing'])
+
+// The application reports the result after using the complete setting group.
+['episode-id-input'] = [live-1]
+['result-input'] = [accepted]
+['setting-episodes'] ~= (['episode-id-input']->[content]->['content-input'])(['episode-id-input']->[space]->['space-input'])(['episode-id-input']->[mode]->['selected-mode'])(['episode-id-input']->[amount]->['selected-amount'])(['episode-id-input']->[timing]->['selected-timing'])(['episode-id-input']->[outcome]->['result-input'])
+
+// Read the linked choice and the raw result afterward.
+$['selected-mode']
+$['selected-amount']
+$['selected-timing']
+['setting-episodes'] @ [live-1]->[outcome]->['recorded-outcome']
+$['recorded-outcome']
