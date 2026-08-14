@@ -157,9 +157,11 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
 
-The current signed integer and deterministic choice rule are useful placeholders. The open work is to compare better Relevance rules over the retained source evidence and learn how far complete shared answers can go in useful programs.
+The current signed integer and deterministic choice rule are useful placeholders. The immediate work is to make complete answers easier to inspect and test in repeated decisions: their question shape, linked rows, supporting sources, candidate strengths, ties, and outcomes.
 
-A learned decision step, logit sampling, probabilities, persistence, automatic callbacks, LLM adapters, and a distributed runtime are not implemented. An LLM could eventually be an identified source or output participant. It should not silently become Pangine's question selector, relevance calculator, or final judge.
+The next engine question is whether positive and negative outcomes can adjust linked candidates without separating them from the experience that produced them. New grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
+
+An LLM could eventually supply explicit structured records and questions or consume selected outputs. Pangine would keep the source boundaries, joins, experience, alternatives, and choice visible. The LLM or application should not silently become Pangine's relevance calculator or final judge.
 
 ## Run Pangine
 
@@ -178,7 +180,7 @@ cargo run --bin pangine-console -- examples/route-cycle.pae
 cargo run --bin pangine-console -- examples/settings-choice.pae
 ```
 
-The route program records two failures, changes from the east route to the north route, then strengthens north after a success. The settings program keeps three output Percepts linked, chooses them together, and returns one complete setting Concept. Both remember the supplied result. An application can replace the input assignments and read the selected outputs without ranking the choices itself.
+The route program records two failures, changes from the east route to the north route, then strengthens north after a success. The settings program keeps three output Percepts linked, chooses them together, and returns one complete setting Concept. Both remember the supplied result. An application can replace the input assignments and read the selected outputs without ranking the choices itself. They are examples of what Pangine can do, not a commitment to routing or settings as its main use.
 
 Run the normal suite with:
 
