@@ -1,7 +1,8 @@
-use super::{CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSourceView};
+use super::{CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSourceView, QuestionWitness};
 use crate::Relevance;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 /// Identifies one proper contiguous ordered window projected from a complete
 /// ordered source Concept.
@@ -196,9 +197,8 @@ impl Ord for StructuralCompletion {
     }
 }
 
-/// Describes one selected source fragment participating in a completion.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CompletionEvidence {
+struct CompletionEvidenceSource {
     clause: ConceptId,
     source_view: QuestionSourceView,
     source_route_products: BTreeSet<CompletionRoute>,
@@ -206,16 +206,28 @@ pub struct CompletionEvidence {
     remainders: BTreeSet<CompletionRemainder>,
 }
 
+/// Describes one selected source fragment participating in a completion.
+///
+/// Immutable source matching details are shared across derived answers. An
+/// adjustment changes only the signed contribution and the target outputs to
+/// which that source applies.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionEvidence {
+    source: Rc<CompletionEvidenceSource>,
+    contribution: Relevance,
+    adjusted_outputs: BTreeSet<ConceptId>,
+}
+
 impl CompletionEvidence {
     /// Returns the question clause matched by this evidence.
     pub fn clause(&self) -> &ConceptId {
-        &self.clause
+        &self.source.clause
     }
 
     /// Returns the selected Percept owning the source Concept, when a retained
     /// Percept supplied this evidence.
     pub fn source_percept(&self) -> Option<&ConceptId> {
-        self.source_view.source.percept()
+        self.source.source_view.source.percept()
     }
 
     /// Returns the source subject supplying this evidence.
@@ -224,7 +236,7 @@ impl CompletionEvidence {
     /// owns the Concept. For a direct question it is the complete ordinary
     /// Concept supplied on the left.
     pub fn source_subject(&self) -> &ConceptId {
-        self.source_view.source.subject()
+        self.source.source_view.source.subject()
     }
 
     /// Returns the complete source Concept supplying this evidence.
@@ -232,25 +244,34 @@ impl CompletionEvidence {
     /// A retained Percept supplies one of its direct subconcepts. A direct
     /// ordinary Concept supplies itself.
     pub fn source_concept(&self) -> &ConceptId {
-        &self.source_view.source.concept
+        &self.source.source_view.source.concept
     }
 
     /// Returns the relevance attached to the source Concept.
     ///
     /// Direct ordinary Concepts have default relevance.
     pub fn source_relevance(&self) -> Relevance {
-        self.source_view.source.relevance
+        self.source.source_view.source.relevance
+    }
+
+    /// Returns this source's signed contribution to the current linked answer.
+    ///
+    /// This equals [`Self::source_relevance`] for an ordinary question.
+    /// Functional Answer adjustment can retain the source while changing the
+    /// sign of its contribution.
+    pub fn source_contribution(&self) -> Relevance {
+        self.contribution
     }
 
     /// Returns the recursive source view matched by the clause.
     pub fn matched(&self) -> &ConceptId {
-        &self.source_view.matched
+        &self.source.source_view.matched
     }
 
     /// Iterates over the alternative correlated routes to this matched source
     /// view before it joins the other clauses in the completion.
     pub fn routes(&self) -> impl Iterator<Item = &CompletionRoute> {
-        self.source_view.routes.iter()
+        self.source.source_view.routes.iter()
     }
 
     /// Iterates over the surviving route constraints for this complete source
@@ -263,7 +284,7 @@ impl CompletionEvidence {
     /// factorized by fragment identity rather than expanded as a Cartesian
     /// product during recognition.
     pub fn source_route_products(&self) -> impl Iterator<Item = &CompletionRoute> {
-        self.source_route_products.iter()
+        self.source.source_route_products.iter()
     }
 
     /// Iterates over the alternative coefficient-ancestor routes that reached
@@ -274,7 +295,7 @@ impl CompletionEvidence {
     /// factors. A route for an exact wrapper match is empty because it crosses
     /// no coefficient boundary.
     pub fn coefficient_ancestor_routes(&self) -> impl Iterator<Item = &BTreeSet<ConceptId>> {
-        self.source_view.routes.iter().map(|route| &route.coefficient_ancestors)
+        self.source.source_view.routes.iter().map(|route| &route.coefficient_ancestors)
     }
 
     /// Iterates over coefficient-bearing ancestors across every alternative
@@ -286,7 +307,7 @@ impl CompletionEvidence {
     /// distinguishable only when paired with this evidence's source fields.
     /// Nothing interprets a coefficient as occurrences, support, or a score.
     pub fn coefficient_ancestors(&self) -> impl Iterator<Item = &ConceptId> {
-        self.source_view.routes.iter().flat_map(|route| route.coefficient_ancestors.iter())
+        self.source.source_view.routes.iter().flat_map(|route| route.coefficient_ancestors.iter())
     }
 
     /// Iterates over complete source entries selected while reaching this view.
@@ -303,23 +324,35 @@ impl CompletionEvidence {
     /// ordinary Concepts, so this is derived provenance rather than a new
     /// stored value type.
     pub fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
-        self.source_view.routes.iter().flat_map(|route| route.selected_entries.iter())
+        self.source.source_view.routes.iter().flat_map(|route| route.selected_entries.iter())
     }
 
     /// Returns the value assigned to `percept` by this evidence fragment.
     pub fn binding(&self, percept: &ConceptId) -> Option<&ConceptId> {
-        self.assignment.get(percept)
+        self.source.assignment.get(percept)
+    }
+
+    /// Iterates over answer outputs that this evidence supports because it was
+    /// imported through an explicit answer adjustment.
+    ///
+    /// Source-local bindings remain available through [`Self::binding`]. This
+    /// separate set prevents a deep adjustment chain from copying every prior
+    /// answer assignment into every retained source fragment.
+    pub fn adjusted_outputs(&self) -> impl Iterator<Item = &ConceptId> {
+        self.adjusted_outputs.iter()
     }
 
     /// Returns unmatched structure retained by this evidence fragment.
     pub fn remainders(&self) -> impl Iterator<Item = &CompletionRemainder> {
-        self.remainders.iter()
+        self.source.remainders.iter()
     }
 }
 
 /// One proof-bearing correlated grounding of every Percept hole in a question.
 /// Distinct clause-to-source proofs can therefore produce distinct completions
-/// with the same grounded assignment.
+/// with the same grounded assignment. After Answer adjustment, the evidence
+/// can also include the matched clauses from the separate answer that adjusted
+/// this grounding.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Completion {
     assignment: ProjectionAssignment,
@@ -414,11 +447,15 @@ impl Pangine {
                     let routes = routes_with_binding_origins(routes, &completion.binding_paths);
                     let source_route_products = source_route_constraints(&routes, &shared_percepts);
                     clause_evidence.insert(CompletionEvidence {
-                        clause: clause.clone(),
-                        source_route_products,
-                        source_view: QuestionSourceView { source: source.clone(), matched: matched.clone(), routes },
-                        assignment: completion.assignment,
-                        remainders: completion.remainders,
+                        contribution: source.relevance,
+                        adjusted_outputs: BTreeSet::new(),
+                        source: Rc::new(CompletionEvidenceSource {
+                            clause: clause.clone(),
+                            source_route_products,
+                            source_view: QuestionSourceView { source: source.clone(), matched: matched.clone(), routes },
+                            assignment: completion.assignment,
+                            remainders: completion.remainders,
+                        }),
                     });
                 }
             }
@@ -426,28 +463,28 @@ impl Pangine {
             let mut next = BTreeSet::new();
             for product in products {
                 for evidence in &clause_evidence {
-                    let Some(assignment) = Self::merge_projection_assignments(&product.assignment, &evidence.assignment) else {
+                    let Some(assignment) = Self::merge_projection_assignments(&product.assignment, &evidence.source.assignment) else {
                         continue;
                     };
                     let mut joined_evidence = product.evidence.clone();
                     let existing_routes = joined_evidence
                         .iter()
-                        .find(|joined| joined.source_view.source == evidence.source_view.source)
-                        .map(|joined| &joined.source_route_products);
+                        .find(|joined| joined.source.source_view.source == evidence.source.source_view.source)
+                        .map(|joined| &joined.source.source_route_products);
                     let source_route_products = match existing_routes {
-                        Some(existing_routes) => join_source_route_relations(existing_routes, &evidence.source_route_products),
-                        None => evidence.source_route_products.clone(),
+                        Some(existing_routes) => join_source_route_relations(existing_routes, &evidence.source.source_route_products),
+                        None => evidence.source.source_route_products.clone(),
                     };
                     if source_route_products.is_empty() {
                         continue;
                     }
                     for joined in &mut joined_evidence {
-                        if joined.source_view.source == evidence.source_view.source {
-                            joined.source_route_products = source_route_products.clone();
+                        if joined.source.source_view.source == evidence.source.source_view.source {
+                            Rc::make_mut(&mut joined.source).source_route_products = source_route_products.clone();
                         }
                     }
                     let mut evidence = evidence.clone();
-                    evidence.source_route_products = source_route_products;
+                    Rc::make_mut(&mut evidence.source).source_route_products = source_route_products;
                     joined_evidence.push(evidence);
                     next.insert(Completion { assignment, evidence: joined_evidence });
                 }
@@ -496,6 +533,67 @@ impl Pangine {
         CompletionResult { question: question.clone(), completions: completions.into_iter().collect() }
     }
 
+    pub(super) fn adjust_completion_result(
+        &mut self,
+        target: &CompletionResult,
+        target_template: &ConceptId,
+        adjustment: &CompletionResult,
+        adjustment_template: &ConceptId,
+        target_outputs: &BTreeSet<ConceptId>,
+        contribution_factor: Relevance,
+    ) -> Option<CompletionResult> {
+        if contribution_factor.is_empty() {
+            return Some(target.clone());
+        }
+
+        let adjustment_candidates = adjustment
+            .completions
+            .iter()
+            .map(|completion| self.instantiate_completion_inner(adjustment_template, &completion.assignment).map(|candidate| (candidate, completion)))
+            .collect::<Option<Vec<_>>>()?;
+        let mut completions = BTreeSet::new();
+
+        for target_completion in &target.completions {
+            let target_candidate = self.instantiate_completion_inner(target_template, &target_completion.assignment)?;
+            let mut adjusted = target_completion.clone();
+
+            for (_, adjustment_completion) in adjustment_candidates.iter().filter(|(candidate, _)| *candidate == target_candidate) {
+                for evidence in &adjustment_completion.evidence {
+                    let mut evidence = evidence.clone();
+                    evidence.contribution = evidence.contribution.checked_mul(contribution_factor)?;
+                    evidence.adjusted_outputs = target_outputs
+                        .iter()
+                        .filter(|output| evidence.source.assignment.get(*output) != target_completion.assignment.get(*output))
+                        .cloned()
+                        .collect();
+                    adjusted.evidence.push(evidence);
+                }
+            }
+
+            adjusted.evidence.sort();
+            adjusted.evidence.dedup();
+            completions.insert(adjusted);
+        }
+
+        Some(CompletionResult { question: target.question.clone(), completions: completions.into_iter().collect() })
+    }
+
+    #[cfg(test)]
+    pub(super) fn scale_completion_result_sources(&self, result: &mut CompletionResult, factors: &BTreeMap<ConceptId, Relevance>) -> Option<()> {
+        if factors.keys().any(|percept| !self.owns(percept)) {
+            return None;
+        }
+
+        for completion in &mut result.completions {
+            for evidence in &mut completion.evidence {
+                if let Some(factor) = evidence.source.source_view.source.percept().and_then(|percept| factors.get(percept)) {
+                    evidence.contribution = evidence.contribution.checked_mul(*factor)?;
+                }
+            }
+        }
+        Some(())
+    }
+
     fn shared_clause_percepts(&self, clauses: &[ConceptId]) -> BTreeSet<ConceptId> {
         let mut counts = BTreeMap::new();
         for clause in clauses {
@@ -529,13 +627,16 @@ impl Pangine {
                     .iter()
                     .filter(|evidence| {
                         outputs.iter().any(|output| {
-                            let Some(binding) = evidence.assignment.get(output) else {
+                            if evidence.adjusted_outputs.contains(output) {
+                                return true;
+                            }
+                            let Some(binding) = evidence.source.assignment.get(output) else {
                                 return false;
                             };
                             completion.assignment.get(output) == Some(binding)
                         })
                     })
-                    .map(|evidence| evidence.source_view.source.clone()),
+                    .map(|evidence| QuestionWitness { source: evidence.source.source_view.source.clone(), contribution: evidence.contribution }),
             );
         }
         Some(witnesses)
@@ -784,24 +885,24 @@ fn active_completion_assignment(completion: &Completion, outputs: &BTreeSet<Conc
 fn refresh_completion_evidence_routes(evidence: &mut [CompletionEvidence], active_outputs: &BTreeSet<ConceptId>) -> bool {
     let mut percept_counts = BTreeMap::new();
     for fragment in evidence.iter() {
-        for percept in fragment.assignment.keys().filter(|percept| active_outputs.contains(*percept)) {
+        for percept in fragment.source.assignment.keys().filter(|percept| active_outputs.contains(*percept)) {
             *percept_counts.entry(percept.clone()).or_insert(0_usize) += 1;
         }
     }
     let shared_percepts = percept_counts.into_iter().filter_map(|(percept, count)| (count > 1).then_some(percept)).collect::<BTreeSet<_>>();
-    let sources = evidence.iter().map(|fragment| fragment.source_view.source.clone()).collect::<BTreeSet<_>>();
+    let sources = evidence.iter().map(|fragment| fragment.source.source_view.source.clone()).collect::<BTreeSet<_>>();
 
     for source in sources {
         let mut source_route_products = BTreeSet::from([CompletionRoute::default()]);
-        for fragment in evidence.iter().filter(|fragment| fragment.source_view.source == source) {
-            let constraints = source_route_constraints(&fragment.source_view.routes, &shared_percepts);
+        for fragment in evidence.iter().filter(|fragment| fragment.source.source_view.source == source) {
+            let constraints = source_route_constraints(&fragment.source.source_view.routes, &shared_percepts);
             source_route_products = join_source_route_relations(&source_route_products, &constraints);
         }
         if source_route_products.is_empty() {
             return false;
         }
-        for fragment in evidence.iter_mut().filter(|fragment| fragment.source_view.source == source) {
-            fragment.source_route_products = source_route_products.clone();
+        for fragment in evidence.iter_mut().filter(|fragment| fragment.source.source_view.source == source) {
+            Rc::make_mut(&mut fragment.source).source_route_products = source_route_products.clone();
         }
     }
     true

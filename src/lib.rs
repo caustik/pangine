@@ -7,8 +7,8 @@ mod engine;
 mod relevance;
 
 pub use engine::{
-    Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
-    CompletionResult, CompletionRoute, ConceptConstructionError, ConceptId, ConceptKind, Pangine, ParseError, ParseResult, PerceptUpdateError,
-    GLOBAL_PERCEPT_NAME,
+    Answer, AnswerAdjustment, AnswerChoice, AnswerPublication, AnswerPublicationError, AnswerView, Completion, CompletionBindingOrigin, CompletionEvidence,
+    CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide, CompletionResult, CompletionRoute, ConceptConstructionError,
+    ConceptId, ConceptKind, Pangine, ParseError, ParseResult, PerceptUpdateError, GLOBAL_PERCEPT_NAME,
 };
 pub use relevance::Relevance;

@@ -1,4 +1,4 @@
-use pangine::{ConceptId, Pangine};
+use pangine::{ConceptId, Pangine, Relevance};
 
 #[test]
 fn question_outputs_project_one_shared_weighted_answer() {
@@ -28,6 +28,81 @@ fn linked_answer_operator_reveals_and_composes_with_the_shared_output_group() {
     assert_eq!(must_ref(&mut pangine, "$['animal']"), must_ref(&mut pangine, "x7[dog]"));
     assert_eq!(must_ref(&mut pangine, "$['food']"), must_ref(&mut pangine, "x7[fish]"));
     assert_null(&mut pangine, "&['memory']");
+}
+
+#[test]
+fn answer_snapshot_exposes_the_sources_used_by_the_shared_answer() {
+    let mut pangine = weighted_animals();
+    ask(&mut pangine);
+
+    let animal = pangine.reference_percept("animal");
+    let answer = pangine.answer_snapshot(&animal).expect("linked answer snapshot");
+    assert_eq!(answer.result().completions().len(), 3);
+    assert!(answer
+        .result()
+        .completions()
+        .iter()
+        .flat_map(|completion| completion.evidence())
+        .all(|evidence| evidence.source_relevance() == evidence.source_contribution()));
+    assert_eq!(answer.result().question(), &must_ref(&mut pangine, "['animal']->['food']"));
+}
+
+#[test]
+fn answer_shape_views_adjust_sources_and_publish_every_target_output() {
+    let mut pangine = Pangine::new();
+    experience_in(&mut pangine, "candidates", "[cat]->[fish]", 1);
+    experience_in(&mut pangine, "candidates", "[dog]->[bone]", 1);
+    experience_in(&mut pangine, "candidates", "[bird]->[seed]", 1);
+    experience_in(&mut pangine, "helpful", "[cat]->[fish]", 1);
+    experience_in(&mut pangine, "failed", "[dog]->[bone]", 2);
+
+    must_ref(&mut pangine, "['candidates'] @ ['candidate']->['choice']");
+    must_ref(&mut pangine, "['helpful'] @ ['helpful-candidate']->['helpful-choice']");
+    must_ref(&mut pangine, "['failed'] @ ['failed-candidate']->['failed-choice']");
+
+    let choice = pangine.reference_percept("choice");
+    let candidate_shape = must_ref(&mut pangine, "['candidate']->['choice']");
+    let helpful_shape = must_ref(&mut pangine, "['helpful-candidate']->['helpful-choice']");
+    let failed_shape = must_ref(&mut pangine, "['failed-candidate']->['failed-choice']");
+    let candidates = pangine.answer_view(&candidate_shape).expect("candidate answer shape");
+    let helpful = pangine.answer_view(&helpful_shape).expect("helpful answer shape");
+    let failed = pangine.answer_view(&failed_shape).expect("failed answer shape");
+    let adjusted = candidates.adjust(&mut pangine, &helpful, Relevance::DEFAULT).expect("matching helpful answer").into_view();
+    let adjusted = adjusted.adjust(&mut pangine, &failed, Relevance::new(-1)).expect("matching failed answer").into_view();
+    adjusted.answer().publish(&mut pangine).expect("current target revision");
+
+    assert_eq!(must_ref(&mut pangine, "&['choice']"), must_ref(&mut pangine, "['candidate']->['choice']"));
+    assert_eq!(must_ref(&mut pangine, "$['choice']"), must_ref(&mut pangine, "x2[fish][seed]![bone]"));
+    assert_eq!(must_ref(&mut pangine, "$['candidate']"), must_ref(&mut pangine, "x2[cat][bird]![dog]"));
+
+    let answer = pangine.answer_snapshot(&choice).expect("published answer");
+    let failed = answer
+        .result()
+        .completions()
+        .iter()
+        .flat_map(|completion| completion.evidence())
+        .find(|evidence| evidence.source_percept().is_some_and(|percept| pangine.format_concept(percept, false) == "['failed']"))
+        .expect("retained failed source");
+    assert_eq!(failed.source_relevance(), Relevance::new(2));
+    assert_eq!(failed.source_contribution(), Relevance::new(-2));
+}
+
+#[test]
+fn ordinary_addition_between_linked_percepts_does_not_adjust_answers() {
+    let mut pangine = Pangine::new();
+    experience_in(&mut pangine, "candidates", "[cat]->[fish]", 1);
+    experience_in(&mut pangine, "candidates", "[dog]->[bone]", 1);
+    experience_in(&mut pangine, "helpful", "[cat]->[fish]", 1);
+    must_ref(&mut pangine, "['candidates'] @ ['candidate']->['choice']");
+    must_ref(&mut pangine, "['helpful'] @ ['helpful-candidate']->['helpful-choice']");
+
+    let target = pangine.reference_percept("choice");
+    let adjustment = pangine.reference_percept("helpful-choice");
+    assert!(pangine.perform_addition(&target, Some(&adjustment)).is_some());
+
+    assert_null(&mut pangine, "&['choice']");
+    assert_eq!(must_ref(&mut pangine, "&['candidate']"), pangine.reference_percept("candidate"));
+    assert_eq!(must_ref(&mut pangine, "&['helpful-choice']"), must_ref(&mut pangine, "['helpful-candidate']->['helpful-choice']"));
 }
 
 #[test]

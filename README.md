@@ -144,6 +144,8 @@ A Percept populated through `~=` remains a reference when another experience men
 | `![A]` | Inverted member |
 | `x2[A]` | Two copies of the next complete member |
 | `['memory'] = expression` | Replace a Percept value |
+| `['memory'] += expression` | Add a value |
+| `['memory'] -= expression` | Subtract a value |
 | `['memory'] ~= expression` | Capture assigned inputs and remember one experience |
 | `subject @ question` | Fill the question's Percept blanks |
 | `&operand` | Return the shared answer shape |
@@ -155,11 +157,11 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 ## Current scope
 
-The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
+The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
 
-The current signed integer and deterministic choice rule are useful placeholders. The immediate work is to make complete answers easier to inspect and test in repeated decisions: their question shape, linked rows, supporting sources, candidate strengths, ties, and outcomes.
+The current signed integer and deterministic choice rule are useful placeholders. The immediate work is to use complete answers in repeated decisions and make their question shape, linked rows, supporting sources, candidate strengths, ties, and outcomes easier to inspect.
 
-The next engine question is whether positive and negative outcomes can adjust linked candidates without separating them from the experience that produced them. New grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
+The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. Adjustment is an API operation while its language form remains open. New grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
 
 An LLM could eventually supply explicit structured records and questions or consume selected outputs. Pangine would keep the source boundaries, joins, experience, alternatives, and choice visible. The LLM or application should not silently become Pangine's relevance calculator or final judge.
 
@@ -180,7 +182,7 @@ cargo run --bin pangine-console -- examples/route-cycle.pae
 cargo run --bin pangine-console -- examples/settings-choice.pae
 ```
 
-The route program records two failures, changes from the east route to the north route, then strengthens north after a success. The settings program keeps three output Percepts linked, chooses them together, and returns one complete setting Concept. Both remember the supplied result. An application can replace the input assignments and read the selected outputs without ranking the choices itself. They are examples of what Pangine can do, not a commitment to routing or settings as its main use.
+The route program rebuilds detached route totals from recorded results. The settings program keeps three outputs linked and chooses them together. An application can replace the input assignments and read the selected outputs without ranking the choices itself. These are capability examples, not fixed application areas.
 
 Run the normal suite with:
 

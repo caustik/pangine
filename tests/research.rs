@@ -8,6 +8,8 @@ mod decision_contract;
 mod decision_fallback;
 #[path = "research/decision_record.rs"]
 mod decision_record;
+#[path = "research/experience_guided_decision.rs"]
+mod experience_guided_decision;
 #[path = "research/interface_percepts.rs"]
 mod interface_percepts;
 #[path = "research/joint_answer_relevance.rs"]

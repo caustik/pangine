@@ -9,9 +9,12 @@ use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
+mod answer;
 mod completion;
 mod concept_map;
 
+use answer::StoredAnswer;
+pub use answer::{Answer, AnswerAdjustment, AnswerChoice, AnswerPublication, AnswerPublicationError, AnswerView};
 pub use completion::{
     Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
     CompletionResult, CompletionRoute,
@@ -20,7 +23,7 @@ use concept_map::ConceptMap;
 
 type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
-type CompletionProjectionWitnesses = BTreeMap<ConceptId, BTreeSet<QuestionSource>>;
+type CompletionProjectionWitnesses = BTreeMap<ConceptId, BTreeSet<QuestionWitness>>;
 type QuestionSourceViewKey = (QuestionSource, ConceptId, BTreeMap<ConceptId, ConceptId>);
 type QuestionSourceViewVisit = (ConceptId, CompletionRoute, Option<(ConceptId, ConceptId)>, Vec<CompletionOrderedStep>);
 type QuestionSourceViews = BTreeMap<QuestionSourceViewKey, BTreeSet<CompletionRoute>>;
@@ -76,6 +79,12 @@ impl QuestionSource {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QuestionWitness {
+    source: QuestionSource,
+    contribution: Relevance,
+}
+
 enum QuestionSelector {
     Percepts(Vec<ConceptId>),
     Subject(ConceptId),
@@ -89,13 +98,6 @@ struct QuestionSourceView {
 }
 
 type QuestionSnapshot = QuestionSourceViews;
-
-#[derive(Clone)]
-struct AnswerState {
-    result: CompletionResult,
-    outputs: BTreeSet<ConceptId>,
-    questions: BTreeSet<ConceptId>,
-}
 
 struct QuestionSourceViewTraversal<'a> {
     ordered_widths: &'a BTreeSet<usize>,
@@ -389,7 +391,7 @@ pub struct Pangine {
     // still refers to them. `$` projects this state without changing it. `^`
     // filters it and rematerializes every output that remains linked.
     next_answer_state_id: usize,
-    answer_states: BTreeMap<usize, AnswerState>,
+    answer_states: BTreeMap<usize, StoredAnswer>,
     percept_answer_states: BTreeMap<usize, usize>,
     composites: Vec<Weak<Concept>>,
     // Local accelerator for the existing weak canonical registry. Complete
@@ -563,12 +565,12 @@ impl Pangine {
         concept
     }
 
-    /// Adds `addition` to a mutable percept and returns its updated value.
+    /// Adds `addition` to a mutable Percept and returns its updated value.
     pub fn perform_addition(&mut self, percept: &ConceptId, addition: Option<&ConceptId>) -> Option<ConceptId> {
         self.perform_union_change(percept, addition, false)
     }
 
-    /// Subtracts `subtraction` from a mutable percept and returns its updated value.
+    /// Subtracts `subtraction` from a mutable Percept and returns its updated value.
     pub fn perform_subtraction(&mut self, percept: &ConceptId, subtraction: Option<&ConceptId>) -> Option<ConceptId> {
         self.perform_union_change(percept, subtraction, true)
     }
@@ -1223,14 +1225,12 @@ impl Pangine {
             return;
         };
 
-        let remove_state = if let Some(state) = self.answer_states.get_mut(&state_id) {
-            state.outputs.remove(percept);
-            state.outputs.is_empty()
-        } else {
-            false
+        let Some(mut state) = self.answer_states.remove(&state_id) else {
+            return;
         };
-        if remove_state {
-            self.answer_states.remove(&state_id);
+        state.outputs.remove(percept);
+        if !state.outputs.is_empty() {
+            self.insert_answer_state(state);
         }
     }
 
@@ -1478,12 +1478,7 @@ impl Pangine {
         self.write_answer_projections(projection_results);
 
         if !result.completions().is_empty() {
-            let state_id = self.next_answer_state_id;
-            self.next_answer_state_id += 1;
-            for output in &outputs {
-                self.percept_answer_states.insert(output.index(), state_id);
-            }
-            self.answer_states.insert(state_id, AnswerState { result, outputs, questions });
+            self.insert_answer_state(StoredAnswer { result: Rc::new(result), outputs, questions });
         }
 
         rows
@@ -1689,8 +1684,8 @@ impl Pangine {
             return None;
         }
         if let Some(state_id) = self.shared_answer_state(concept) {
-            let result = self.answer_states.get(&state_id)?.result.clone();
-            return self.materialize_completion_projection(&result, concept);
+            let answer = self.answer_from_state(state_id)?;
+            return answer.view(self, concept.clone())?.materialize(self);
         }
         self.evaluate_concept_inner(concept, &mut BTreeSet::new(), PerceptEvaluation::All)
     }
@@ -1780,13 +1775,7 @@ impl Pangine {
     /// containing an unlinked Percept or Percepts from different answers has
     /// no linked answer.
     pub fn linked_answer(&mut self, concept: &ConceptId) -> Option<ConceptId> {
-        if !self.owns(concept) {
-            return None;
-        }
-        let state_id = self.shared_answer_state(concept)?;
-        let state = self.answer_states.get(&state_id)?.clone();
-        let components = self.visible_answer_components(&state);
-        self.answer_shape(&components)
+        Some(self.answer_snapshot(concept)?.shape().clone())
     }
 
     fn answer_shape(&mut self, concepts: &BTreeSet<ConceptId>) -> Option<ConceptId> {
@@ -1803,7 +1792,7 @@ impl Pangine {
         self.reference_union(&operands).ok().flatten()
     }
 
-    fn visible_answer_components(&self, state: &AnswerState) -> BTreeSet<ConceptId> {
+    fn visible_answer_components(&self, state: &StoredAnswer) -> BTreeSet<ConceptId> {
         let mut components = BTreeSet::new();
         let mut represented_outputs = BTreeSet::new();
         for question in &state.questions {
@@ -1847,25 +1836,11 @@ impl Pangine {
     }
 
     fn choose_from_answer_state(&mut self, state_id: usize, template: &ConceptId) -> Option<ConceptId> {
-        let mut result = self.answer_states.get(&state_id)?.result.clone();
-        let witnesses = self.completion_projection_witnesses(&result, template)?;
-        let selected = self.select_projection_candidate(&witnesses)?;
-
-        let mut completions = Vec::new();
-        for completion in std::mem::take(&mut result.completions) {
-            if self.instantiate_completion(template, &completion).as_ref() == Some(&selected) {
-                completions.push(completion);
-            }
-        }
-        if completions.is_empty() {
-            return None;
-        }
-        result.completions = completions;
-
-        let outputs = self.answer_states.get(&state_id)?.outputs.clone();
-        let projections = self.materialize_answer_projections(&result, &outputs)?;
-        self.answer_states.get_mut(&state_id)?.result = result;
-        self.write_answer_projections(projections);
+        let answer = self.answer_from_state(state_id)?;
+        let view = answer.view(self, template.clone())?;
+        let choice = view.choose(self)?;
+        let selected = choice.selected().clone();
+        choice.view().answer().publish(self).ok()?;
         Some(selected)
     }
 
@@ -1877,8 +1852,8 @@ impl Pangine {
         self.select_greatest_positive(candidates)
     }
 
-    fn question_source_support(&self, sources: &BTreeSet<QuestionSource>) -> Option<Relevance> {
-        sources.iter().try_fold(Relevance::EMPTY, |support, source| support.checked_add(source.relevance))
+    fn question_source_support(&self, witnesses: &BTreeSet<QuestionWitness>) -> Option<Relevance> {
+        witnesses.iter().try_fold(Relevance::EMPTY, |support, witness| support.checked_add(witness.contribution))
     }
 
     fn collect_output_percepts(&self, concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {
