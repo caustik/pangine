@@ -159,9 +159,11 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
 
-The current signed integer and deterministic choice rule are useful placeholders. The immediate work is to use complete answers in repeated decisions and make their question shape, linked rows, supporting sources, candidate strengths, ties, and outcomes easier to inspect.
+The current signed integer and deterministic choice rule are useful placeholders. `AnswerView::possibilities` exposes each projected value, its current strength, complete-row count, distinct source contributions, and whether it shares the greatest positive strength. The complete rows and question shape remain available through the Answer itself.
 
 The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. Adjustment is an API operation while its language form remains open. New grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
+
+The ordinary answer-cycle checks now re-ask a complete action-tool decision after recording new outcomes. Two additional failures change the later choice while leaving every untried possibility and its sources available. The same operations also choose an unordered action-tool-scope shape without any single-Percept rule. This demonstrates the core cycle under one explicit outcome policy; it does not establish that policy as universal.
 
 An LLM could eventually supply explicit structured records and questions or consume selected outputs. Pangine would keep the source boundaries, joins, experience, alternatives, and choice visible. The LLM or application should not silently become Pangine's relevance calculator or final judge.
 

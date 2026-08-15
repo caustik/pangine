@@ -35,6 +35,7 @@ Research programs that compare independent views copy a `$` result into a detach
 
 Accepted behavior belongs in ordinary tests:
 
+- `tests/answer_cycles.rs` covers repeated outcome-guided choices, compact possibility inspection, and the same cycle over an unordered three-output shape.
 - `tests/completion_questions.rs` covers the current structural evaluator and correlated results.
 - `tests/joint_answers.rs` covers visible shared answer shapes, answer extension, conditioning, subset choice, order effects, and answer-state detachment.
 - `tests/percept_integration.rs` covers grouped input validation, assigned-input capture, stable experience, and the Rust-input-to-Pangine-output cycle.

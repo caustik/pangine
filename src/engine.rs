@@ -14,7 +14,7 @@ mod completion;
 mod concept_map;
 
 use answer::StoredAnswer;
-pub use answer::{Answer, AnswerAdjustment, AnswerChoice, AnswerPublication, AnswerPublicationError, AnswerView};
+pub use answer::{Answer, AnswerAdjustment, AnswerChoice, AnswerPossibility, AnswerPublication, AnswerPublicationError, AnswerSourceContribution, AnswerView};
 pub use completion::{
     Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
     CompletionResult, CompletionRoute,

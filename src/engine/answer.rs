@@ -1,6 +1,6 @@
 use super::{Completion, CompletionResult, ConceptId, Pangine};
 use crate::Relevance;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 type SourceContributionKey = (ConceptId, ConceptId, Relevance, Relevance);
@@ -112,6 +112,50 @@ impl AnswerView {
         pangine.materialize_completion_projection(&self.answer.result, &self.projection)
     }
 
+    /// Returns every projected possibility with the strength and distinct
+    /// source contributions used by the current choice rule.
+    ///
+    /// Possibilities remain in canonical spelling order, including those with
+    /// zero or negative strength. `is_top_tie` identifies every possibility at
+    /// the greatest positive strength; it is false for every possibility when
+    /// the current rule would abstain.
+    pub fn possibilities(&self, pangine: &mut Pangine) -> Option<Vec<AnswerPossibility>> {
+        if !pangine.owns_answer(&self.answer) {
+            return None;
+        }
+
+        let witnesses = pangine.completion_projection_witnesses(&self.answer.result, &self.projection)?;
+        let mut complete_rows = BTreeMap::new();
+        for completion in &self.answer.result.completions {
+            let value = pangine.instantiate_completion(&self.projection, completion)?;
+            *complete_rows.entry(value).or_insert(0) += 1;
+        }
+
+        let mut possibilities = witnesses
+            .into_iter()
+            .map(|(value, witnesses)| {
+                let strength = pangine.question_source_support(&witnesses)?;
+                let sources = witnesses
+                    .into_iter()
+                    .map(|witness| AnswerSourceContribution {
+                        subject: witness.source.subject().clone(),
+                        concept: witness.source.concept,
+                        relevance: witness.source.relevance,
+                        contribution: witness.contribution,
+                    })
+                    .collect();
+                Some(AnswerPossibility { complete_rows: complete_rows.remove(&value).unwrap_or_default(), value, strength, sources, is_top_tie: false })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        possibilities.sort_by_key(|possibility| pangine.format_concept(&possibility.value, false));
+
+        let greatest_positive = possibilities.iter().map(|possibility| possibility.strength).filter(|strength| strength.weight() > 0).max();
+        for possibility in &mut possibilities {
+            possibility.is_top_tie = Some(possibility.strength) == greatest_positive;
+        }
+        Some(possibilities)
+    }
+
     /// Chooses this projection and returns the selected Concept together with
     /// a new answer containing only compatible complete rows.
     pub fn choose(&self, pangine: &mut Pangine) -> Option<AnswerChoice> {
@@ -210,6 +254,75 @@ impl AnswerView {
     #[cfg(test)]
     pub(super) fn from_result(pangine: &Pangine, result: CompletionResult, projection: ConceptId) -> Option<Self> {
         Answer::detached(result).view(pangine, projection)
+    }
+}
+
+/// One projected value retained by an [`AnswerView`].
+#[derive(Clone)]
+pub struct AnswerPossibility {
+    value: ConceptId,
+    strength: Relevance,
+    complete_rows: usize,
+    sources: Vec<AnswerSourceContribution>,
+    is_top_tie: bool,
+}
+
+impl AnswerPossibility {
+    /// Returns the projected value.
+    pub fn value(&self) -> &ConceptId {
+        &self.value
+    }
+
+    /// Returns the signed strength calculated by the current Relevance rule.
+    pub fn strength(&self) -> Relevance {
+        self.strength
+    }
+
+    /// Returns the number of complete proof-bearing rows projecting this value.
+    pub fn complete_rows(&self) -> usize {
+        self.complete_rows
+    }
+
+    /// Returns the distinct source contributions used to calculate strength.
+    pub fn sources(&self) -> &[AnswerSourceContribution] {
+        &self.sources
+    }
+
+    /// Returns whether this value shares the greatest positive strength.
+    pub fn is_top_tie(&self) -> bool {
+        self.is_top_tie
+    }
+}
+
+/// One distinct source contribution to an [`AnswerPossibility`].
+#[derive(Clone)]
+pub struct AnswerSourceContribution {
+    subject: ConceptId,
+    concept: ConceptId,
+    relevance: Relevance,
+    contribution: Relevance,
+}
+
+impl AnswerSourceContribution {
+    /// Returns the owning Percept for remembered experience, or the complete
+    /// subject Concept for a direct question.
+    pub fn subject(&self) -> &ConceptId {
+        &self.subject
+    }
+
+    /// Returns the complete source Concept supplying the contribution.
+    pub fn concept(&self) -> &ConceptId {
+        &self.concept
+    }
+
+    /// Returns the Relevance stored on the source Concept.
+    pub fn relevance(&self) -> Relevance {
+        self.relevance
+    }
+
+    /// Returns the signed amount contributed to this answer.
+    pub fn contribution(&self) -> Relevance {
+        self.contribution
     }
 }
 
