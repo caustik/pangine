@@ -52,6 +52,44 @@ fn repeated_outcomes_change_a_later_complete_choice_without_removing_untried_pos
 }
 
 #[test]
+fn language_adjustment_keeps_zero_strength_rows_and_their_sources_in_the_linked_answer() {
+    let mut pangine = Pangine::new();
+    remember(&mut pangine, "candidates", "candidate-dumpbin", &[("action", "inspect-symbols"), ("tool", "dumpbin")], None);
+    remember(&mut pangine, "candidates", "candidate-map", &[("action", "inspect-symbols"), ("tool", "link-map")], None);
+    remember(&mut pangine, "candidates", "candidate-reconfigure", &[("action", "reconfigure"), ("tool", "cmake")], None);
+    remember(&mut pangine, "episodes", "episode-dumpbin-helpful", &[("action", "inspect-symbols"), ("tool", "dumpbin")], Some("helpful"));
+    remember(&mut pangine, "episodes", "episode-dumpbin-failed-1", &[("action", "inspect-symbols"), ("tool", "dumpbin")], Some("failed"));
+    remember(&mut pangine, "episodes", "episode-dumpbin-failed-2", &[("action", "inspect-symbols"), ("tool", "dumpbin")], Some("failed"));
+
+    must_ref(&mut pangine, &format!("['candidates'] @ {DECISION_QUESTION}"));
+    must_ref(&mut pangine, &format!("['episodes'] @ {HELPFUL_QUESTION}"));
+    must_ref(&mut pangine, &format!("['episodes'] @ {FAILED_QUESTION}"));
+    assert_eq!(
+        must_ref(&mut pangine, "['action']->['tool'] @+= ['helpful-action']->['helpful-tool']"),
+        must_ref(&mut pangine, "x2([inspect-symbols]->[dumpbin])([inspect-symbols]->[link-map])([reconfigure]->[cmake])")
+    );
+    assert_eq!(
+        must_ref(&mut pangine, "['action']->['tool'] @-= ['failed-action']->['failed-tool']"),
+        must_ref(&mut pangine, "([inspect-symbols]->[link-map])([reconfigure]->[cmake])")
+    );
+
+    let shape = must_ref(&mut pangine, "['action']->['tool']");
+    let answer = pangine.answer_view(&shape).expect("adjusted linked answer");
+    let possibilities = inspect(&mut pangine, &answer);
+    let dumpbin = &possibilities["{[inspect-symbols]->[dumpbin]}"];
+
+    assert_eq!(possibilities.len(), 3);
+    assert_eq!(dumpbin.strength, 0);
+    assert_eq!(dumpbin.complete_rows, 1);
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("candidate-dumpbin") && source.contribution == 1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-helpful") && source.contribution == 1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-1") && source.contribution == -1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-2") && source.contribution == -1));
+    assert_eq!(must_ref(&mut pangine, "&['action']"), must_ref(&mut pangine, DECISION_QUESTION));
+    assert_eq!(must_ref(&mut pangine, "^(['action']->['tool'])"), must_ref(&mut pangine, "[inspect-symbols]->[link-map]"));
+}
+
+#[test]
 fn the_same_answer_cycle_handles_three_outputs_in_an_unordered_shape() {
     let mut pangine = Pangine::new();
     remember(&mut pangine, "candidates", "candidate-signature", &[("action", "inspect-signature"), ("tool", "codesign"), ("scope", "app-bundle")], None);
@@ -83,12 +121,19 @@ fn the_same_answer_cycle_handles_three_outputs_in_an_unordered_shape() {
     let useful_shape = must_ref(&mut pangine, "([action]->['useful-action'])([tool]->['useful-tool'])([scope]->['useful-scope'])");
     let failed_shape = must_ref(&mut pangine, "([action]->['failed-action'])([tool]->['failed-tool'])([scope]->['failed-scope'])");
     let base = pangine.answer_view(&shape).expect("three-output answer");
-    let useful = pangine.answer_view(&useful_shape).expect("useful outcome answer");
-    let failed = pangine.answer_view(&failed_shape).expect("failed outcome answer");
     assert_eq!(base.possibilities(&mut pangine).expect("base possibilities").iter().filter(|possibility| possibility.is_top_tie()).count(), 3);
 
-    let adjusted = base.adjusted_by(&mut pangine, &useful, Relevance::DEFAULT).expect("matching useful outcomes");
-    let adjusted = adjusted.adjusted_by(&mut pangine, &failed, Relevance::new(-1)).expect("matching failed outcomes");
+    assert!(pangine.answer_view(&useful_shape).is_some());
+    assert!(pangine.answer_view(&failed_shape).is_some());
+    must_ref(
+        &mut pangine,
+        "([action]->['action'])([tool]->['tool'])([scope]->['scope']) @+= ([action]->['useful-action'])([tool]->['useful-tool'])([scope]->['useful-scope'])",
+    );
+    must_ref(
+        &mut pangine,
+        "([action]->['action'])([tool]->['tool'])([scope]->['scope']) @-= ([action]->['failed-action'])([tool]->['failed-tool'])([scope]->['failed-scope'])",
+    );
+    let adjusted = pangine.answer_view(&shape).expect("adjusted three-output answer");
     let possibilities = inspect(&mut pangine, &adjusted);
     let selected = must_ref(&mut pangine, "([action]->[inspect-installed-modes])([tool]->[pkgutil])([scope]->[installed-payload])");
     let selected_text = pangine.format_concept(&selected, false);

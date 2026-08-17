@@ -115,6 +115,15 @@ A later question can reuse one linked output. Pangine joins compatible old and n
 
 Assignment detaches a value. For example, `['animal-copy'] = $['animal']` makes an independent copy that can be chosen without collapsing the original answer.
 
+Two linked answers can also affect one another without being copied into ordinary values:
+
+```text
+['action']->['tool'] @+= ['helpful-action']->['helpful-tool']
+['action']->['tool'] @-= ['failed-action']->['failed-tool']
+```
+
+These commands assume earlier questions filled the candidate, helpful, and failed Percepts. Each side names the part of one linked answer to compare. Matching helpful sources are added to the candidate rows, matching failed sources are subtracted, and the whole target answer receives a new revision. Only the target is published, so a separate source answer stays unchanged. Either side can be one Percept or a larger shape. An unlinked operand is an error. Ordinary `+=` and `-=` still change ordinary Percept values.
+
 ## Input Percepts
 
 The console, pangine.com, and Rust can provide current values through Percepts. Assign the values, then mention them in an experience:
@@ -148,6 +157,8 @@ A Percept populated through `~=` remains a reference when another experience men
 | `['memory'] -= expression` | Subtract a value |
 | `['memory'] ~= expression` | Capture assigned inputs and remember one experience |
 | `subject @ question` | Fill the question's Percept blanks |
+| `['target'] @+= ['evidence']` | Add matching sources from another linked answer |
+| `['target'] @-= ['evidence']` | Subtract matching sources from another linked answer |
 | `&operand` | Return the shared answer shape |
 | `$operand` | Read Percepts without changing their answer |
 | `^operand` | Choose and update every linked output |
@@ -163,7 +174,7 @@ The current signed integer and deterministic choice rule are useful placeholders
 
 When Pangine remembers or replaces experience, it records the recursively reachable shapes and required fixed names while keeping each complete source intact. A question uses those records to find possible source experiences before running the full matcher. It does not walk every remembered experience unless the question is broad enough to require them. Question parts can work together within one complete experience, while a repeated Percept can join separate experiences. Equal complete answers then combine support without mixing unrelated partial rows.
 
-The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. Adjustment is an API operation while its language form remains open. New grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
+The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. The console exposes live target adjustment through `@+=` and `@-=`. Naming immutable Answer branches, compact source inspection, additional grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
 
 The ordinary answer-cycle checks now re-ask a complete action-tool decision after recording new outcomes. Two additional failures change the later choice while leaving every untried possibility and its sources available. The same operations also choose an unordered action-tool-scope shape without any single-Percept rule. This demonstrates the core cycle under one explicit outcome policy; it does not establish that policy as universal.
 
@@ -186,7 +197,7 @@ cargo run --bin pangine-console -- examples/route-cycle.pae
 cargo run --bin pangine-console -- examples/settings-choice.pae
 ```
 
-The route program rebuilds detached route totals from recorded results. The settings program keeps three outputs linked and chooses them together. An application can replace the input assignments and read the selected outputs without ranking the choices itself. These are capability examples, not fixed application areas.
+The route program re-asks three complete routes, adjusts the linked answer from recorded results, and chooses the complete route. The settings program keeps three outputs linked and chooses them together. An application can replace the input assignments and read the selected outputs without ranking the choices itself. These are capability examples, not fixed application areas.
 
 Run the normal suite with:
 

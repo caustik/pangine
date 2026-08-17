@@ -2,12 +2,12 @@
 //!
 //! The production Answer API accepts explicit projections of separate answers.
 //! Any two projection templates can be instantiated over their respective rows
-//! and compared as ordinary Concepts. The remaining probes cover open language
-//! syntax and deeper composition semantics.
+//! and compared as ordinary Concepts. The parser exposes the same operation as
+//! `@+=` and `@-=`. The remaining probes cover deeper composition semantics.
 
 use super::super::{
     Answer as ResearchAnswer, AnswerAdjustment as ResearchAdjustment, AnswerPublicationError as ResearchPublicationError, AnswerView as ResearchAnswerView,
-    CompletionResult, ConceptId, Pangine, ParseError, Parser, QuestionSource,
+    CompletionResult, ConceptId, Pangine, ParseError, QuestionSource,
 };
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,52 +32,8 @@ const FAILED_QUESTION: &str = "
     (['failed-episode']->[tool]->['failed-tool'])
     (['failed-episode']->[outcome]->[failed])";
 
-#[derive(Debug)]
-enum ResearchAdjustmentCommandError {
-    Parse(ParseError),
-    TargetNotLinked,
-    AdjustmentNotLinked,
-    InvalidAdjustment,
-    Publication,
-}
-
-fn reference_research_adjustment(pangine: &mut Pangine, script: &str) -> Result<Option<ConceptId>, ResearchAdjustmentCommandError> {
-    let mut parser = Parser::new(script);
-    let target = pangine.parse_ordered_expression(&mut parser).map_err(ResearchAdjustmentCommandError::Parse)?;
-
-    parser.skip_ws();
-    let contribution_factor = if parser.consume_str("@+=") {
-        Relevance::DEFAULT
-    } else if parser.consume_str("@-=") {
-        Relevance::new(-1)
-    } else {
-        return Err(ResearchAdjustmentCommandError::Parse(ParseError::InvalidSyntax));
-    };
-
-    parser.skip_ws();
-    let adjustment_start = parser.pos;
-    let adjustment = pangine.parse_expression(&mut parser).map_err(ResearchAdjustmentCommandError::Parse)?;
-    if parser.pos == adjustment_start {
-        return Err(ResearchAdjustmentCommandError::Parse(ParseError::InvalidSyntax));
-    }
-
-    parser.skip_ws();
-    if parser.peek().is_some() {
-        return Err(ResearchAdjustmentCommandError::Parse(ParseError::InvalidSyntax));
-    }
-
-    let target = target.ok_or(ResearchAdjustmentCommandError::TargetNotLinked)?;
-    let adjustment = adjustment.ok_or(ResearchAdjustmentCommandError::AdjustmentNotLinked)?;
-    let target_view = pangine.answer_view(&target).ok_or(ResearchAdjustmentCommandError::TargetNotLinked)?;
-    let adjustment_view = pangine.answer_view(&adjustment).ok_or(ResearchAdjustmentCommandError::AdjustmentNotLinked)?;
-    let adjusted = target_view.adjusted_by(pangine, &adjustment_view, contribution_factor).ok_or(ResearchAdjustmentCommandError::InvalidAdjustment)?;
-    let published = adjusted.answer.publish(pangine).map_err(|_| ResearchAdjustmentCommandError::Publication)?;
-    let published_view = published.answer.view(pangine, target).ok_or(ResearchAdjustmentCommandError::InvalidAdjustment)?;
-    Ok(published_view.materialize(pangine))
-}
-
 #[test]
-#[ignore = "warning: explicit answer adjustment syntax is only a parser-level research proposal"]
+#[ignore = "warning: helpful-minus-failed remains one explicit decision policy"]
 fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
     let mut pangine = troubleshooting_answers();
     let target = pangine.reference_percept("candidate");
@@ -87,7 +43,8 @@ fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
     let helpful_before = pangine.shared_answer_state(&helpful).expect("helpful answer");
     let failed_before = pangine.shared_answer_state(&failed).expect("failed answer");
 
-    let helpful_result = reference_research_adjustment(&mut pangine, "['action']->['tool'] @+= ['helpful-action']->['helpful-tool']")
+    let helpful_result = pangine
+        .reference_concept("['action']->['tool'] @+= ['helpful-action']->['helpful-tool']")
         .expect("valid helpful adjustment")
         .expect("nonempty target projection");
     assert_eq!(
@@ -99,7 +56,8 @@ fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
     assert_eq!(pangine.shared_answer_state(&helpful), Some(helpful_before));
     assert_eq!(pangine.shared_answer_state(&failed), Some(failed_before));
 
-    let failed_result = reference_research_adjustment(&mut pangine, "['action']->['tool'] @-= ['failed-action']->['failed-tool']")
+    let failed_result = pangine
+        .reference_concept("['action']->['tool'] @-= ['failed-action']->['failed-tool']")
         .expect("valid failed adjustment")
         .expect("nonempty target projection");
     assert_eq!(
@@ -121,30 +79,30 @@ fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
 }
 
 #[test]
-#[ignore = "warning: explicit answer adjustment syntax is only a parser-level research proposal"]
+#[ignore = "warning: exact projection effects remain research evidence"]
 fn explicit_answer_adjustment_uses_the_written_shape_instead_of_a_single_percept_rule() {
     let mut by_action = troubleshooting_answers();
-    reference_research_adjustment(&mut by_action, "['action'] @+= ['helpful-action']").expect("valid action adjustment");
+    by_action.reference_concept("['action'] @+= ['helpful-action']").expect("valid action adjustment");
     assert_eq!(
         must_ref(&mut by_action, "$['candidate']"),
         must_ref(&mut by_action, "x2[candidate-dumpbin]x2[candidate-map][candidate-clean][candidate-reconfigure]")
     );
 
     let mut by_complete_value = troubleshooting_answers();
-    reference_research_adjustment(&mut by_complete_value, "['action']->['tool'] @+= ['helpful-action']->['helpful-tool']").expect("valid complete adjustment");
+    by_complete_value.reference_concept("['action']->['tool'] @+= ['helpful-action']->['helpful-tool']").expect("valid complete adjustment");
     assert_eq!(
         must_ref(&mut by_complete_value, "$['candidate']"),
         must_ref(&mut by_complete_value, "x2[candidate-dumpbin][candidate-clean][candidate-map][candidate-reconfigure]")
     );
 
     let mut by_packaging_value = packaging_answers();
-    reference_research_adjustment(
-        &mut by_packaging_value,
-        "([action]->['action'])([tool]->['tool'])([scope]->['scope'])
+    by_packaging_value
+        .reference_concept(
+            "([action]->['action'])([tool]->['tool'])([scope]->['scope'])
          @+=
          ([action]->['useful-action'])([tool]->['useful-tool'])([scope]->['useful-scope'])",
-    )
-    .expect("valid unordered three-field adjustment");
+        )
+        .expect("valid unordered three-field adjustment");
     assert_eq!(
         must_ref(&mut by_packaging_value, "$['candidate']"),
         must_ref(&mut by_packaging_value, "x2[candidate-modes][candidate-architecture][candidate-reinstall][candidate-signature]")
@@ -152,45 +110,34 @@ fn explicit_answer_adjustment_uses_the_written_shape_instead_of_a_single_percept
 }
 
 #[test]
-#[ignore = "warning: explicit answer adjustment syntax is only a parser-level research proposal"]
-fn explicit_answer_adjustment_is_lexically_separate_from_addition_and_questions() {
+#[ignore = "research detail: answer adjustment remains lexically separate from ordinary operations"]
+fn explicit_answer_adjustment_coexists_with_addition_and_questions() {
     let mut pangine = Pangine::new();
     must_ref(&mut pangine, "['ordinary'] = [A]");
     assert_eq!(must_ref(&mut pangine, "['ordinary'] += [B]"), must_ref(&mut pangine, "[A][B]"));
 
     must_ref(&mut pangine, "['memory'] ~= [cat]->[eats]->[fish]");
     assert_eq!(must_ref(&mut pangine, "['memory'] @ ['animal']->[eats]->['food']"), must_ref(&mut pangine, "[cat]->[eats]->[fish]"));
-
-    assert!(matches!(
-        reference_research_adjustment(&mut pangine, "['ordinary'] += [C]"),
-        Err(ResearchAdjustmentCommandError::Parse(ParseError::InvalidSyntax))
-    ));
-    assert!(matches!(
-        reference_research_adjustment(&mut pangine, "['memory'] @ ['other']"),
-        Err(ResearchAdjustmentCommandError::Parse(ParseError::InvalidSyntax))
-    ));
 }
 
 #[test]
-#[ignore = "warning: explicit answer adjustment syntax is only a parser-level research proposal"]
+#[ignore = "research detail: no-match publication and total cancellation advance the live answer"]
 fn explicit_answer_adjustment_has_predictable_null_and_invalid_boundaries() {
     let mut pangine = troubleshooting_answers();
     let target = pangine.reference_percept("candidate");
     let initial_state = pangine.shared_answer_state(&target).expect("target answer");
 
-    assert!(matches!(
-        reference_research_adjustment(&mut pangine, "(['action'])(['helpful-tool']) @+= ['helpful-action']"),
-        Err(ResearchAdjustmentCommandError::TargetNotLinked)
-    ));
+    assert!(matches!(pangine.reference_concept("(['action'])(['helpful-tool']) @+= ['helpful-action']"), Err(ParseError::InvalidSyntax)));
     assert_eq!(pangine.shared_answer_state(&target), Some(initial_state));
 
-    assert!(matches!(reference_research_adjustment(&mut pangine, "['action'] @+= [unlinked]"), Err(ResearchAdjustmentCommandError::AdjustmentNotLinked)));
+    assert!(matches!(pangine.reference_concept("['action'] @+= [unlinked]"), Err(ParseError::InvalidSyntax)));
     assert_eq!(pangine.shared_answer_state(&target), Some(initial_state));
 
-    assert!(matches!(reference_research_adjustment(&mut pangine, "['action'] @+="), Err(ResearchAdjustmentCommandError::Parse(ParseError::InvalidSyntax))));
+    assert!(matches!(pangine.reference_concept("['action'] @+="), Err(ParseError::InvalidSyntax)));
     assert_eq!(pangine.shared_answer_state(&target), Some(initial_state));
 
-    let unchanged = reference_research_adjustment(&mut pangine, "['action']->['tool'] @+= ['helpful-candidate']")
+    let unchanged = pangine
+        .reference_concept("['action']->['tool'] @+= ['helpful-candidate']")
         .expect("valid adjustment with no matching value")
         .expect("unchanged target projection");
     assert_eq!(
@@ -200,7 +147,7 @@ fn explicit_answer_adjustment_has_predictable_null_and_invalid_boundaries() {
     let unchanged_state = pangine.shared_answer_state(&target).expect("published no-match answer");
     assert_ne!(unchanged_state, initial_state);
 
-    assert!(reference_research_adjustment(&mut pangine, "['action']->['tool'] @-= ['action']->['tool']").expect("valid self-cancellation").is_none());
+    assert!(pangine.reference_concept("['action']->['tool'] @-= ['action']->['tool']").expect("valid self-cancellation").is_none());
     assert!(pangine.reference_concept("$['action']").expect("valid read").is_none());
     assert_eq!(must_ref(&mut pangine, "&['action']"), must_ref(&mut pangine, BASE_QUESTION));
     assert_eq!(pangine.answer_snapshot(&target).expect("proof-bearing answer").result().completions().len(), 4);
@@ -209,7 +156,7 @@ fn explicit_answer_adjustment_has_predictable_null_and_invalid_boundaries() {
 mod higher_order_adjustment;
 
 #[test]
-#[ignore = "warning: arbitrary view projection is production Rust behavior but has no accepted syntax"]
+#[ignore = "research detail: repeated source adjustment remains idempotent"]
 fn complete_action_and_tool_views_adjust_separate_outputs_without_a_single_decision_percept() {
     let mut pangine = troubleshooting_answers();
     let base = linked_view(&mut pangine, "['action']->['tool']");
@@ -263,7 +210,7 @@ fn repeated_outcomes_rebuild_views_from_one_episode_log_and_change_the_next_choi
 }
 
 #[test]
-#[ignore = "warning: projection scope is explicit in Rust but has no language operation"]
+#[ignore = "research detail: projection size changes which rows receive evidence"]
 fn the_written_view_controls_whether_evidence_applies_to_one_complete_decision_or_a_shared_action() {
     let mut pangine = troubleshooting_answers();
     let base_complete = linked_view(&mut pangine, "['action']->['tool']");

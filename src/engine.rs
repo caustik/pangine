@@ -143,6 +143,8 @@ Percept operations:
   ['a']['b'] @ expression   Complete several retained sources together
   &operand                   Return the shared answer shape for linked Percepts
   $operand                   Read Percepts without changing their answer state
+  ['target'] @+= ['evidence'] Add matching evidence to a linked Answer
+  ['target'] @-= ['evidence'] Subtract matching evidence from a linked Answer
   $['*']                     Inspect all live ordinary Concepts
 
 Experience:
@@ -790,6 +792,31 @@ impl Pangine {
         let selector = self.parse_ordered_expression(parser)?;
 
         parser.skip_ws();
+        let adjustment_factor = if parser.consume_str("@+=") {
+            Some(Relevance::DEFAULT)
+        } else if parser.consume_str("@-=") {
+            Some(Relevance::new(-1))
+        } else {
+            None
+        };
+        if let Some(factor) = adjustment_factor {
+            let target = selector.ok_or(ParseError::InvalidSyntax)?;
+            parser.skip_ws();
+            let adjustment_start = parser.pos;
+            let adjustment = self.parse_expression(parser)?;
+            if parser.pos == adjustment_start {
+                return Err(ParseError::InvalidSyntax);
+            }
+
+            let adjustment = adjustment.ok_or(ParseError::InvalidSyntax)?;
+            let target_view = self.answer_view(&target).ok_or(ParseError::InvalidSyntax)?;
+            let adjustment_view = self.answer_view(&adjustment).ok_or(ParseError::InvalidSyntax)?;
+            let adjusted = target_view.adjusted_by(self, &adjustment_view, factor).ok_or(ParseError::InvalidSyntax)?;
+            let published = adjusted.answer().publish(self).map_err(|_| ParseError::InvalidSyntax)?;
+            let published_view = published.answer().view(self, target).ok_or(ParseError::InvalidSyntax)?;
+            return Ok(published_view.materialize(self));
+        }
+
         if !parser.consume('@') {
             return Ok(selector);
         }
@@ -2515,6 +2542,8 @@ mod tests {
             "['source'] @ expression    Complete one retained Percept source",
             "['a']['b'] @ expression   Complete several retained sources together",
             "&operand                   Return the shared answer shape",
+            "['target'] @+= ['evidence'] Add matching evidence",
+            "['target'] @-= ['evidence'] Subtract matching evidence",
             "$['*']                     Inspect all live ordinary Concepts",
             "Repeating an equal Concept adds default relevance",
             "^['choice']",

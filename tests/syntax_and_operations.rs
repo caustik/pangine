@@ -144,6 +144,31 @@ fn ordinary_percept_mutation_operators_are_explicit() {
 }
 
 #[test]
+fn answer_adjustment_is_explicit_and_rejects_unlinked_operands() {
+    let mut pangine = Pangine::new();
+    pangine.reference_concept("['base'] ~= [base-row]->[value]->[A]").unwrap();
+    pangine.reference_concept("['evidence'] ~= [evidence-row]->[value]->[A]").unwrap();
+    pangine.reference_concept("['base'] @ ['base-row']->[value]->['target']").unwrap();
+    pangine.reference_concept("['evidence'] @ ['evidence-row']->[value]->['source']").unwrap();
+
+    let strengthened = pangine.reference_concept("['target'] @+= ['source']").unwrap().unwrap();
+    assert_eq!(pangine.format_concept(&strengthened, false), "x2[A]");
+    let restored = pangine.reference_concept("['target'] @-= ['source']").unwrap().unwrap();
+    assert_eq!(pangine.format_concept(&restored, false), "[A]");
+
+    pangine.reference_concept("['ordinary'] = [A]").unwrap();
+    let ordinary = pangine.reference_concept("['ordinary'] += [B]").unwrap().unwrap();
+    assert_eq!(pangine.format_concept(&ordinary, false), "[A][B]");
+    for script in ["['ordinary'] @+= ['source']", "['target'] @+= ['ordinary']", "(['target'])(['ordinary']) @+= ['source']", "['target'] @+="] {
+        assert!(matches!(pangine.reference_concept(script), Err(ParseError::InvalidSyntax)), "expected invalid syntax: {script}");
+    }
+    let target = pangine.reference_concept("$['target']").unwrap().unwrap();
+    let source = pangine.reference_concept("$['source']").unwrap().unwrap();
+    assert_eq!(pangine.format_concept(&target, false), "[A]");
+    assert_eq!(pangine.format_concept(&source, false), "[A]");
+}
+
+#[test]
 fn null_merge_adjustments_leave_the_current_value_unchanged() {
     PangineTest::assert_script_results(pairs! {
         "['value'] = [A]; ['missing'] = []; ['value'] *= $['missing']; $['value']" => "[A]",

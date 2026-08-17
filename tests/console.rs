@@ -6,16 +6,16 @@ fn route_cycle_changes_its_complete_choice_after_repeated_outcomes() {
     let stdout = run_example("route-cycle.pae");
 
     assert_eq!(
-        command_results(&stdout, "['route-choice'] /= $['negative-route']"),
+        command_results(&stdout, "['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']"),
         vec![
-            "x3{[east]->[C]->[north]}x2{[north]->[B]->[east]}{[west]->[E]->[south]}",
-            "x2{[east]->[C]->[north]}x2{[north]->[B]->[east]}{[west]->[E]->[south]}",
-            "x2{[north]->[B]->[east]}{[east]->[C]->[north]}{[west]->[E]->[south]}",
-            "x3{[north]->[B]->[east]}{[east]->[C]->[north]}{[west]->[E]->[south]}",
+            "x4{[east]->[C]->[north]}x2{[north]->[B]->[east]}",
+            "x2{[east]->[C]->[north]}x2{[north]->[B]->[east]}",
+            "x2{[north]->[B]->[east]}{[east]->[C]->[north]}",
+            "x4{[north]->[B]->[east]}{[east]->[C]->[north]}",
         ]
     );
     assert_eq!(
-        command_results(&stdout, "['selected-route'] = ^['route-choice']"),
+        command_results(&stdout, "['selected-route'] = ^(['base-first-action']->['base-middle']->['base-second-action'])"),
         vec!["{[east]->[C]->[north]}", "{[east]->[C]->[north]}", "{[north]->[B]->[east]}", "{[north]->[B]->[east]}"]
     );
     assert_eq!(command_results(&stdout, "$['recorded-outcome']"), vec!["[success]"]);

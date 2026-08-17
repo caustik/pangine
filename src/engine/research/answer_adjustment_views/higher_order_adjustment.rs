@@ -73,7 +73,7 @@ fn layered_adjustment_is_an_explicit_snapshot_sequence_instead_of_a_reactive_dep
 }
 
 #[test]
-#[ignore = "warning: the proposed console operator demonstrates only sequential live higher-order composition"]
+#[ignore = "warning: the console operator demonstrates only sequential live higher-order composition"]
 fn explicit_answer_adjustment_can_publish_a_three_layer_console_chain() {
     let mut pangine = layered_decision_answers();
     let candidate = pangine.reference_percept("candidate");
@@ -84,7 +84,7 @@ fn explicit_answer_adjustment_can_publish_a_three_layer_console_chain() {
     let trusted_before = pangine.shared_answer_state(&trusted_episode).expect("reliability answer");
 
     assert_eq!(
-        reference_research_adjustment(&mut pangine, "['episode'] @+= ['trusted-episode']").expect("valid trust adjustment"),
+        pangine.reference_concept("['episode'] @+= ['trusted-episode']").expect("valid trust adjustment"),
         Some(must_ref(&mut pangine, "x2[episode-b][episode-a]"))
     );
     let episode_after = pangine.shared_answer_state(&episode).expect("adjusted outcome answer");
@@ -93,7 +93,7 @@ fn explicit_answer_adjustment_can_publish_a_three_layer_console_chain() {
     assert_eq!(pangine.shared_answer_state(&trusted_episode), Some(trusted_before));
 
     assert_eq!(
-        reference_research_adjustment(&mut pangine, "['decision'] @+= ['episode-decision']").expect("valid decision adjustment"),
+        pangine.reference_concept("['decision'] @+= ['episode-decision']").expect("valid decision adjustment"),
         Some(must_ref(&mut pangine, "x3[B]x2[A]"))
     );
     assert_ne!(pangine.shared_answer_state(&candidate), Some(candidate_before));
