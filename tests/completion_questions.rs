@@ -11,6 +11,11 @@ fn shared_holes_compose_relationships_while_one_atom_remains_one_step() {
     assert_eq!(composed.completions().len(), 1);
     assert_eq!(bound_name(&mut pangine, &composed.completions()[0], "middle"), "human");
     assert_eq!(bound_name(&mut pangine, &composed.completions()[0], "conclusion"), "mortal");
+    assert_eq!(
+        composed.completions()[0].evidence().iter().map(|evidence| evidence.source_concept()).collect::<BTreeSet<_>>().len(),
+        2,
+        "the repeated middle Percept should explicitly join two complete experiences"
+    );
 
     let conclusion = must_ref(&mut pangine, "[Socrates]->[is-a]->['conclusion']");
     let conclusion = pangine.instantiate_completion(&conclusion, &composed.completions()[0]).expect("complete conclusion template");
@@ -19,6 +24,74 @@ fn shared_holes_compose_relationships_while_one_atom_remains_one_step() {
     let one_step = complete(&mut pangine, &["knowledge"], "[Socrates]->[is-a]->['answer']");
     assert_eq!(one_step.completions().len(), 1);
     assert_eq!(bound_name(&mut pangine, &one_step.completions()[0], "answer"), "human");
+}
+
+#[test]
+fn complete_experiences_keep_question_parts_together() {
+    let mut pangine = Pangine::new();
+    experience(&mut pangine, "memory", "(([episode]->[first])([person]->[Alice])([pet]->[cat]))", 1);
+    experience(&mut pangine, "memory", "(([episode]->[second])([person]->[Alice])([pet]->[cat]))", 1);
+    experience(&mut pangine, "memory", "(([episode]->[third])([person]->[Bob])([pet]->[dog]))", 1);
+
+    let question_text = "([person]->['who'])([pet]->['animal'])";
+    let remembered = complete(&mut pangine, &["memory"], question_text);
+    assert_eq!(remembered.completions().len(), 3, "equal answers from distinct complete experiences should remain distinct evidence");
+    let remembered_pairs = remembered
+        .completions()
+        .iter()
+        .map(|completion| (bound_name(&mut pangine, completion, "who"), bound_name(&mut pangine, completion, "animal")))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(remembered_pairs, BTreeSet::from([("Alice".to_owned(), "cat".to_owned()), ("Bob".to_owned(), "dog".to_owned())]));
+    assert!(remembered
+        .completions()
+        .iter()
+        .all(|completion| { completion.evidence().iter().map(|evidence| evidence.source_concept()).collect::<BTreeSet<_>>().len() == 1 }));
+    assert_eq!(
+        remembered
+            .completions()
+            .iter()
+            .flat_map(|completion| completion.evidence().iter().map(|evidence| evidence.source_concept()))
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3,
+        "completed answers should combine only after all three source experiences remain distinct"
+    );
+
+    let materialized_memory = must_ref(&mut pangine, "$['memory']");
+    let question = must_ref(&mut pangine, question_text);
+    let materialized = pangine.complete_subject(&materialized_memory, &question).expect("valid materialized memory question");
+    assert_eq!(materialized.completions().len(), 3);
+    let materialized_pairs = materialized
+        .completions()
+        .iter()
+        .map(|completion| (bound_name(&mut pangine, completion, "who"), bound_name(&mut pangine, completion, "animal")))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(remembered_pairs, materialized_pairs, "questioning a Percept should retain the same pairs as questioning its current Concept");
+
+    must_ref(&mut pangine, &format!("['memory'] @ {question_text}"));
+    assert_eq!(must_ref(&mut pangine, "^['who']"), must_ref(&mut pangine, "[Alice]"));
+    assert_eq!(must_ref(&mut pangine, "$['animal']"), must_ref(&mut pangine, "x2[cat]"));
+
+    must_ref(&mut pangine, &format!("['memory'] @ {question_text}"));
+    assert_eq!(must_ref(&mut pangine, "^(['who']['animal'])"), must_ref(&mut pangine, "[Alice][cat]"));
+}
+
+#[test]
+fn partial_experiences_do_not_form_an_unseen_complete_answer() {
+    let mut pangine = Pangine::new();
+    experience(&mut pangine, "memory", "{[C]->[A]}*{[B]->[D]}", 1);
+    for partial in ["{[E]->[A]}*{[P1]->[Q1]}", "{[E]->[A]}*{[P2]->[Q2]}", "{[E]->[A]}*{[P3]->[Q3]}"] {
+        experience(&mut pangine, "memory", partial, 1);
+    }
+
+    let result = complete(&mut pangine, &["memory"], "{['X']->[A]}*{[B]->[D]}");
+    assert_eq!(result.completions().len(), 1);
+    assert_eq!(bound_name(&mut pangine, &result.completions()[0], "X"), "C");
+    assert_eq!(
+        result.completions()[0].evidence().iter().map(|evidence| evidence.source_concept()).collect::<BTreeSet<_>>().len(),
+        1,
+        "the two parts should come from the one experience that contains both"
+    );
 }
 
 #[test]

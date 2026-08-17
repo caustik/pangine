@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 mod answer;
 mod completion;
 mod concept_map;
+mod question_index;
 
 use answer::StoredAnswer;
 pub use answer::{Answer, AnswerAdjustment, AnswerChoice, AnswerPossibility, AnswerPublication, AnswerPublicationError, AnswerSourceContribution, AnswerView};
@@ -20,6 +21,7 @@ pub use completion::{
     CompletionResult, CompletionRoute,
 };
 use concept_map::ConceptMap;
+use question_index::PerceptQuestionIndex;
 
 type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
@@ -380,6 +382,9 @@ pub struct Pangine {
     // unordered Concept subconcepts. Keeping the map outside the Rc-backed
     // Concept avoids strong-reference cycles when Percepts contain Percepts.
     percept_subconcepts: BTreeMap<usize, ConceptMap>,
+    // Recursive lookup postings retain complete source identities while
+    // allowing questions to skip unrelated experiences.
+    percept_question_indexes: BTreeMap<usize, PerceptQuestionIndex>,
     // Disposable materialization cache derived from the Percept subconcepts.
     percept_value_maps: BTreeMap<usize, ConceptMap>,
     percept_values: BTreeMap<usize, ConceptId>,
@@ -399,6 +404,8 @@ pub struct Pangine {
     composite_lookup: CompositeLookup,
     // Rebuild the weak indexes only as their stored size grows geometrically.
     next_index_prune_size: usize,
+    #[cfg(test)]
+    question_source_visits: usize,
 }
 
 impl Default for Pangine {
@@ -412,6 +419,7 @@ impl Default for Pangine {
             names: BTreeMap::new(),
             percepts: BTreeMap::from([(GLOBAL_PERCEPT_NAME.to_owned(), global_percept)]),
             percept_subconcepts: BTreeMap::new(),
+            percept_question_indexes: BTreeMap::new(),
             percept_value_maps: BTreeMap::new(),
             percept_values: BTreeMap::new(),
             current_value_percepts: BTreeSet::new(),
@@ -421,6 +429,8 @@ impl Default for Pangine {
             composites: Vec::new(),
             composite_lookup: CompositeLookup::new(),
             next_index_prune_size: 2,
+            #[cfg(test)]
+            question_source_visits: 0,
         }
     }
 }
@@ -1196,10 +1206,13 @@ impl Pangine {
         let value = Self::sole_default_concept(&subconcepts).cloned().or_else(|| self.reference_map(&value_map));
         if subconcepts.is_empty() {
             self.percept_subconcepts.remove(&index);
+            self.percept_question_indexes.remove(&index);
             self.percept_value_maps.remove(&index);
             self.percept_values.remove(&index);
         } else {
+            let question_index = PerceptQuestionIndex::from_sources(subconcepts.keys());
             self.percept_subconcepts.insert(index, subconcepts);
+            self.percept_question_indexes.insert(index, question_index);
             self.percept_value_maps.insert(index, value_map);
             match value.clone() {
                 Some(value) => {
@@ -1255,6 +1268,10 @@ impl Pangine {
             None
         };
         self.percept_subconcepts.entry(index).or_default().insert(experience.clone(), next_relevance);
+        let question_index = self.percept_question_indexes.entry(index).or_default();
+        if current_relevance.is_empty() || !question_index.contains_source(experience) {
+            question_index.insert_source(experience);
+        }
         let value_map = if let Some(value_map) = incremental_value_map {
             value_map
         } else {
@@ -1485,14 +1502,20 @@ impl Pangine {
     }
 
     fn question_snapshot(&mut self, percepts: &[ConceptId], question: &ConceptId) -> QuestionSnapshot {
+        let patterns = self.question_patterns(question);
         let sources = percepts
             .iter()
             .flat_map(|percept| {
-                self.percept_subconcepts
-                    .get(&percept.index())
+                let index = percept.index();
+                let candidates = self.percept_question_indexes.get(&index).map(|index| index.candidate_sources(&patterns)).unwrap_or_default();
+                let subconcepts = self.percept_subconcepts.get(&index);
+                debug_assert_eq!(subconcepts.is_some(), self.percept_question_indexes.contains_key(&index));
+                candidates
                     .into_iter()
-                    .flatten()
-                    .map(|(concept, &relevance)| QuestionSource::from_percept(percept.clone(), concept.clone(), relevance))
+                    .filter_map(|concept| {
+                        let relevance = subconcepts?.get(&concept)?;
+                        Some(QuestionSource::from_percept(percept.clone(), concept, *relevance))
+                    })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
@@ -1505,9 +1528,11 @@ impl Pangine {
     }
 
     fn question_snapshot_from_sources(&mut self, sources: Vec<QuestionSource>, question: &ConceptId) -> QuestionSnapshot {
-        let mut patterns = BTreeSet::new();
-        let mut contains_percept_cache = BTreeMap::new();
-        self.collect_question_patterns(question, true, &mut patterns, &mut contains_percept_cache);
+        #[cfg(test)]
+        {
+            self.question_source_visits += sources.len();
+        }
+        let patterns = self.question_patterns(question);
         // A top-level output Percept may bind any recursive view. Every other
         // pattern can only match its own structural shape.
         let source_shapes =
@@ -1527,6 +1552,13 @@ impl Pangine {
             self.add_question_source_views_rec(&source, &source.concept, &CompletionRoute::default(), None, &[], &mut traversal);
         }
         snapshot
+    }
+
+    fn question_patterns(&self, question: &ConceptId) -> BTreeSet<ConceptId> {
+        let mut patterns = BTreeSet::new();
+        let mut contains_percept_cache = BTreeMap::new();
+        self.collect_question_patterns(question, true, &mut patterns, &mut contains_percept_cache);
+        patterns
     }
 
     fn collect_ordered_question_widths(
@@ -2677,5 +2709,98 @@ mod tests {
         let wildcard_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &wildcard);
         let full_wildcard = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &wildcard);
         assert!(wildcard_snapshot == full_wildcard);
+    }
+
+    #[test]
+    fn anchored_questions_visit_only_indexed_candidate_experiences() {
+        let mut pangine = Pangine::new();
+        let memory = pangine.reference_percept("memory");
+
+        for index in 0..512 {
+            let key = pangine.reference_named(&format!("noise-{index}")).unwrap();
+            let value = pangine.reference_named(&format!("value-{index}")).unwrap();
+            let experience = pangine.reference_ordered(vec![key, value]);
+            pangine.record_experience(&memory, &experience).unwrap();
+        }
+
+        let needle = pangine.reference_named("needle").unwrap();
+        let answer = pangine.reference_named("answer").unwrap();
+        let nested = pangine.reference_ordered(vec![needle.clone(), answer.clone()]);
+        let wrapper_name = pangine.reference_named("wrapper").unwrap();
+        let wrapper = pangine.reference_ordered(vec![wrapper_name, nested]);
+        pangine.record_experience(&memory, &wrapper).unwrap();
+
+        let output = pangine.reference_percept("output");
+        let question = pangine.reference_ordered(vec![needle, output.clone()]);
+        pangine.question_source_visits = 0;
+        let result = pangine.complete_question(std::slice::from_ref(&memory), &question).unwrap();
+
+        assert_eq!(pangine.question_source_visits, 1);
+        assert_eq!(result.completions().len(), 1);
+        assert_eq!(result.completions()[0].binding(&output), Some(&answer));
+    }
+
+    #[test]
+    fn question_index_tracks_replacement_and_shape_only_queries() {
+        let mut pangine = Pangine::new();
+        let memory = pangine.reference_percept("memory");
+        for index in 0..256 {
+            let atomic = pangine.reference_named(&format!("atomic-{index}")).unwrap();
+            pangine.record_experience(&memory, &atomic).unwrap();
+        }
+
+        let left = pangine.reference_named("left").unwrap();
+        let right = pangine.reference_named("right").unwrap();
+        let pair = pangine.reference_ordered(vec![left, right]);
+        pangine.record_experience(&memory, &pair).unwrap();
+
+        let first = pangine.reference_percept("first");
+        let second = pangine.reference_percept("second");
+        let shape_question = pangine.reference_ordered(vec![first, second]);
+        pangine.question_source_visits = 0;
+        let result = pangine.complete_question(std::slice::from_ref(&memory), &shape_question).unwrap();
+        assert_eq!(pangine.question_source_visits, 1);
+        assert_eq!(result.completions().len(), 1);
+
+        let replacement = pangine.reference_named("replacement").unwrap();
+        assert!(pangine.set_percept_value(&memory, Some(replacement)));
+        pangine.question_source_visits = 0;
+        let result = pangine.complete_question(std::slice::from_ref(&memory), &shape_question).unwrap();
+        assert_eq!(pangine.question_source_visits, 0);
+        assert!(result.completions().is_empty());
+
+        assert!(pangine.set_percept_value(&memory, None));
+        assert!(!pangine.percept_question_indexes.contains_key(&memory.index()));
+    }
+
+    #[test]
+    fn shared_percept_join_visits_only_the_indexed_sources_for_each_clause() {
+        let mut pangine = Pangine::new();
+        let memory = pangine.reference_percept("memory");
+        for index in 0..512 {
+            let left = pangine.reference_named(&format!("unrelated-left-{index}")).unwrap();
+            let right = pangine.reference_named(&format!("unrelated-right-{index}")).unwrap();
+            let experience = pangine.reference_ordered(vec![left, right]);
+            pangine.record_experience(&memory, &experience).unwrap();
+        }
+
+        let subject = pangine.reference_named("Socrates").unwrap();
+        let middle_value = pangine.reference_named("human").unwrap();
+        let conclusion = pangine.reference_named("mortal").unwrap();
+        let first_source = pangine.reference_ordered(vec![subject.clone(), middle_value.clone()]);
+        let second_source = pangine.reference_ordered(vec![middle_value, conclusion.clone()]);
+        pangine.record_experience(&memory, &first_source).unwrap();
+        pangine.record_experience(&memory, &second_source).unwrap();
+
+        let middle = pangine.reference_percept("middle");
+        let first_clause = pangine.reference_ordered(vec![subject, middle.clone()]);
+        let second_clause = pangine.reference_ordered(vec![middle.clone(), conclusion]);
+        let question = pangine.reference_map(&ConceptMap::from([(first_clause, Relevance::DEFAULT), (second_clause, Relevance::DEFAULT)]));
+        pangine.question_source_visits = 0;
+        let result = pangine.complete_question(std::slice::from_ref(&memory), &question.unwrap()).unwrap();
+
+        assert_eq!(pangine.question_source_visits, 2);
+        assert_eq!(result.completions().len(), 1);
+        assert_eq!(result.completions()[0].binding(&middle).map(|concept| pangine.format_concept(concept, false)), Some("[human]".to_owned()));
     }
 }

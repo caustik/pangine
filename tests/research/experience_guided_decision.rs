@@ -5,14 +5,30 @@
 //! decision outputs adjust the still-linked candidate answer. The outcome
 //! meanings and additive effects are explicit program choices, not universal
 //! Pangine semantics.
+//!
+//! A second check compares carrying every reviewed outcome into the final
+//! decision with choosing one outcome first. It then changes the current input
+//! and repeats the same three-Answer chain.
 
-use pangine::{ConceptId, Pangine, Relevance};
-use std::collections::BTreeMap;
+use pangine::{AnswerView, ConceptId, Pangine, Relevance};
+use std::collections::{BTreeMap, BTreeSet};
 
 const CANDIDATE_QUESTION: &str = "
     (['candidate']->[environment]->$['environment-input'])
     (['candidate']->[symptom]->$['symptom-input'])
     (['candidate']->[decision]->['decision'])";
+
+const OUTCOME_QUESTION: &str = "
+    (['episode']->[environment]->$['environment-input'])
+    (['episode']->[symptom]->$['symptom-input'])
+    (['episode']->[decision]->['episode-decision'])
+    (['episode']->[outcome]->[helpful])";
+
+const REVIEW_QUESTION: &str = "
+    (['review']->[environment]->$['environment-input'])
+    (['review']->[symptom]->$['symptom-input'])
+    (['review']->[episode]->['trusted-episode'])
+    (['review']->[assessment]->[trusted])";
 
 #[test]
 #[ignore = "warning: helpful-minus-failed linked support is one explicit outcome policy"]
@@ -98,6 +114,154 @@ fn linked_outcomes_adjust_complete_troubleshooting_choices_without_hiding_source
 
     must_ref(&mut pangine, "['episodes'] @ [episode-clean-failed-1]->[outcome]->['recorded-failure']");
     assert_eq!(must_ref(&mut pangine, "$['recorded-failure']"), must_ref(&mut pangine, "[failed]"));
+}
+
+#[test]
+#[ignore = "warning: early-versus-late choice depends on provisional additive support and canonical tie breaking"]
+fn unresolved_outcomes_keep_aggregate_evidence_across_changing_inputs() {
+    let mut pangine = Pangine::new();
+    remember_context_candidate(&mut pangine, "candidate-a", "windows", "link-error", "A");
+    remember_context_candidate(&mut pangine, "candidate-b", "windows", "link-error", "B");
+    remember_context_episode(&mut pangine, "episode-a-1", "windows", "link-error", "A");
+    remember_context_episode(&mut pangine, "episode-a-2", "windows", "link-error", "A");
+    remember_context_episode(&mut pangine, "episode-b", "windows", "link-error", "B");
+    remember_context_review(&mut pangine, "review-b", "windows", "link-error", "episode-b");
+
+    remember_context_candidate(&mut pangine, "candidate-c", "linux", "runtime-error", "C");
+    remember_context_candidate(&mut pangine, "candidate-d", "linux", "runtime-error", "D");
+    remember_context_episode(&mut pangine, "episode-c", "linux", "runtime-error", "C");
+    remember_context_episode(&mut pangine, "episode-d", "linux", "runtime-error", "D");
+    remember_context_review(&mut pangine, "review-d", "linux", "runtime-error", "episode-d");
+
+    set_current_input(&mut pangine, "windows", "link-error");
+    let windows = compare_choice_timing(&mut pangine);
+
+    assert_eq!(windows.late_choice, must_ref(&mut pangine, "[A]"));
+    assert_eq!(windows.early_episode, must_ref(&mut pangine, "[episode-b]"));
+    assert_eq!(windows.early_choice, must_ref(&mut pangine, "[B]"));
+    assert_possibility(&mut pangine, &windows.late, "[A]", 3, true, &["candidate-a", "episode-a-1", "episode-a-2"]);
+    assert_possibility(&mut pangine, &windows.late, "[B]", 3, true, &["candidate-b", "episode-b", "review-b"]);
+    assert_possibility(&mut pangine, &windows.early, "[A]", 1, false, &["candidate-a"]);
+    assert_possibility(&mut pangine, &windows.early, "[B]", 3, true, &["candidate-b", "episode-b", "review-b"]);
+
+    set_current_input(&mut pangine, "linux", "runtime-error");
+    let linux = compare_choice_timing(&mut pangine);
+
+    assert_eq!(linux.late_choice, must_ref(&mut pangine, "[D]"));
+    assert_eq!(linux.early_episode, must_ref(&mut pangine, "[episode-d]"));
+    assert_eq!(linux.early_choice, must_ref(&mut pangine, "[D]"));
+    assert_possibility(&mut pangine, &linux.late, "[C]", 2, false, &["candidate-c", "episode-c"]);
+    assert_possibility(&mut pangine, &linux.late, "[D]", 3, true, &["candidate-d", "episode-d", "review-d"]);
+    assert_possibility(&mut pangine, &linux.early, "[C]", 1, false, &["candidate-c"]);
+    assert_possibility(&mut pangine, &linux.early, "[D]", 3, true, &["candidate-d", "episode-d", "review-d"]);
+
+    let linux_sources = linux
+        .late
+        .possibilities(&mut pangine)
+        .expect("current possibilities")
+        .into_iter()
+        .flat_map(|possibility| possibility.sources().iter().map(|source| pangine.format_concept(source.concept(), false)).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert!(linux_sources.iter().all(|source| !source.contains("candidate-a") && !source.contains("episode-a") && !source.contains("review-b")));
+}
+
+struct ChoiceTiming {
+    late: AnswerView,
+    early: AnswerView,
+    late_choice: ConceptId,
+    early_episode: ConceptId,
+    early_choice: ConceptId,
+}
+
+fn compare_choice_timing(pangine: &mut Pangine) -> ChoiceTiming {
+    must_ref(pangine, &format!("['candidates'] @ {CANDIDATE_QUESTION}"));
+    must_ref(pangine, &format!("['episodes'] @ {OUTCOME_QUESTION}"));
+    must_ref(pangine, &format!("['reviews'] @ {REVIEW_QUESTION}"));
+
+    let decision = pangine.reference_percept("decision");
+    let episode = pangine.reference_percept("episode");
+    let episode_decision = pangine.reference_percept("episode-decision");
+    let trusted_episode = pangine.reference_percept("trusted-episode");
+    let candidates = pangine.answer_view(&decision).expect("candidate answer");
+    let outcomes = pangine.answer_view(&episode).expect("outcome answer");
+    let trusted = pangine.answer_view(&trusted_episode).expect("review answer");
+
+    let trusted_outcomes = outcomes.adjusted_by(pangine, &trusted, Relevance::DEFAULT).expect("matching reviewed episode");
+    let all_outcome_decisions = trusted_outcomes.projecting(pangine, episode_decision.clone()).expect("all outcome decisions");
+    let late = candidates.adjusted_by(pangine, &all_outcome_decisions, Relevance::DEFAULT).expect("all matching outcome decisions");
+    let late_choice = late.choose(pangine).expect("late candidate choice").selected().clone();
+
+    let chosen_outcome = trusted_outcomes.choose(pangine).expect("early outcome choice");
+    let early_episode = chosen_outcome.selected().clone();
+    let chosen_outcome_decision = chosen_outcome.view().projecting(pangine, episode_decision).expect("chosen outcome decision");
+    let early = candidates.adjusted_by(pangine, &chosen_outcome_decision, Relevance::DEFAULT).expect("chosen matching outcome decision");
+    let early_choice = early.choose(pangine).expect("early candidate choice").selected().clone();
+
+    ChoiceTiming { late, early, late_choice, early_episode, early_choice }
+}
+
+fn remember_context_candidate(pangine: &mut Pangine, candidate: &str, environment: &str, symptom: &str, decision: &str) {
+    must_ref(
+        pangine,
+        &format!(
+            "['candidates'] ~= ([{candidate}]->[environment]->[{environment}])
+                               ([{candidate}]->[symptom]->[{symptom}])
+                               ([{candidate}]->[decision]->[{decision}])"
+        ),
+    );
+}
+
+fn remember_context_episode(pangine: &mut Pangine, episode: &str, environment: &str, symptom: &str, decision: &str) {
+    must_ref(
+        pangine,
+        &format!(
+            "['episodes'] ~= ([{episode}]->[environment]->[{environment}])
+                             ([{episode}]->[symptom]->[{symptom}])
+                             ([{episode}]->[decision]->[{decision}])
+                             ([{episode}]->[outcome]->[helpful])"
+        ),
+    );
+}
+
+fn remember_context_review(pangine: &mut Pangine, review: &str, environment: &str, symptom: &str, episode: &str) {
+    must_ref(
+        pangine,
+        &format!(
+            "['reviews'] ~= ([{review}]->[environment]->[{environment}])
+                            ([{review}]->[symptom]->[{symptom}])
+                            ([{review}]->[episode]->[{episode}])
+                            ([{review}]->[assessment]->[trusted])"
+        ),
+    );
+}
+
+fn set_current_input(pangine: &mut Pangine, environment: &str, symptom: &str) {
+    must_ref(pangine, &format!("['environment-input'] = [{environment}]"));
+    must_ref(pangine, &format!("['symptom-input'] = [{symptom}]"));
+}
+
+fn assert_possibility(
+    pangine: &mut Pangine,
+    view: &AnswerView,
+    expected_value: &str,
+    expected_strength: i64,
+    expected_top_tie: bool,
+    expected_sources: &[&str],
+) {
+    let possibility = view
+        .possibilities(pangine)
+        .expect("answer possibilities")
+        .into_iter()
+        .find(|possibility| pangine.format_concept(possibility.value(), false) == expected_value)
+        .unwrap_or_else(|| panic!("missing possibility {expected_value}"));
+    let sources = possibility.sources().iter().map(|source| pangine.format_concept(source.concept(), false)).collect::<BTreeSet<_>>();
+
+    assert_eq!(possibility.strength().weight(), expected_strength, "unexpected strength for {expected_value}");
+    assert_eq!(possibility.is_top_tie(), expected_top_tie, "unexpected tie state for {expected_value}");
+    for expected_source in expected_sources {
+        assert!(sources.iter().any(|source| source.contains(expected_source)), "missing {expected_source} from {expected_value}: {sources:?}");
+    }
+    assert_eq!(sources.len(), expected_sources.len(), "unexpected sources for {expected_value}: {sources:?}");
 }
 
 fn remember_candidate(pangine: &mut Pangine, candidate: &str, action: &str, tool: &str) {

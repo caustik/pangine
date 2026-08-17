@@ -38,24 +38,6 @@ fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evalua
 }
 
 #[test]
-#[ignore = "warning: combining partial matches into an unseen whole is provisional"]
-fn distinct_partial_experience_can_induce_an_unseen_complete_answer() {
-    let mut pangine = Pangine::new();
-    let memory = pangine.reference_percept("memory");
-
-    must_ref(&mut pangine, "['memory'] ~= {[C]->[A]}*{[B]->[D]}");
-    for partial in ["{[E]->[A]}*{[P1]->[Q1]}", "{[E]->[A]}*{[P2]->[Q2]}", "{[E]->[A]}*{[P3]->[Q3]}"] {
-        must_ref(&mut pangine, &format!("['memory'] ~= {partial}"));
-    }
-
-    let unseen = must_ref(&mut pangine, "{[E]->[A]}*{[B]->[D]}");
-    assert!(!pangine.get_relevance_map(&memory).into_iter().any(|(_, concept)| concept == unseen));
-
-    ask(&mut pangine, "['memory'] @ {['X']->[A]}*{[B]->[D]}");
-    assert!(named_candidates(&mut pangine, "X").iter().any(|name| name == "E"));
-}
-
-#[test]
 #[ignore = "warning: an enclosing ordered entry and a separately asked nested descendant are not yet correlated"]
 fn enclosing_ordered_entries_do_not_yet_constrain_descendant_group_matches() {
     let mut pangine = Pangine::new();
@@ -71,17 +53,6 @@ fn enclosing_ordered_entries_do_not_yet_constrain_descendant_group_matches() {
         4,
         "coefficient ancestry must not hide or accidentally resolve the same limitation"
     );
-}
-
-fn named_candidates(pangine: &mut Pangine, percept: &str) -> Vec<String> {
-    let Some(value) = pangine.reference_concept(&format!("$['{percept}']")).unwrap() else {
-        return Vec::new();
-    };
-    pangine
-        .get_relevance_map(&value)
-        .into_iter()
-        .map(|(_, candidate)| pangine.get_name(&candidate).unwrap_or_else(|| panic!("expected named candidate, got {candidate:?}")).to_owned())
-        .collect()
 }
 
 fn ask(pangine: &mut Pangine, input: &str) {

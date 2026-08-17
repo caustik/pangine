@@ -21,10 +21,10 @@ Research programs that compare independent views copy a `$` result into a detach
 - `decision_contract.rs` compares addition, multiplication, rescaling, ties, and distinct source histories. It keeps the information a future decision contract may need without choosing one formula.
 - `decision_fallback.rs` records the current positive filter and canonical tie rule behind `^`.
 - `decision_record.rs` compares saved totals, complete rows, evaluated values, and unchanged source Percepts. Each preserves a different part of an old decision.
-- `experience_guided_decision.rs` keeps three troubleshooting decisions linked while helpful and failed episode answers adjust matching rows. It preserves the raw sources, leaves an untried decision available, and treats the outcome policy as provisional.
+- `experience_guided_decision.rs` keeps troubleshooting decisions linked while outcome and review Answers adjust matching rows. It preserves raw sources, compares early and late choice across changing inputs, and treats the outcome policy as provisional.
 - `interface_percepts.rs` exercises complete Rust input groups, assigned-input experience capture, output delivery, and a queued later cycle. It adds no callback registry, event loop, or LLM adapter.
 - `joint_answer_relevance.rs` keeps the current source-deduplication rule visible without treating additive integer support as the final Relevance model.
-- `matcher_boundaries.rs` keeps four open matcher questions: ordered nesting, valid `@` subjects, unseen wholes assembled from partial experience, and enclosing-entry correlation.
+- `matcher_boundaries.rs` keeps open questions around ordered nesting, valid `@` subjects, and enclosing-entry correlation.
 - `outcome_learning.rs` compares actual transitions with identified episode outcomes, keeps untried routes through repeated regenerated detached choices, and preserves the old literal-adjustment boundary.
 - `question_support.rs` records how direct Percept-member weights currently reach output coefficients.
 - `represented_choice.rs` keeps focused counterexamples for experience, current state, context, stance, question order, source identity, records, and coefficients without host-side scoring.

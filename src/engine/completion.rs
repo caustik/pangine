@@ -1,4 +1,6 @@
-use super::{CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSourceView, QuestionWitness};
+use super::{
+    CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSource, QuestionSourceView, QuestionWitness,
+};
 use crate::Relevance;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -407,6 +409,8 @@ impl Pangine {
     /// Top-level unordered collections of ordered clauses form one conjunction.
     /// Repeated Percept holes are shared variables, and each returned completion
     /// retains a correlated assignment, source evidence, and unmatched context.
+    /// Clauses without a shared Percept remain connected through complete
+    /// source experiences instead of freely crossing source records.
     pub fn complete_question(&mut self, sources: &[ConceptId], question: &ConceptId) -> Option<CompletionResult> {
         if sources.is_empty()
             || !self.owns(question)
@@ -437,6 +441,13 @@ impl Pangine {
 
     pub(super) fn complete_question_snapshot(&mut self, question: &ConceptId, snapshot: &super::QuestionSnapshot) -> CompletionResult {
         let clauses = question_clauses(question);
+        let clause_groups = question_clause_groups(question);
+        let clause_group_count = clause_groups.len();
+        let group_by_clause = clause_groups
+            .into_iter()
+            .enumerate()
+            .flat_map(|(group, clauses)| clauses.into_iter().map(move |clause| (clause, group)))
+            .collect::<BTreeMap<_, _>>();
         let shared_percepts = self.shared_clause_percepts(&clauses);
         let mut products = BTreeSet::from([Completion { assignment: ProjectionAssignment::new(), evidence: Vec::new() }]);
 
@@ -497,7 +508,11 @@ impl Pangine {
 
         let mut outputs = BTreeSet::new();
         self.collect_output_percepts(question, &mut outputs);
-        let completions = products.into_iter().filter(|completion| outputs.iter().all(|output| completion.assignment.contains_key(output))).collect();
+        let completions = products
+            .into_iter()
+            .filter(|completion| outputs.iter().all(|output| completion.assignment.contains_key(output)))
+            .filter(|completion| completion_sources_connect_clause_groups(completion, &group_by_clause, clause_group_count))
+            .collect();
         CompletionResult { question: question.clone(), completions }
     }
 
@@ -917,6 +932,72 @@ fn question_clauses(question: &ConceptId) -> Vec<ConceptId> {
         return question.0.subconcepts.keys().cloned().collect();
     }
     vec![question.clone()]
+}
+
+fn question_clause_groups(question: &ConceptId) -> Vec<Vec<ConceptId>> {
+    let mut groups: Vec<(BTreeSet<ConceptId>, Vec<ConceptId>)> = Vec::new();
+    for clause in question_clauses(question) {
+        let mut percepts = BTreeSet::new();
+        collect_question_percepts(&clause, &mut percepts);
+        let mut clauses = vec![clause];
+        let mut index = 0;
+        while index < groups.len() {
+            if percepts.is_disjoint(&groups[index].0) {
+                index += 1;
+                continue;
+            }
+
+            let (group_percepts, group_clauses) = groups.remove(index);
+            percepts.extend(group_percepts);
+            clauses.extend(group_clauses);
+        }
+        clauses.sort();
+        groups.push((percepts, clauses));
+    }
+    groups.sort_by(|left, right| left.1.cmp(&right.1));
+    groups.into_iter().map(|(_, clauses)| clauses).collect()
+}
+
+fn collect_question_percepts(concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {
+    if matches!(concept.0.kind, ConceptKind::Percept { .. }) {
+        percepts.insert(concept.clone());
+        return;
+    }
+
+    for (child, _) in concept.0.children() {
+        collect_question_percepts(child, percepts);
+    }
+}
+
+// Repeated Percepts connect clauses within each group. A complete source that
+// participates in several groups connects those groups without flattening the
+// other remembered experiences into one pool.
+fn completion_sources_connect_clause_groups(completion: &Completion, group_by_clause: &BTreeMap<ConceptId, usize>, group_count: usize) -> bool {
+    if group_count < 2 {
+        return true;
+    }
+
+    let mut groups_by_source = BTreeMap::<QuestionSource, BTreeSet<usize>>::new();
+    for evidence in &completion.evidence {
+        let Some(group) = group_by_clause.get(&evidence.source.clause) else {
+            return false;
+        };
+        groups_by_source.entry(evidence.source.source_view.source.clone()).or_default().insert(*group);
+    }
+
+    let mut connected_groups = BTreeSet::from([0]);
+    loop {
+        let previous_count = connected_groups.len();
+        for source_groups in groups_by_source.values() {
+            if !connected_groups.is_disjoint(source_groups) {
+                connected_groups.extend(source_groups);
+            }
+        }
+        if connected_groups.len() == previous_count {
+            break;
+        }
+    }
+    connected_groups.len() == group_count
 }
 
 fn join_source_route_relations(left: &BTreeSet<CompletionRoute>, right: &BTreeSet<CompletionRoute>) -> BTreeSet<CompletionRoute> {

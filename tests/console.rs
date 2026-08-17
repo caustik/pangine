@@ -25,6 +25,8 @@ fn route_cycle_changes_its_complete_choice_after_repeated_outcomes() {
 fn setting_choice_collapses_three_linked_outputs_as_one_complete_result() {
     let stdout = run_example("settings-choice.pae");
 
+    assert!(!stdout.lines().any(|line| line.starts_with("ps?   ")));
+
     assert_eq!(command_results(&stdout, "$(['mode-choice']['amount-choice']['timing-choice'])"), vec!["x3([gentle][light][slow])x2([deep][fast][firm])"]);
     assert_eq!(
         command_results(&stdout, "['selected-settings'] = ^(([mode]->['mode-choice'])([amount]->['amount-choice'])([timing]->['timing-choice']))"),
