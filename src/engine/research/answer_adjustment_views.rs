@@ -39,9 +39,9 @@ fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
     let target = pangine.reference_percept("candidate");
     let helpful = pangine.reference_percept("helpful-action");
     let failed = pangine.reference_percept("failed-action");
-    let target_before = pangine.shared_answer_state(&target).expect("target answer");
-    let helpful_before = pangine.shared_answer_state(&helpful).expect("helpful answer");
-    let failed_before = pangine.shared_answer_state(&failed).expect("failed answer");
+    let target_before = pangine.shared_answer_revision(&target).expect("target answer");
+    let helpful_before = pangine.shared_answer_revision(&helpful).expect("helpful answer");
+    let failed_before = pangine.shared_answer_revision(&failed).expect("failed answer");
 
     let helpful_result = pangine
         .reference_concept("['action']->['tool'] @+= ['helpful-action']->['helpful-tool']")
@@ -51,10 +51,10 @@ fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
         helpful_result,
         must_ref(&mut pangine, "x2([inspect-symbols]->[dumpbin])([clean-build]->[cargo])([inspect-symbols]->[link-map])([reconfigure]->[cmake])",)
     );
-    let target_after_helpful = pangine.shared_answer_state(&target).expect("adjusted target answer");
+    let target_after_helpful = pangine.shared_answer_revision(&target).expect("adjusted target answer");
     assert_ne!(target_after_helpful, target_before);
-    assert_eq!(pangine.shared_answer_state(&helpful), Some(helpful_before));
-    assert_eq!(pangine.shared_answer_state(&failed), Some(failed_before));
+    assert_eq!(pangine.shared_answer_revision(&helpful), Some(helpful_before));
+    assert_eq!(pangine.shared_answer_revision(&failed), Some(failed_before));
 
     let failed_result = pangine
         .reference_concept("['action']->['tool'] @-= ['failed-action']->['failed-tool']")
@@ -64,10 +64,10 @@ fn explicit_answer_adjustment_runs_a_complete_console_decision_chain() {
         failed_result,
         must_ref(&mut pangine, "x2([inspect-symbols]->[dumpbin])([inspect-symbols]->[link-map])([reconfigure]->[cmake])!([clean-build]->[cargo])",)
     );
-    let target_after_failed = pangine.shared_answer_state(&target).expect("adjusted target answer");
+    let target_after_failed = pangine.shared_answer_revision(&target).expect("adjusted target answer");
     assert_ne!(target_after_failed, target_after_helpful);
-    assert_eq!(pangine.shared_answer_state(&helpful), Some(helpful_before));
-    assert_eq!(pangine.shared_answer_state(&failed), Some(failed_before));
+    assert_eq!(pangine.shared_answer_revision(&helpful), Some(helpful_before));
+    assert_eq!(pangine.shared_answer_revision(&failed), Some(failed_before));
 
     assert_eq!(
         must_ref(&mut pangine, "$['candidate']"),
@@ -125,16 +125,16 @@ fn explicit_answer_adjustment_coexists_with_addition_and_questions() {
 fn explicit_answer_adjustment_has_predictable_null_and_invalid_boundaries() {
     let mut pangine = troubleshooting_answers();
     let target = pangine.reference_percept("candidate");
-    let initial_state = pangine.shared_answer_state(&target).expect("target answer");
+    let initial_revision = pangine.shared_answer_revision(&target).expect("target answer");
 
     assert!(matches!(pangine.reference_concept("(['action'])(['helpful-tool']) @+= ['helpful-action']"), Err(ParseError::InvalidSyntax)));
-    assert_eq!(pangine.shared_answer_state(&target), Some(initial_state));
+    assert_eq!(pangine.shared_answer_revision(&target), Some(initial_revision));
 
     assert!(matches!(pangine.reference_concept("['action'] @+= [unlinked]"), Err(ParseError::InvalidSyntax)));
-    assert_eq!(pangine.shared_answer_state(&target), Some(initial_state));
+    assert_eq!(pangine.shared_answer_revision(&target), Some(initial_revision));
 
     assert!(matches!(pangine.reference_concept("['action'] @+="), Err(ParseError::InvalidSyntax)));
-    assert_eq!(pangine.shared_answer_state(&target), Some(initial_state));
+    assert_eq!(pangine.shared_answer_revision(&target), Some(initial_revision));
 
     let unchanged = pangine
         .reference_concept("['action']->['tool'] @+= ['helpful-candidate']")
@@ -144,8 +144,8 @@ fn explicit_answer_adjustment_has_predictable_null_and_invalid_boundaries() {
         unchanged,
         must_ref(&mut pangine, "([clean-build]->[cargo])([inspect-symbols]->[dumpbin])([inspect-symbols]->[link-map])([reconfigure]->[cmake])",)
     );
-    let unchanged_state = pangine.shared_answer_state(&target).expect("published no-match answer");
-    assert_ne!(unchanged_state, initial_state);
+    let unchanged_revision = pangine.shared_answer_revision(&target).expect("published no-match answer");
+    assert_ne!(unchanged_revision, initial_revision);
 
     assert!(pangine.reference_concept("['action']->['tool'] @-= ['action']->['tool']").expect("valid self-cancellation").is_none());
     assert!(pangine.reference_concept("$['action']").expect("valid read").is_none());
@@ -299,7 +299,7 @@ fn publishing_one_branch_advances_the_live_revision_and_rejects_a_stale_sibling(
     let base = linked_view(&mut pangine, "['animal']->['food']");
     let animal = must_ref(&mut pangine, "['animal']");
     let food = must_ref(&mut pangine, "['food']");
-    let initial_state_id = pangine.shared_answer_state(&animal).expect("linked answer");
+    let initial_revision = pangine.shared_answer_revision(&animal).expect("linked answer");
 
     let animal_first = base.projecting(&pangine, animal.clone()).expect("animal view").choose(&mut pangine).expect("animal choice");
     let food_first = base.projecting(&pangine, food.clone()).expect("food view").choose(&mut pangine).expect("food choice");
@@ -307,9 +307,9 @@ fn publishing_one_branch_advances_the_live_revision_and_rejects_a_stale_sibling(
     assert_eq!(food_first.selected, must_ref(&mut pangine, "[fish]"));
 
     let published = animal_first.answer.answer.publish(&mut pangine).expect("current branch publication");
-    assert_eq!(published.prior_state_id, initial_state_id);
-    assert_ne!(published.state_id, initial_state_id);
-    assert_eq!(pangine.shared_answer_state(&animal), Some(published.state_id));
+    assert_eq!(published.prior_revision, initial_revision);
+    assert_ne!(published.revision, initial_revision);
+    assert_eq!(pangine.shared_answer_revision(&animal), Some(published.revision));
     let live_animal = linked_view(&mut pangine, "['animal']->['food']");
     assert_projection(&mut pangine, &live_animal, "['animal']->['food']", "x3([cat]->[fish])x5([cat]->[milk])");
 
@@ -319,8 +319,8 @@ fn publishing_one_branch_advances_the_live_revision_and_rejects_a_stale_sibling(
     let food_after_animal = published.answer.view(&pangine, food).expect("current food view").choose(&mut pangine).expect("food choice after animal");
     assert_eq!(food_after_animal.selected, must_ref(&mut pangine, "[milk]"));
     let published_food = food_after_animal.answer.answer.publish(&mut pangine).expect("current descendant publication");
-    assert_eq!(published_food.prior_state_id, published.state_id);
-    assert_ne!(published_food.state_id, published.state_id);
+    assert_eq!(published_food.prior_revision, published.revision);
+    assert_ne!(published_food.revision, published.revision);
     let live_food = linked_view(&mut pangine, "['animal']->['food']");
     assert_projection(&mut pangine, &live_food, "['animal']->['food']", "x5([cat]->[milk])");
 }
@@ -333,20 +333,20 @@ fn functional_choice_and_publication_match_direct_collapse_for_single_and_comple
         let base = linked_view(&mut functional, "['animal']->['food']");
         let view = must_ref(&mut functional, projection);
         let animal = functional.reference_percept("animal");
-        let state_before = functional.shared_answer_state(&animal).expect("functional answer");
+        let revision_before = functional.shared_answer_revision(&animal).expect("functional answer");
         let choice = base.projecting(&functional, view).expect("functional view").choose(&mut functional).expect("functional choice");
         let published = choice.answer.answer.publish(&mut functional).expect("functional publication");
-        assert_eq!(published.prior_state_id, state_before);
-        assert_ne!(published.state_id, state_before);
+        assert_eq!(published.prior_revision, revision_before);
+        assert_ne!(published.revision, revision_before);
         let functional_live = linked_view(&mut functional, "['animal']->['food']");
         let functional_rows = project(&mut functional, &functional_live, "['animal']->['food']");
         let functional_rows = functional.format_concept(&functional_rows, false);
 
         let mut direct = weighted_animal_answer();
         let animal = direct.reference_percept("animal");
-        let direct_state_before = direct.shared_answer_state(&animal).expect("direct answer");
+        let direct_revision_before = direct.shared_answer_revision(&animal).expect("direct answer");
         must_ref(&mut direct, &format!("^({projection})"));
-        assert_ne!(direct.shared_answer_state(&animal), Some(direct_state_before));
+        assert_ne!(direct.shared_answer_revision(&animal), Some(direct_revision_before));
         let direct_live = linked_view(&mut direct, "['animal']->['food']");
         let direct_rows = project(&mut direct, &direct_live, "['animal']->['food']");
         let direct_rows = direct.format_concept(&direct_rows, false);
@@ -362,23 +362,23 @@ fn publishing_an_adjusted_answer_revises_only_the_target_and_keeps_its_captured_
     let base = linked_view(&mut pangine, "['action']->['tool']");
     let helpful = linked_view(&mut pangine, "['helpful-action']->['helpful-tool']");
     let failed = linked_view(&mut pangine, "['failed-action']->['failed-tool']");
-    let target_state_id = pangine.shared_answer_state(&base.projection).expect("target answer");
-    let helpful_state_id = pangine.shared_answer_state(&helpful.projection).expect("helpful answer");
-    let failed_state_id = pangine.shared_answer_state(&failed.projection).expect("failed answer");
+    let target_revision = pangine.shared_answer_revision(&base.projection).expect("target answer");
+    let helpful_revision = pangine.shared_answer_revision(&helpful.projection).expect("helpful answer");
+    let failed_revision = pangine.shared_answer_revision(&failed.projection).expect("failed answer");
 
     let adjusted = base.adjusted_by(&mut pangine, &helpful, Relevance::DEFAULT).expect("helpful adjustment");
     let adjusted = adjusted.adjusted_by(&mut pangine, &failed, Relevance::new(-1)).expect("failed adjustment");
 
     remember_episode(&mut pangine, "episode-map-helpful-later", "candidate-map", "inspect-symbols", "link-map", "helpful");
     must_ref(&mut pangine, &format!("['episodes'] @ {HELPFUL_QUESTION}"));
-    let refreshed_helpful_state_id = pangine.shared_answer_state(&helpful.projection).expect("refreshed helpful answer");
-    assert_ne!(refreshed_helpful_state_id, helpful_state_id);
+    let refreshed_helpful_revision = pangine.shared_answer_revision(&helpful.projection).expect("refreshed helpful answer");
+    assert_ne!(refreshed_helpful_revision, helpful_revision);
 
     let published = adjusted.answer.publish(&mut pangine).expect("current adjusted answer");
-    assert_eq!(published.prior_state_id, target_state_id);
-    assert_ne!(published.state_id, target_state_id);
-    assert_eq!(pangine.shared_answer_state(&helpful.projection), Some(refreshed_helpful_state_id));
-    assert_eq!(pangine.shared_answer_state(&failed.projection), Some(failed_state_id));
+    assert_eq!(published.prior_revision, target_revision);
+    assert_ne!(published.revision, target_revision);
+    assert_eq!(pangine.shared_answer_revision(&helpful.projection), Some(refreshed_helpful_revision));
+    assert_eq!(pangine.shared_answer_revision(&failed.projection), Some(failed_revision));
 
     let live = linked_view(&mut pangine, "['action']->['tool']");
     assert_projection(&mut pangine, &live, "['candidate']", "x2[candidate-dumpbin][candidate-map][candidate-reconfigure]![candidate-clean]");
@@ -411,11 +411,11 @@ fn publication_detects_a_new_live_collapse_revision() {
     let snapshot = linked_view(&mut pangine, "['animal']->['food']");
     let stale_branch = snapshot.choose(&mut pangine).expect("complete branch");
     let animal = must_ref(&mut pangine, "['animal']");
-    let state_before = pangine.shared_answer_state(&animal).expect("linked answer");
+    let revision_before = pangine.shared_answer_revision(&animal).expect("linked answer");
 
     assert_eq!(must_ref(&mut pangine, "^['animal']"), must_ref(&mut pangine, "[cat]"));
-    let state_after = pangine.shared_answer_state(&animal).expect("conditioned answer");
-    assert_ne!(state_after, state_before);
+    let revision_after = pangine.shared_answer_revision(&animal).expect("conditioned answer");
+    assert_ne!(revision_after, revision_before);
     assert_eq!(stale_branch.answer.answer.publish(&mut pangine).err(), Some(ResearchPublicationError::Stale));
 
     assert_projection(&mut pangine, &snapshot, "['animal']->['food']", "x3([cat]->[fish])x5([cat]->[milk])x7([dog]->[fish])");
@@ -435,11 +435,11 @@ fn extending_a_live_answer_stales_older_branches_instead_of_erasing_the_new_shap
 
     let original = linked_view(&mut pangine, "['animal']");
     let old_branch = original.choose(&mut pangine).expect("old animal branch");
-    let old_state_id = pangine.shared_answer_state(&original.projection).expect("original answer");
+    let old_revision = pangine.shared_answer_revision(&original.projection).expect("original answer");
 
     must_ref(&mut pangine, "['homes'] @ ['animal']->[lives-in]->['home']");
-    let new_state_id = pangine.shared_answer_state(&original.projection).expect("extended answer");
-    assert_ne!(new_state_id, old_state_id);
+    let new_revision = pangine.shared_answer_revision(&original.projection).expect("extended answer");
+    assert_ne!(new_revision, old_revision);
     let complete_shape = must_ref(&mut pangine, "(['animal']->[eats]->['food'])(['animal']->[lives-in]->['home'])");
     assert_eq!(must_ref(&mut pangine, "&['animal']"), complete_shape);
 
@@ -448,7 +448,6 @@ fn extending_a_live_answer_stales_older_branches_instead_of_erasing_the_new_shap
     assert_eq!(must_ref(&mut pangine, "&['home']"), complete_shape);
 
     let current = linked_view(&mut pangine, "['animal']");
-    assert_eq!(current.answer.origin.as_ref().map(|origin| origin.state_id), Some(new_state_id));
     let current_branch = current.choose(&mut pangine).expect("current extended branch");
     current_branch.answer.answer.publish(&mut pangine).expect("extended answer publication");
 
@@ -492,7 +491,7 @@ fn an_answer_cannot_be_identified_only_by_its_shape_and_materialized_concept() {
     assert_eq!(sole_source_percept(&right), pangine.reference_percept("right-memory"));
     assert_eq!(left.answer.publish(&mut pangine).err(), Some(ResearchPublicationError::Stale));
     let published = right.answer.publish(&mut pangine).expect("current answer");
-    assert_ne!(published.state_id, published.prior_state_id);
+    assert_ne!(published.revision, published.prior_revision);
 }
 
 #[test]

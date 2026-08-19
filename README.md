@@ -77,9 +77,13 @@ The last command shows `x2 [birds]` and `[traffic]`. `x2 [birds]` is the compact
 
 I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. The application supplies observations and current values, but the Pangine program should form and choose among candidates instead of hiding that decision in application code.
 
+Every Percept on the left of `@` is a source and can add support to matching results. When a current value should only restrict the question, read it with `$` inside the question instead.
+
 ## Shared answers
 
 Outputs from one question stay connected to the same complete answer. `&` reveals that answer's question shape, `$` reads it, and `^` removes complete rows that do not fit the chosen result.
+
+Every linked output stores that answer as the same ordinary versioned Concept. Rust can retrieve or install the Concept with `linked_answer_value` and `install_answer_value`.
 
 Suppose the memory contains `cat-fish` once, `cat-milk` twice, and `dog-fish` three times:
 
@@ -164,6 +168,8 @@ A Percept populated through `~=` remains a reference when another experience men
 | `^operand` | Choose and update every linked output |
 | `$['*']` | Inspect the ordinary Concepts currently live in the engine |
 
+At the interactive CLI prompt, `inspect operand` lists each linked possibility, its strength and complete-row count, every signed source contribution, and all current top ties. It is a console diagnostic, not `.pae` syntax.
+
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 
 ## Current scope
@@ -174,7 +180,7 @@ The current signed integer and deterministic choice rule are useful placeholders
 
 When Pangine remembers or replaces experience, it records the recursively reachable shapes and required fixed names while keeping each complete source intact. A question uses those records to find possible source experiences before running the full matcher. It does not walk every remembered experience unless the question is broad enough to require them. Question parts can work together within one complete experience, while a repeated Percept can join separate experiences. Equal complete answers then combine support without mixing unrelated partial rows.
 
-The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. The console exposes live target adjustment through `@+=` and `@-=`. Naming immutable Answer branches, compact source inspection, additional grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
+The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. The console exposes live target adjustment through `@+=` and `@-=` and compact source inspection through `inspect`. Naming immutable Answer branches, a language-level source form, additional grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
 
 The ordinary answer-cycle checks now re-ask a complete action-tool decision after recording new outcomes. Two additional failures change the later choice while leaving every untried possibility and its sources available. The same operations also choose an unordered action-tool-scope shape without any single-Percept rule. This demonstrates the core cycle under one explicit outcome policy; it does not establish that policy as universal.
 
@@ -197,7 +203,7 @@ cargo run --bin pangine-console -- examples/route-cycle.pae
 cargo run --bin pangine-console -- examples/settings-choice.pae
 ```
 
-The route program re-asks three complete routes, adjusts the linked answer from recorded results, and chooses the complete route. The settings program keeps three outputs linked and chooses them together. An application can replace the input assignments and read the selected outputs without ranking the choices itself. These are capability examples, not fixed application areas.
+The route program re-asks three complete routes, filters recorded episodes by the current result values, adjusts the linked answer from those episode sources, and chooses the complete route. The settings program keeps three outputs linked and chooses them together. An application can replace the input assignments and read the selected outputs without ranking the choices itself. These are capability examples, not fixed application areas.
 
 Run the normal suite with:
 

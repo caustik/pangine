@@ -150,9 +150,9 @@ pub enum CompletionRemainderSide {
 /// Retains unmatched structure rather than silently treating it as irrelevant.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CompletionRemainder {
-    side: CompletionRemainderSide,
-    ordered_path: Vec<usize>,
-    concept: ConceptId,
+    pub(super) side: CompletionRemainderSide,
+    pub(super) ordered_path: Vec<usize>,
+    pub(super) concept: ConceptId,
 }
 
 impl CompletionRemainder {
@@ -220,7 +220,31 @@ pub struct CompletionEvidence {
     adjusted_outputs: BTreeSet<ConceptId>,
 }
 
+pub(super) struct CompletionEvidenceParts {
+    pub(super) source: QuestionSource,
+    pub(super) clause: ConceptId,
+    pub(super) matched: ConceptId,
+    pub(super) routes: BTreeSet<CompletionRoute>,
+    pub(super) source_route_products: BTreeSet<CompletionRoute>,
+    pub(super) assignment: ProjectionAssignment,
+    pub(super) remainders: BTreeSet<CompletionRemainder>,
+    pub(super) contribution: Relevance,
+    pub(super) adjusted_outputs: BTreeSet<ConceptId>,
+}
+
 impl CompletionEvidence {
+    pub(super) fn from_parts(parts: CompletionEvidenceParts) -> Self {
+        let source_view = QuestionSourceView { source: parts.source, matched: parts.matched, routes: parts.routes };
+        let source = CompletionEvidenceSource {
+            clause: parts.clause,
+            source_view,
+            source_route_products: parts.source_route_products,
+            assignment: parts.assignment,
+            remainders: parts.remainders,
+        };
+        Self { source: Rc::new(source), contribution: parts.contribution, adjusted_outputs: parts.adjusted_outputs }
+    }
+
     /// Returns the question clause matched by this evidence.
     pub fn clause(&self) -> &ConceptId {
         &self.source.clause
@@ -334,6 +358,10 @@ impl CompletionEvidence {
         self.source.assignment.get(percept)
     }
 
+    pub(super) fn bindings(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
+        self.source.assignment.iter()
+    }
+
     /// Iterates over answer outputs that this evidence supports because it was
     /// imported through an explicit answer adjustment.
     ///
@@ -362,6 +390,10 @@ pub struct Completion {
 }
 
 impl Completion {
+    pub(super) fn from_parts(assignment: ProjectionAssignment, evidence: Vec<CompletionEvidence>) -> Self {
+        Self { assignment, evidence }
+    }
+
     /// Returns the value assigned to `percept` in this completion.
     pub fn binding(&self, percept: &ConceptId) -> Option<&ConceptId> {
         self.assignment.get(percept)
@@ -386,6 +418,10 @@ pub struct CompletionResult {
 }
 
 impl CompletionResult {
+    pub(super) fn from_parts(question: ConceptId, completions: Vec<Completion>) -> Self {
+        Self { question, completions }
+    }
+
     /// Returns the structural question supplied to the evaluator.
     pub fn question(&self) -> &ConceptId {
         &self.question
@@ -679,12 +715,20 @@ impl Pangine {
         let mut candidates = ConceptMap::new();
         for (candidate, sources) in witnesses {
             // The current integer rule adds distinct source witnesses. Keeping
-            // those witnesses in the answer state leaves room for a different
+            // those witnesses in the complete answer leaves room for a different
             // Relevance combination rule later.
             let support = self.question_source_support(&sources)?;
             self.add_relevance(&mut candidates, candidate, false, support)?;
         }
         Some(self.reference_map(&candidates))
+    }
+
+    pub(super) fn choose_completion_result(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<(ConceptId, CompletionResult)> {
+        let witnesses = self.completion_projection_witnesses(result, template)?;
+        let selected = self.select_projection_candidate(&witnesses)?;
+        let mut result = result.clone();
+        result.completions.retain(|completion| self.instantiate_completion_inner(template, &completion.assignment).as_ref() == Some(&selected));
+        (!result.completions.is_empty()).then_some((selected, result))
     }
 
     fn source_view_completions(&mut self, source: &ConceptId, question: &ConceptId) -> BTreeSet<StructuralCompletion> {

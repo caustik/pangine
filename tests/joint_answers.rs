@@ -11,7 +11,7 @@ fn question_outputs_project_one_shared_weighted_answer() {
 
     let joint = must_ref(&mut pangine, "$(['animal']->['food'])");
     assert_eq!(joint, must_ref(&mut pangine, "x3{[cat]->[fish]}x5{[cat]->[milk]}x7{[dog]->[fish]}"));
-    assert_eq!(must_ref(&mut pangine, "$(['animal']->['food'])"), joint, "projection must not change the answer state");
+    assert_eq!(must_ref(&mut pangine, "$(['animal']->['food'])"), joint, "projection must not change the shared answer");
 }
 
 #[test]
@@ -177,6 +177,27 @@ fn assigning_one_output_detaches_it_from_later_collapse() {
 }
 
 #[test]
+fn one_grouped_update_detaches_several_outputs_and_keeps_the_remainder_linked() {
+    let mut pangine = Pangine::new();
+    experience_row(&mut pangine, "[A]->[B]->[C]", 1);
+    experience_row(&mut pangine, "[D]->[E]->[F]", 1);
+    must_ref(&mut pangine, "['memory'] @ ['first']->['second']->['third']");
+    let first = pangine.reference_percept("first");
+    let second = pangine.reference_percept("second");
+    let first_value = must_ref(&mut pangine, "[replaced-first]");
+    let second_value = must_ref(&mut pangine, "[replaced-second]");
+
+    pangine.set_percept_values(&[(first.clone(), Some(first_value.clone())), (second.clone(), Some(second_value.clone()))]).expect("one grouped detachment");
+
+    assert_eq!(pangine.get_value(&first), Some(first_value));
+    assert_eq!(pangine.get_value(&second), Some(second_value));
+    assert_null(&mut pangine, "&['first']");
+    assert_null(&mut pangine, "&['second']");
+    assert_eq!(must_ref(&mut pangine, "&['third']"), pangine.reference_percept("third"));
+    assert_eq!(must_ref(&mut pangine, "$['third']"), must_ref(&mut pangine, "[C][F]"));
+}
+
+#[test]
 fn detaching_one_output_hides_only_the_answer_shapes_that_contain_it() {
     let mut pangine = Pangine::new();
     experience_in(&mut pangine, "meals", "[cat]->[eats]->[fish]", 1);
@@ -284,7 +305,7 @@ fn sequential_extension_keeps_equal_values_at_different_source_positions_separat
 }
 
 #[test]
-fn separate_questions_keep_separate_answer_states() {
+fn separate_questions_keep_separate_answer_values() {
     let mut pangine = weighted_animals();
     ask(&mut pangine);
     must_ref(&mut pangine, "['other'] ~= [red]->[round]");

@@ -1,23 +1,9 @@
-use super::{Completion, CompletionResult, ConceptId, Pangine};
+use super::{concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, Completion, CompletionResult, ConceptId, Pangine};
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 type SourceContributionKey = (ConceptId, ConceptId, Relevance, Relevance);
-
-#[derive(Clone)]
-pub(super) struct StoredAnswer {
-    pub(super) result: Rc<CompletionResult>,
-    pub(super) outputs: BTreeSet<ConceptId>,
-    pub(super) questions: BTreeSet<ConceptId>,
-}
-
-#[derive(Clone)]
-pub(super) struct AnswerOrigin {
-    pub(super) state_id: usize,
-    pub(super) outputs: BTreeSet<ConceptId>,
-    pub(super) questions: BTreeSet<ConceptId>,
-}
 
 /// An immutable proof-bearing answer snapshot.
 ///
@@ -29,7 +15,7 @@ pub(super) struct AnswerOrigin {
 pub struct Answer {
     pub(super) result: Rc<CompletionResult>,
     pub(super) shape: ConceptId,
-    pub(super) origin: Option<Rc<AnswerOrigin>>,
+    pub(super) origin: Option<ConceptId>,
 }
 
 impl Answer {
@@ -61,10 +47,10 @@ impl Answer {
         Some(AnswerView { answer: self.clone(), projection })
     }
 
-    /// Replaces the live answer revision from which this snapshot was derived.
+    /// Replaces the live answer Concept from which this snapshot was derived.
     ///
     /// Publication fails when another operation has already changed or
-    /// detached any output in that revision.
+    /// detached any output linked to that Concept.
     pub fn publish(&self, pangine: &mut Pangine) -> Result<AnswerPublication, AnswerPublicationError> {
         pangine.publish_answer(self)
     }
@@ -163,14 +149,7 @@ impl AnswerView {
             return None;
         }
 
-        let witnesses = pangine.completion_projection_witnesses(&self.answer.result, &self.projection)?;
-        let selected = pangine.select_projection_candidate(&witnesses)?;
-        let mut result = self.answer.result.as_ref().clone();
-        result.completions.retain(|completion| pangine.instantiate_completion(&self.projection, completion).as_ref() == Some(&selected));
-        if result.completions.is_empty() {
-            return None;
-        }
-
+        let (selected, result) = pangine.choose_completion_result(&self.answer.result, &self.projection)?;
         let answer = self.answer.derived(result);
         Some(AnswerChoice { selected, answer: answer.view(pangine, self.projection.clone())? })
     }
@@ -408,11 +387,11 @@ impl AnswerAdjustment {
     }
 }
 
-/// The result of replacing one current live answer revision.
+/// The result of replacing one current live answer Concept.
 pub struct AnswerPublication {
     pub(super) answer: Answer,
-    pub(super) prior_state_id: usize,
-    pub(super) state_id: usize,
+    pub(super) prior_revision: usize,
+    pub(super) revision: usize,
 }
 
 impl AnswerPublication {
@@ -428,12 +407,12 @@ impl AnswerPublication {
 
     /// Returns the live revision replaced by this publication.
     pub fn prior_revision(&self) -> usize {
-        self.prior_state_id
+        self.prior_revision
     }
 
     /// Returns the new live revision created by this publication.
     pub fn revision(&self) -> usize {
-        self.state_id
+        self.revision
     }
 }
 
@@ -471,8 +450,8 @@ impl Pangine {
         if !self.owns(concept) {
             return None;
         }
-        let state_id = self.shared_answer_state(concept)?;
-        self.answer_from_state(state_id)
+        let (value, live) = self.shared_live_answer(concept)?;
+        self.answer_from_live_value(value, live)
     }
 
     /// Returns an immutable live-answer snapshot viewed through `projection`.
@@ -480,22 +459,10 @@ impl Pangine {
         self.answer_snapshot(projection)?.view(self, projection.clone())
     }
 
-    pub(super) fn insert_answer_state(&mut self, state: StoredAnswer) -> usize {
-        let state_id = self.next_answer_state_id;
-        self.next_answer_state_id += 1;
-        for output in &state.outputs {
-            self.percept_answer_states.insert(output.index(), state_id);
-        }
-        self.answer_states.insert(state_id, state);
-        state_id
-    }
-
-    pub(super) fn answer_from_state(&mut self, state_id: usize) -> Option<Answer> {
-        let state = self.answer_states.get(&state_id)?.clone();
-        let components = self.visible_answer_components(&state);
-        let shape = self.answer_shape(&components)?;
-        let origin = AnswerOrigin { state_id, outputs: state.outputs, questions: state.questions };
-        Some(Answer { result: state.result, shape, origin: Some(Rc::new(origin)) })
+    fn answer_from_live_value(&mut self, value: ConceptId, live: LiveConceptAnswer) -> Option<Answer> {
+        let shape = live.answer.shape(self)?;
+        let result = Rc::new(live.answer.to_result(self)?);
+        Some(Answer { result, shape, origin: Some(value) })
     }
 
     fn owns_answer(&self, answer: &Answer) -> bool {
@@ -510,29 +477,24 @@ impl Pangine {
         }
 
         let origin = answer.origin.as_ref().ok_or(AnswerPublicationError::Detached)?;
-        if origin.outputs.iter().chain(&origin.questions).any(|concept| !self.owns(concept)) {
+        if !self.owns(origin) {
             return Err(AnswerPublicationError::ForeignAnswer);
         }
+        let expected = LiveConceptAnswer::decode(self, origin).ok_or(AnswerPublicationError::InvalidAnswer)?;
 
-        let state = self.answer_states.get(&origin.state_id).ok_or(AnswerPublicationError::Stale)?;
-        if state.outputs != origin.outputs || state.questions != origin.questions {
-            return Err(AnswerPublicationError::Stale);
-        }
-        if origin.outputs.iter().any(|output| self.percept_answer_states.get(&output.index()) != Some(&origin.state_id)) {
+        if expected.answer.outputs.iter().any(|output| self.percept_values.get(&output.index()) != Some(origin)) {
             return Err(AnswerPublicationError::Stale);
         }
 
-        let projections = self.materialize_answer_projections(&answer.result, &origin.outputs).ok_or(AnswerPublicationError::InvalidAnswer)?;
-        self.answer_states.remove(&origin.state_id);
-        for output in &origin.outputs {
-            self.percept_answer_states.remove(&output.index());
-        }
-        self.write_answer_projections(projections);
-
-        let state_id =
-            self.insert_answer_state(StoredAnswer { result: answer.result.clone(), outputs: origin.outputs.clone(), questions: origin.questions.clone() });
-        let answer = self.answer_from_state(state_id).ok_or(AnswerPublicationError::InvalidAnswer)?;
-        Ok(AnswerPublication { answer, prior_state_id: origin.state_id, state_id })
+        let mut concept_answer = ConceptAnswer::from_result(self, &answer.result);
+        concept_answer.outputs = expected.answer.outputs;
+        concept_answer.questions = expected.answer.questions;
+        let prior_revision = expected.revision;
+        let live = LiveConceptAnswer::successor(self, prior_revision, concept_answer).ok_or(AnswerPublicationError::InvalidAnswer)?;
+        let value = self.install_live_answer(live.clone()).ok_or(AnswerPublicationError::InvalidAnswer)?;
+        let revision = live.revision;
+        let answer = self.answer_from_live_value(value, live).ok_or(AnswerPublicationError::InvalidAnswer)?;
+        Ok(AnswerPublication { answer, prior_revision, revision })
     }
 }
 

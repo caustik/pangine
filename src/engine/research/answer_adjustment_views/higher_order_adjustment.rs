@@ -79,26 +79,26 @@ fn explicit_answer_adjustment_can_publish_a_three_layer_console_chain() {
     let candidate = pangine.reference_percept("candidate");
     let episode = pangine.reference_percept("episode");
     let trusted_episode = pangine.reference_percept("trusted-episode");
-    let candidate_before = pangine.shared_answer_state(&candidate).expect("candidate answer");
-    let episode_before = pangine.shared_answer_state(&episode).expect("outcome answer");
-    let trusted_before = pangine.shared_answer_state(&trusted_episode).expect("reliability answer");
+    let candidate_before = pangine.shared_answer_revision(&candidate).expect("candidate answer");
+    let episode_before = pangine.shared_answer_revision(&episode).expect("outcome answer");
+    let trusted_before = pangine.shared_answer_revision(&trusted_episode).expect("reliability answer");
 
     assert_eq!(
         pangine.reference_concept("['episode'] @+= ['trusted-episode']").expect("valid trust adjustment"),
         Some(must_ref(&mut pangine, "x2[episode-b][episode-a]"))
     );
-    let episode_after = pangine.shared_answer_state(&episode).expect("adjusted outcome answer");
+    let episode_after = pangine.shared_answer_revision(&episode).expect("adjusted outcome answer");
     assert_ne!(episode_after, episode_before);
-    assert_eq!(pangine.shared_answer_state(&candidate), Some(candidate_before));
-    assert_eq!(pangine.shared_answer_state(&trusted_episode), Some(trusted_before));
+    assert_eq!(pangine.shared_answer_revision(&candidate), Some(candidate_before));
+    assert_eq!(pangine.shared_answer_revision(&trusted_episode), Some(trusted_before));
 
     assert_eq!(
         pangine.reference_concept("['decision'] @+= ['episode-decision']").expect("valid decision adjustment"),
         Some(must_ref(&mut pangine, "x3[B]x2[A]"))
     );
-    assert_ne!(pangine.shared_answer_state(&candidate), Some(candidate_before));
-    assert_eq!(pangine.shared_answer_state(&episode), Some(episode_after));
-    assert_eq!(pangine.shared_answer_state(&trusted_episode), Some(trusted_before));
+    assert_ne!(pangine.shared_answer_revision(&candidate), Some(candidate_before));
+    assert_eq!(pangine.shared_answer_revision(&episode), Some(episode_after));
+    assert_eq!(pangine.shared_answer_revision(&trusted_episode), Some(trusted_before));
     assert_eq!(must_ref(&mut pangine, "$['candidate']"), must_ref(&mut pangine, "x3[choice-b]x2[choice-a]"));
     assert_eq!(must_ref(&mut pangine, "^['decision']"), must_ref(&mut pangine, "[B]"));
     assert_eq!(must_ref(&mut pangine, "$['candidate']"), must_ref(&mut pangine, "x3[choice-b]"));

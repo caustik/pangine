@@ -11,15 +11,16 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 mod answer;
 mod completion;
+mod concept_answer;
 mod concept_map;
 mod question_index;
 
-use answer::StoredAnswer;
 pub use answer::{Answer, AnswerAdjustment, AnswerChoice, AnswerPossibility, AnswerPublication, AnswerPublicationError, AnswerSourceContribution, AnswerView};
 pub use completion::{
     Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
     CompletionResult, CompletionRoute,
 };
+use concept_answer::{ConceptAnswer, LiveConceptAnswer};
 use concept_map::ConceptMap;
 use question_index::PerceptQuestionIndex;
 
@@ -116,8 +117,9 @@ pub const GLOBAL_PERCEPT_NAME: &str = "*";
 
 const DEBUG_CONSOLE_HELP: &str = "\
 Commands:
-  help, h        Show this help
-  quit, q        Exit
+  help, h          Show this help
+  inspect operand  Show linked values and the sources behind their strengths
+  quit, q          Exit
 
 Concept syntax:
   []                         Null / no Concept
@@ -142,7 +144,7 @@ Percept operations:
   ['source'] @ expression    Complete one retained Percept source
   ['a']['b'] @ expression   Complete several retained sources together
   &operand                   Return the shared answer shape for linked Percepts
-  $operand                   Read Percepts without changing their answer state
+  $operand                   Read Percepts without changing their shared answer
   ['target'] @+= ['evidence'] Add matching evidence to a linked Answer
   ['target'] @-= ['evidence'] Subtract matching evidence from a linked Answer
   $['*']                     Inspect all live ordinary Concepts
@@ -389,17 +391,13 @@ pub struct Pangine {
     percept_question_indexes: BTreeMap<usize, PerceptQuestionIndex>,
     // Disposable materialization cache derived from the Percept subconcepts.
     percept_value_maps: BTreeMap<usize, ConceptMap>,
+    // A linked output stores one versioned answer Concept here. Public value
+    // reads return the projection cached inside that same Concept.
     percept_values: BTreeMap<usize, ConceptId>,
     // Percepts updated as replaceable current values are input/output Percepts
     // when experience is captured. Percepts populated by experience remain
     // references unless evaluation is explicitly requested with `$`.
     current_value_percepts: BTreeSet<usize>,
-    // Each question keeps its correlated completions while any output Percept
-    // still refers to them. `$` projects this state without changing it. `^`
-    // filters it and rematerializes every output that remains linked.
-    next_answer_state_id: usize,
-    answer_states: BTreeMap<usize, StoredAnswer>,
-    percept_answer_states: BTreeMap<usize, usize>,
     composites: Vec<Weak<Concept>>,
     // Local accelerator for the existing weak canonical registry. Complete
     // equality, not the fingerprint, still determines Concept identity.
@@ -425,9 +423,6 @@ impl Default for Pangine {
             percept_value_maps: BTreeMap::new(),
             percept_values: BTreeMap::new(),
             current_value_percepts: BTreeSet::new(),
-            next_answer_state_id: 0,
-            answer_states: BTreeMap::new(),
-            percept_answer_states: BTreeMap::new(),
             composites: Vec::new(),
             composite_lookup: CompositeLookup::new(),
             next_index_prune_size: 2,
@@ -614,8 +609,11 @@ impl Pangine {
         };
 
         let experience = self.evaluate_experience_concept(experience)?;
+        if self.live_answer_value(percept).is_some() {
+            let projection = self.get_value(percept);
+            self.set_percept_values(&[(percept.clone(), projection)]).ok()?;
+        }
         self.record_experience(percept, &experience)?;
-        self.detach_answer_percept(percept);
         self.current_value_percepts.remove(&percept.index());
         self.materialize_percept_value(percept)
     }
@@ -633,7 +631,10 @@ impl Pangine {
         }
     }
 
-    /// Returns the current value of an owned percept.
+    /// Returns the current visible value of an owned Percept.
+    ///
+    /// A linked question output returns its projection from the ordinary answer
+    /// Concept shared by that answer's outputs.
     pub fn get_value(&self, concept: &ConceptId) -> Option<ConceptId> {
         if !self.is_percept(concept) {
             return None;
@@ -643,22 +644,22 @@ impl Pangine {
             return self.global_value();
         }
 
-        self.percept_values.get(&concept.index()).cloned()
+        let value = self.percept_values.get(&concept.index())?.clone();
+        if let Some((_, live)) = self.live_answer_value(concept) {
+            if let Some(projection) = live.projection(concept) {
+                return projection;
+            }
+        }
+        Some(value)
     }
 
     /// Replaces a mutable Percept's current value, returning whether the input was valid.
     ///
     /// A Percept set through this operation is evaluated automatically when it
     /// appears inside a later experience. Assigning a question output also
-    /// detaches it from that question's shared answer state.
+    /// detaches it from that question's shared answer.
     pub fn set_percept_value(&mut self, percept: &ConceptId, value: Option<ConceptId>) -> bool {
-        if !self.is_mutable_percept(percept) || value.as_ref().is_some_and(|concept| !self.owns(concept)) {
-            return false;
-        }
-
-        self.detach_answer_percept(percept);
-        self.write_current_percept_value(percept, value);
-        true
+        self.set_percept_values(&[(percept.clone(), value)]).is_ok()
     }
 
     /// Replaces several mutable Percept values as one validated update.
@@ -681,8 +682,30 @@ impl Pangine {
             }
         }
 
+        let mut detached = Vec::new();
+        let mut visited_values = BTreeSet::new();
+        for percept in &supplied_percepts {
+            let Some((answer_value, live)) = self.live_answer_value(percept) else {
+                continue;
+            };
+            if !visited_values.insert(answer_value.clone()) {
+                continue;
+            }
+
+            let outputs = live.answer.outputs.clone();
+            let mut answer = Some(live.answer);
+            for output in outputs.intersection(&supplied_percepts) {
+                answer = answer.and_then(|answer| answer.detach(self, output));
+            }
+            if let Some(answer) = answer {
+                detached.push(LiveConceptAnswer::successor(self, live.revision, answer).ok_or(PerceptUpdateError::InvalidPercept)?);
+            }
+        }
+
+        for live in detached {
+            self.install_live_answer(live).ok_or(PerceptUpdateError::InvalidPercept)?;
+        }
         for (percept, value) in updates {
-            self.detach_answer_percept(percept);
             self.write_current_percept_value(percept, value.clone());
         }
         Ok(())
@@ -708,7 +731,11 @@ impl Pangine {
     /// single default-coefficient entry.
     pub fn get_relevance_map(&self, concept: &ConceptId) -> Vec<(Relevance, ConceptId)> {
         let map = if self.is_mutable_percept(concept) {
-            self.percept_subconcepts.get(&concept.index()).into_iter().flatten().map(|(concept, &relevance)| (relevance, concept.clone())).collect()
+            if self.live_answer_value(concept).is_some() {
+                self.get_value(concept).into_iter().map(|value| (Relevance::DEFAULT, value)).collect()
+            } else {
+                self.percept_subconcepts.get(&concept.index()).into_iter().flatten().map(|(concept, &relevance)| (relevance, concept.clone())).collect()
+            }
         } else {
             self.relevance_entries(concept).unwrap_or_default()
         };
@@ -730,6 +757,41 @@ impl Pangine {
         // `$` is still the explicit value evaluation operation.
         let entries = self.sorted_relevance_entries(self.relevance_entries(concept).unwrap_or_default());
         entries.into_iter().map(|(relevance, concept)| self.format_debug_console_line(relevance, &concept)).collect()
+    }
+
+    fn debug_answer_inspection_lines(&mut self, operand: &str) -> Result<Vec<String>, String> {
+        if operand.is_empty() {
+            return Err("inspect expects one linked Answer operand".to_owned());
+        }
+
+        let concept =
+            self.reference_concept(operand).map_err(|error| error.to_string())?.ok_or_else(|| "inspect expects one linked Answer operand".to_owned())?;
+        let answer = self.answer_view(&concept).ok_or_else(|| "operand is not part of one linked Answer".to_owned())?;
+        let possibilities = answer.possibilities(self).ok_or_else(|| "linked Answer could not be inspected".to_owned())?;
+        if possibilities.is_empty() {
+            return Ok(vec!["  no possibilities".to_owned()]);
+        }
+
+        let mut lines = Vec::new();
+        for possibility in possibilities {
+            let marker = if possibility.is_top_tie() { '*' } else { ' ' };
+            let rows = possibility.complete_rows();
+            let row_label = if rows == 1 { "row" } else { "rows" };
+            let value = self.format_concept(possibility.value(), false);
+            lines.push(format!("  {marker} {:+}, {rows} {row_label}: {value}", possibility.strength().weight()));
+
+            let mut sources = possibility
+                .sources()
+                .iter()
+                .map(|source| (self.format_concept(source.subject(), false), self.format_concept(source.concept(), false), source.contribution().weight()))
+                .collect::<Vec<_>>();
+            sources.sort();
+
+            for (subject, source, contribution) in sources {
+                lines.push(format!("      {contribution:+} from {subject}: {source}"));
+            }
+        }
+        Ok(lines)
     }
 
     /// Formats an owned concept as canonical Pangine syntax.
@@ -769,6 +831,18 @@ impl Pangine {
 
             if let Some(help) = debug_console_help(script) {
                 print!("{help}");
+                continue;
+            }
+
+            if let Some(operand) = debug_console_inspection_operand(script) {
+                match self.debug_answer_inspection_lines(operand) {
+                    Ok(lines) => {
+                        for line in lines {
+                            println!("{line}");
+                        }
+                    }
+                    Err(error) => println!("  {error}"),
+                }
                 continue;
             }
 
@@ -1254,24 +1328,71 @@ impl Pangine {
     }
 
     fn write_current_percept_value(&mut self, percept: &ConceptId, value: Option<ConceptId>) {
-        // Answer-state callers intentionally keep or replace linkage themselves.
+        if let Some(value) = value.as_ref() {
+            if let Some(live) = LiveConceptAnswer::decode_validated(self, value) {
+                if let Some(projection) = live.projection(percept) {
+                    let _ = self.write_live_answer_value(percept, value, projection);
+                    return;
+                }
+            }
+        }
         let subconcepts = value.into_iter().map(|concept| (concept, Relevance::DEFAULT)).collect();
         self.set_percept_subconcepts(percept, subconcepts);
         self.current_value_percepts.insert(percept.index());
     }
 
-    fn detach_answer_percept(&mut self, percept: &ConceptId) {
-        let Some(state_id) = self.percept_answer_states.remove(&percept.index()) else {
-            return;
-        };
-
-        let Some(mut state) = self.answer_states.remove(&state_id) else {
-            return;
-        };
-        state.outputs.remove(percept);
-        if !state.outputs.is_empty() {
-            self.insert_answer_state(state);
+    fn live_answer_value(&self, percept: &ConceptId) -> Option<(ConceptId, LiveConceptAnswer)> {
+        let value = self.percept_values.get(&percept.index())?.clone();
+        let live = LiveConceptAnswer::decode(self, &value)?;
+        if !live.answer.outputs.contains(percept) || live.answer.outputs.iter().any(|output| self.percept_values.get(&output.index()) != Some(&value)) {
+            return None;
         }
+        Some((value, live))
+    }
+
+    fn question_source_map(&self, percept: &ConceptId) -> Option<ConceptMap> {
+        if let Some((_, live)) = self.live_answer_value(percept) {
+            let projection = live.projection(percept)?;
+            return Some(projection.into_iter().map(|concept| (concept, Relevance::DEFAULT)).collect());
+        }
+        self.percept_subconcepts.get(&percept.index()).cloned()
+    }
+
+    fn shared_live_answer(&self, concept: &ConceptId) -> Option<(ConceptId, LiveConceptAnswer)> {
+        let mut outputs = BTreeSet::new();
+        self.collect_output_percepts(concept, &mut outputs);
+        let first = outputs.first()?;
+        let (value, live) = self.live_answer_value(first)?;
+        if !outputs.is_subset(&live.answer.outputs) {
+            return None;
+        }
+        Some((value, live))
+    }
+
+    fn write_live_answer_value(&mut self, output: &ConceptId, value: &ConceptId, projection: Option<ConceptId>) -> Option<()> {
+        let mut subconcepts = ConceptMap::new();
+        subconcepts.insert(value.clone(), Relevance::DEFAULT);
+        self.set_percept_subconcepts(output, subconcepts)?;
+        match projection {
+            Some(projection) => {
+                self.percept_question_indexes.insert(output.index(), PerceptQuestionIndex::from_sources([&projection]));
+            }
+            None => {
+                self.percept_question_indexes.remove(&output.index());
+            }
+        }
+        self.current_value_percepts.insert(output.index());
+        Some(())
+    }
+
+    fn install_live_answer(&mut self, live: LiveConceptAnswer) -> Option<ConceptId> {
+        let projections =
+            live.answer.outputs.iter().map(|output| live.projection(output).map(|projection| (output.clone(), projection))).collect::<Option<Vec<_>>>()?;
+        let value = live.encode(self);
+        for (output, projection) in projections {
+            self.write_live_answer_value(&output, &value, projection)?;
+        }
+        Some(value)
     }
 
     fn record_experience(&mut self, percept: &ConceptId, experience: &ConceptId) -> Option<()> {
@@ -1470,59 +1591,64 @@ impl Pangine {
             return self.materialize_completion_rows(&result);
         }
 
-        let prior_state_ids = outputs.iter().filter_map(|output| self.percept_answer_states.get(&output.index()).copied()).collect::<BTreeSet<_>>();
-        let replaces_answer = prior_state_ids.is_empty()
-            || (prior_state_ids.len() == 1
-                && prior_state_ids.first().and_then(|state_id| self.answer_states.get(state_id)).is_some_and(|state| state.outputs == outputs));
+        let mut prior = BTreeMap::<ConceptId, LiveConceptAnswer>::new();
+        for output in &outputs {
+            let Some((value, live)) = self.live_answer_value(output) else {
+                continue;
+            };
+            prior.insert(value, live);
+        }
+        let replaces_answer = prior.is_empty() || (prior.len() == 1 && prior.values().next().is_some_and(|live| live.answer.outputs == outputs));
         if replaces_answer {
-            return self.install_answer_state(result, outputs, BTreeSet::from([question.clone()]), prior_state_ids, &question);
+            return self.install_answer_result(result, outputs, BTreeSet::from([question.clone()]), prior.values(), &question);
         }
         if result.completions().is_empty() {
             return None;
         }
 
-        let prior_states = prior_state_ids.iter().map(|state_id| self.answer_states.get(state_id).cloned()).collect::<Option<Vec<_>>>()?;
         let mut linked_outputs = outputs.clone();
         let mut questions = BTreeSet::from([question.clone()]);
-        for state in &prior_states {
-            linked_outputs.extend(state.outputs.iter().cloned());
-            questions.extend(self.visible_answer_components(state));
+        for live in prior.values() {
+            linked_outputs.extend(live.answer.outputs.iter().cloned());
+            questions.extend(live.answer.visible_components(self));
         }
         let answer_shape = self.answer_shape(&questions)?;
         let mut joined_outputs = outputs;
-        for state in prior_states {
-            result = self.join_completion_results(&state.result, &state.outputs, &result, &joined_outputs, &answer_shape);
-            joined_outputs.extend(state.outputs);
+        for live in prior.values() {
+            let prior_result = live.answer.to_result(self)?;
+            result = self.join_completion_results(&prior_result, &live.answer.outputs, &result, &joined_outputs, &answer_shape);
+            joined_outputs.extend(live.answer.outputs.iter().cloned());
             if result.completions().is_empty() {
                 return None;
             }
         }
 
-        self.install_answer_state(result, linked_outputs, questions, prior_state_ids, &answer_shape)
+        self.install_answer_result(result, linked_outputs, questions, prior.values(), &answer_shape)
     }
 
-    fn install_answer_state(
+    fn install_answer_result<'a>(
         &mut self,
         result: CompletionResult,
         outputs: BTreeSet<ConceptId>,
         questions: BTreeSet<ConceptId>,
-        replaced_state_ids: BTreeSet<usize>,
+        replaced: impl IntoIterator<Item = &'a LiveConceptAnswer>,
         row_template: &ConceptId,
     ) -> Option<ConceptId> {
         let rows = self.materialize_completion_rows_for(&result, row_template);
-        let projection_results = self.materialize_answer_projections(&result, &outputs)?;
-
-        for state_id in replaced_state_ids {
-            if let Some(state) = self.answer_states.remove(&state_id) {
-                for output in state.outputs {
-                    self.percept_answer_states.remove(&output.index());
-                }
+        let revision = match replaced.into_iter().map(|live| live.revision).max() {
+            Some(revision) => revision.checked_add(1)?,
+            None => 0,
+        };
+        if result.completions().is_empty() {
+            for output in outputs {
+                self.write_current_percept_value(&output, None);
             }
-        }
-        self.write_answer_projections(projection_results);
-
-        if !result.completions().is_empty() {
-            self.insert_answer_state(StoredAnswer { result: Rc::new(result), outputs, questions });
+        } else {
+            let mut answer = ConceptAnswer::from_result(self, &result);
+            answer.outputs = outputs;
+            answer.questions = questions;
+            let live = LiveConceptAnswer::new(self, revision, answer)?;
+            self.install_live_answer(live)?;
         }
 
         rows
@@ -1535,12 +1661,11 @@ impl Pangine {
             .flat_map(|percept| {
                 let index = percept.index();
                 let candidates = self.percept_question_indexes.get(&index).map(|index| index.candidate_sources(&patterns)).unwrap_or_default();
-                let subconcepts = self.percept_subconcepts.get(&index);
-                debug_assert_eq!(subconcepts.is_some(), self.percept_question_indexes.contains_key(&index));
+                let subconcepts = self.question_source_map(percept);
                 candidates
                     .into_iter()
                     .filter_map(|concept| {
-                        let relevance = subconcepts?.get(&concept)?;
+                        let relevance = subconcepts.as_ref()?.get(&concept)?;
                         Some(QuestionSource::from_percept(percept.clone(), concept, *relevance))
                     })
                     .collect::<Vec<_>>()
@@ -1742,9 +1867,8 @@ impl Pangine {
         if !self.owns(concept) {
             return None;
         }
-        if let Some(state_id) = self.shared_answer_state(concept) {
-            let answer = self.answer_from_state(state_id)?;
-            return answer.view(self, concept.clone())?.materialize(self);
+        if let Some((_, live)) = self.shared_live_answer(concept) {
+            return live.answer.materialize(self, concept);
         }
         self.evaluate_concept_inner(concept, &mut BTreeSet::new(), PerceptEvaluation::All)
     }
@@ -1824,7 +1948,7 @@ impl Pangine {
     }
 }
 
-// Experience/question projection and answer-state conditioning.
+// Experience/question projection and shared-answer conditioning.
 impl Pangine {
     /// Returns the shared answer shape linked to every Percept in `concept`.
     ///
@@ -1834,7 +1958,35 @@ impl Pangine {
     /// containing an unlinked Percept or Percepts from different answers has
     /// no linked answer.
     pub fn linked_answer(&mut self, concept: &ConceptId) -> Option<ConceptId> {
-        Some(self.answer_snapshot(concept)?.shape().clone())
+        self.shared_live_answer(concept)?.1.answer.shape(self)
+    }
+
+    /// Returns the ordinary versioned answer Concept shared by every output in
+    /// `concept`.
+    ///
+    /// The returned value contains the complete rows, proof details, active
+    /// outputs, cached projections, and current revision. It can be formatted,
+    /// parsed by another engine, and installed on its encoded output group. The
+    /// exact encoding is not yet a persistence compatibility promise.
+    pub fn linked_answer_value(&self, concept: &ConceptId) -> Option<ConceptId> {
+        Some(self.shared_live_answer(concept)?.0)
+    }
+
+    /// Installs an owned versioned answer Concept on the output group encoded
+    /// inside it.
+    ///
+    /// The complete group is validated before any Percept changes. Existing
+    /// linked outputs outside the installed group are detached in the same way
+    /// as an ordinary grouped update.
+    pub fn install_answer_value(&mut self, value: &ConceptId) -> bool {
+        if !self.owns(value) {
+            return false;
+        }
+        let Some(live) = LiveConceptAnswer::decode_validated(self, value) else {
+            return false;
+        };
+        let updates = live.answer.outputs.into_iter().map(|output| (output, Some(value.clone()))).collect::<Vec<_>>();
+        self.set_percept_values(&updates).is_ok()
     }
 
     fn answer_shape(&mut self, concepts: &BTreeSet<ConceptId>) -> Option<ConceptId> {
@@ -1851,55 +2003,16 @@ impl Pangine {
         self.reference_union(&operands).ok().flatten()
     }
 
-    fn visible_answer_components(&self, state: &StoredAnswer) -> BTreeSet<ConceptId> {
-        let mut components = BTreeSet::new();
-        let mut represented_outputs = BTreeSet::new();
-        for question in &state.questions {
-            let mut question_outputs = BTreeSet::new();
-            self.collect_output_percepts(question, &mut question_outputs);
-            if !question_outputs.is_empty() && question_outputs.is_subset(&state.outputs) {
-                components.insert(question.clone());
-                represented_outputs.extend(question_outputs);
-            }
-        }
-        components.extend(state.outputs.difference(&represented_outputs).cloned());
-        components
+    #[cfg(test)]
+    fn shared_answer_revision(&self, concept: &ConceptId) -> Option<usize> {
+        Some(self.shared_live_answer(concept)?.1.revision)
     }
 
-    fn shared_answer_state(&self, concept: &ConceptId) -> Option<usize> {
-        let mut percepts = BTreeSet::new();
-        self.collect_output_percepts(concept, &mut percepts);
-        let mut state_ids = percepts.into_iter().map(|percept| self.percept_answer_states.get(&percept.index()).copied()).collect::<Option<BTreeSet<_>>>()?;
-        if state_ids.len() == 1 {
-            state_ids.pop_first()
-        } else {
-            None
-        }
-    }
-
-    fn materialize_answer_projections(&mut self, result: &CompletionResult, outputs: &BTreeSet<ConceptId>) -> Option<Vec<(ConceptId, Option<ConceptId>)>> {
-        // An empty projection is valid. Arithmetic failure aborts the complete
-        // update before any output or answer state changes.
-        let mut projections = Vec::new();
-        for output in outputs {
-            let projection = self.try_materialize_completion_projection(result, output)?;
-            projections.push((output.clone(), projection));
-        }
-        Some(projections)
-    }
-
-    fn write_answer_projections(&mut self, projections: Vec<(ConceptId, Option<ConceptId>)>) {
-        for (output, projection) in projections {
-            self.write_current_percept_value(&output, projection);
-        }
-    }
-
-    fn choose_from_answer_state(&mut self, state_id: usize, template: &ConceptId) -> Option<ConceptId> {
-        let answer = self.answer_from_state(state_id)?;
-        let view = answer.view(self, template.clone())?;
-        let choice = view.choose(self)?;
-        let selected = choice.selected().clone();
-        choice.view().answer().publish(self).ok()?;
+    fn choose_from_live_answer(&mut self, template: &ConceptId) -> Option<ConceptId> {
+        let (_, live) = self.shared_live_answer(template)?;
+        let (selected, answer) = live.answer.choose(self, template)?;
+        let next = LiveConceptAnswer::successor(self, live.revision, answer)?;
+        self.install_live_answer(next)?;
         Some(selected)
     }
 
@@ -2029,8 +2142,8 @@ impl Pangine {
         if !self.owns(concept) {
             return None;
         }
-        if let Some(state_id) = self.shared_answer_state(concept) {
-            return self.choose_from_answer_state(state_id, concept);
+        if self.shared_live_answer(concept).is_some() {
+            return self.choose_from_live_answer(concept);
         }
 
         let concept = self.get_value(concept)?;
@@ -2383,6 +2496,14 @@ fn debug_console_help(command: &str) -> Option<&'static str> {
     matches!(command, "h" | "help").then_some(DEBUG_CONSOLE_HELP)
 }
 
+fn debug_console_inspection_operand(command: &str) -> Option<&str> {
+    let operand = command.strip_prefix("inspect")?;
+    if operand.is_empty() {
+        return Some(operand);
+    }
+    operand.chars().next().is_some_and(char::is_whitespace).then(|| operand.trim_start())
+}
+
 fn debug_console_quit(command: &str) -> bool {
     matches!(command, "q" | "quit")
 }
@@ -2532,6 +2653,7 @@ mod tests {
         assert_eq!(debug_console_help("h"), Some(help));
         assert_eq!(debug_console_help("[help]"), None);
         for expected in [
+            "inspect operand  Show linked values",
             "[]                         Null",
             "(expression)               Make one complete surrounding operand",
             "[A]*[B]                    Merge unordered Concept members",
@@ -2558,6 +2680,43 @@ mod tests {
         assert!(debug_console_quit("quit"));
         assert!(!debug_console_quit("query"));
         assert!(!debug_console_quit("quitting"));
+        assert_eq!(debug_console_inspection_operand("inspect ['choice']"), Some("['choice']"));
+        assert_eq!(debug_console_inspection_operand("inspect\t['choice']"), Some("['choice']"));
+        assert_eq!(debug_console_inspection_operand("inspect"), Some(""));
+        assert_eq!(debug_console_inspection_operand("inspector ['choice']"), None);
+        assert_eq!(debug_console_inspection_operand("[inspect]"), None);
+    }
+
+    #[test]
+    fn debug_console_inspection_shows_values_rows_ties_and_complete_sources() {
+        let mut pangine = Pangine::new();
+        for script in [
+            "['candidates'] ~= [A]",
+            "['candidates'] ~= [B]",
+            "['helpful'] ~= [A]",
+            "['failed'] ~= [A]",
+            "['failed'] ~= [A]",
+            "['candidates'] @ ['choice']",
+            "['helpful'] @ ['helpful-choice']",
+            "['choice'] @+= ['helpful-choice']",
+            "['failed'] @ ['failed-choice']",
+            "['choice'] @-= ['failed-choice']",
+        ] {
+            assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
+        }
+
+        assert_eq!(
+            pangine.debug_answer_inspection_lines("['choice']"),
+            Ok(vec![
+                "    +0, 1 row: [A]".to_owned(),
+                "      +1 from ['candidates']: [A]".to_owned(),
+                "      -2 from ['failed']: [A]".to_owned(),
+                "      +1 from ['helpful']: [A]".to_owned(),
+                "  * +1, 1 row: [B]".to_owned(),
+                "      +1 from ['candidates']: [B]".to_owned(),
+            ])
+        );
+        assert_eq!(pangine.debug_answer_inspection_lines("['missing']"), Err("operand is not part of one linked Answer".to_owned()));
     }
 
     #[test]
@@ -2578,20 +2737,25 @@ mod tests {
     }
 
     #[test]
-    fn answer_state_is_released_after_its_last_output_is_detached() {
+    fn ordinary_answer_values_are_replaced_and_released_during_detachment() {
         let mut pangine = Pangine::new();
         pangine.reference_concept("['memory'] ~= [cat]->[purrs]").unwrap();
         pangine.reference_concept("['memory'] @ ['animal']->['sound']").unwrap();
-        assert_eq!(pangine.answer_states.len(), 1);
-        assert_eq!(pangine.percept_answer_states.len(), 2);
+        let animal = pangine.reference_percept("animal");
+        let sound = pangine.reference_percept("sound");
+        let initial = pangine.percept_values[&animal.index()].clone();
+        assert_eq!(pangine.percept_values[&sound.index()], initial);
+        let weak_initial = Rc::downgrade(&initial.0);
+        drop(initial);
 
         pangine.reference_concept("['animal'] = []").unwrap();
-        assert_eq!(pangine.answer_states.len(), 1);
-        assert_eq!(pangine.percept_answer_states.len(), 1);
+        assert!(weak_initial.upgrade().is_none());
+        let remaining = pangine.percept_values[&sound.index()].clone();
+        let weak_remaining = Rc::downgrade(&remaining.0);
+        drop(remaining);
 
         pangine.reference_concept("['sound'] = []").unwrap();
-        assert!(pangine.answer_states.is_empty());
-        assert!(pangine.percept_answer_states.is_empty());
+        assert!(weak_remaining.upgrade().is_none());
     }
 
     #[test]

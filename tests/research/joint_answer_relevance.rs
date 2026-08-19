@@ -1,6 +1,6 @@
 //! Warning checks for the source witnesses retained by a shared answer.
 //!
-//! The answer state now keeps complete correlated possibilities until `^`
+//! The shared answer now keeps complete correlated possibilities until `^`
 //! filters them. Adding distinct source relevance remains a provisional way to
 //! turn those witnesses into the integer coefficients exposed by `$` and `@`.
 

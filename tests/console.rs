@@ -8,10 +8,10 @@ fn route_cycle_changes_its_complete_choice_after_repeated_outcomes() {
     assert_eq!(
         command_results(&stdout, "['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']"),
         vec![
-            "x4{[east]->[C]->[north]}x2{[north]->[B]->[east]}",
-            "x2{[east]->[C]->[north]}x2{[north]->[B]->[east]}",
-            "x2{[north]->[B]->[east]}{[east]->[C]->[north]}",
-            "x4{[north]->[B]->[east]}{[east]->[C]->[north]}",
+            "x3{[east]->[C]->[north]}x2{[north]->[B]->[east]}{[west]->[E]->[south]}",
+            "x2{[east]->[C]->[north]}x2{[north]->[B]->[east]}{[west]->[E]->[south]}",
+            "x2{[north]->[B]->[east]}{[east]->[C]->[north]}{[west]->[E]->[south]}",
+            "x3{[north]->[B]->[east]}{[east]->[C]->[north]}{[west]->[E]->[south]}",
         ]
     );
     assert_eq!(

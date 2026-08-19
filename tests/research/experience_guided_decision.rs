@@ -9,6 +9,9 @@
 //! A second check compares carrying every reviewed outcome into the final
 //! decision with choosing one outcome first. It then changes the current input
 //! and repeats the same three-Answer chain.
+//!
+//! A third check distinguishes a result Percept used as a weighted source from
+//! its value used only as a fixed question requirement.
 
 use pangine::{AnswerView, ConceptId, Pangine, Relevance};
 use std::collections::{BTreeMap, BTreeSet};
@@ -114,6 +117,65 @@ fn linked_outcomes_adjust_complete_troubleshooting_choices_without_hiding_source
 
     must_ref(&mut pangine, "['episodes'] @ [episode-clean-failed-1]->[outcome]->['recorded-failure']");
     assert_eq!(must_ref(&mut pangine, "$['recorded-failure']"), must_ref(&mut pangine, "[failed]"));
+}
+
+#[test]
+#[ignore = "warning: result roles may be weighted sources or fixed filters depending on the represented program"]
+fn result_role_percepts_add_presence_weight_beyond_the_matching_episodes() {
+    let mut evidence = outcome_presence_case();
+    must_ref(&mut evidence, "['positive-result'] = [positive]->[success]");
+    must_ref(&mut evidence, "['negative-result'] = [negative]->[failed]");
+    must_ref(
+        &mut evidence,
+        "['episodes']['positive-result'] @
+            (['positive-episode']->[choice]->['positive-choice'])
+            (['positive-episode']->[outcome]->['positive-outcome'])
+            ([positive]->['positive-outcome'])",
+    );
+    must_ref(
+        &mut evidence,
+        "['episodes']['negative-result'] @
+            (['negative-episode']->[choice]->['negative-choice'])
+            (['negative-episode']->[outcome]->['negative-outcome'])
+            ([negative]->['negative-outcome'])",
+    );
+    must_ref(&mut evidence, "['choice'] @+= ['positive-choice']");
+    must_ref(&mut evidence, "['choice'] @-= ['negative-choice']");
+
+    let evidence_choice = evidence.reference_percept("choice");
+    let evidence_answer = evidence.answer_view(&evidence_choice).expect("answer adjusted by result sources");
+    assert_possibility(
+        &mut evidence,
+        &evidence_answer,
+        "[A]",
+        2,
+        false,
+        &["candidate-a", "a-success-1", "a-success-2", "a-failed-1", "[positive]->[success]", "[negative]->[failed]"],
+    );
+    assert_possibility(&mut evidence, &evidence_answer, "[B]", 3, true, &["candidate-b", "b-success-1", "[positive]->[success]"]);
+
+    let mut filter = outcome_presence_case();
+    must_ref(&mut filter, "['positive-result'] = [success]");
+    must_ref(&mut filter, "['negative-result'] = [failed]");
+    must_ref(
+        &mut filter,
+        "['episodes'] @
+            (['positive-episode']->[choice]->['positive-choice'])
+            (['positive-episode']->[outcome]->$['positive-result'])",
+    );
+    must_ref(
+        &mut filter,
+        "['episodes'] @
+            (['negative-episode']->[choice]->['negative-choice'])
+            (['negative-episode']->[outcome]->$['negative-result'])",
+    );
+    must_ref(&mut filter, "['choice'] @+= ['positive-choice']");
+    must_ref(&mut filter, "['choice'] @-= ['negative-choice']");
+
+    let filter_choice = filter.reference_percept("choice");
+    let filter_answer = filter.answer_view(&filter_choice).expect("answer adjusted by filtered episodes");
+    assert_possibility(&mut filter, &filter_answer, "[A]", 2, true, &["candidate-a", "a-success-1", "a-success-2", "a-failed-1"]);
+    assert_possibility(&mut filter, &filter_answer, "[B]", 2, true, &["candidate-b", "b-success-1"]);
 }
 
 #[test]
@@ -238,6 +300,22 @@ fn remember_context_review(pangine: &mut Pangine, review: &str, environment: &st
 fn set_current_input(pangine: &mut Pangine, environment: &str, symptom: &str) {
     must_ref(pangine, &format!("['environment-input'] = [{environment}]"));
     must_ref(pangine, &format!("['symptom-input'] = [{symptom}]"));
+}
+
+fn outcome_presence_case() -> Pangine {
+    let mut pangine = Pangine::new();
+    for experience in [
+        "['candidates'] ~= [candidate-a]->[choice]->[A]",
+        "['candidates'] ~= [candidate-b]->[choice]->[B]",
+        "['episodes'] ~= ([a-success-1]->[choice]->[A])([a-success-1]->[outcome]->[success])",
+        "['episodes'] ~= ([a-success-2]->[choice]->[A])([a-success-2]->[outcome]->[success])",
+        "['episodes'] ~= ([a-failed-1]->[choice]->[A])([a-failed-1]->[outcome]->[failed])",
+        "['episodes'] ~= ([b-success-1]->[choice]->[B])([b-success-1]->[outcome]->[success])",
+        "['candidates'] @ ['candidate']->[choice]->['choice']",
+    ] {
+        must_ref(&mut pangine, experience);
+    }
+    pangine
 }
 
 fn assert_possibility(
