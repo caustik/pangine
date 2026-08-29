@@ -577,7 +577,8 @@ fn decode_route(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionRout
             }
             has_windows = true;
             route.ordered_windows = windows.iter().map(|window| decode_window(pangine, window)).collect::<Option<_>>()?;
-        } else if let Some(entries) = tagged_fields(pangine, field, BINDING_ORIGIN_ENTRIES) {
+        } else {
+            let entries = tagged_fields(pangine, field, BINDING_ORIGIN_ENTRIES)?;
             if has_origins {
                 return None;
             }
@@ -590,8 +591,6 @@ fn decode_route(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionRout
                     return None;
                 }
             }
-        } else {
-            return None;
         }
     }
     Some(route)

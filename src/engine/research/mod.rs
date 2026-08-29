@@ -3,5 +3,6 @@
 
 mod answer_adjustment_views;
 mod answer_lifecycle;
+mod answer_replay;
 mod retained_values;
 mod source_state_copy;

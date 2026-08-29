@@ -9,12 +9,15 @@ cargo test --test research --release -- --ignored
 cargo test --lib source_state_copy --release -- --ignored
 cargo test --lib answer_adjustment_views --release -- --ignored
 cargo test --lib answer_lifecycle --release -- --ignored --nocapture
+cargo test --lib answer_replay --release -- --ignored --nocapture
 cargo test --lib concept_answer --release
 ```
 
 The library commands run internal engine probes. They add no public snapshot or immutable Answer naming syntax.
 
 The lifecycle report uses checkpoints `10,100,1000` by default. Set `PANGINE_ANSWER_CYCLE_SIZES` to a comma-separated list of positive cycle counts to run a smaller or larger manual report.
+
+The replay report uses the same default checkpoints. Set `PANGINE_ANSWER_REPLAY_SIZES` to compare full-history rebuilds with a carried open Answer over another range.
 
 Research programs that compare independent views copy a `$` result into a detached Percept before using `^`. Directly choosing a question output now conditions every output linked to that question.
 
@@ -37,6 +40,7 @@ Research programs that compare independent views copy a `$` result into a detach
 - `src/engine/research/answer_adjustment_views.rs` exercises the production immutable Answer and AnswerView API and the public `@+=` / `@-=` operations across explicit projections, collapse branches, adjustment receipts, strict publication, repeated outcomes, live-state boundaries, and weighted sources. It keeps deeper composition and policy questions under warnings.
 - `src/engine/research/answer_adjustment_views/higher_order_adjustment.rs` composes candidate, outcome, and reliability Answers through the production API. It probes explicit order, branching, intermediate choice, duplicate paths, signs, cycles, flattened history, and linear source context through an eight-layer chain. It adds no public syntax.
 - `src/engine/research/answer_lifecycle.rs` reports Concept count, encoded answer size, proof rows and fragments, source visits, inspection size, and revisions across repeated current-grammar answer cycles. Its helpful-minus-failed roles exercise existing explicit operations rather than defining an outcome or Relevance policy.
+- `src/engine/research/answer_replay.rs` compares a full-history rebuild with applying only each newest stable episode source to a carried open Answer. It requires exact proof-bearing and choice equivalence while reporting source visits and elapsed time, without adding public syntax or state.
 - `src/engine/concept_answer.rs` retains production answers as ordinary Concepts. Its focused tests exercise the codec, production-backed projection, collapse, adjustment, and joining, detachment, cross-engine round trips, indexed matching, and deterministic partition reduction.
 
 Accepted behavior belongs in ordinary tests:
