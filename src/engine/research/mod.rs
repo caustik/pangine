@@ -2,5 +2,6 @@
 //! behavior, not accepted language semantics.
 
 mod answer_adjustment_views;
+mod answer_lifecycle;
 mod retained_values;
 mod source_state_copy;

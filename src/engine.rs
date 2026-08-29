@@ -391,8 +391,8 @@ pub struct Pangine {
     percept_question_indexes: BTreeMap<usize, PerceptQuestionIndex>,
     // Disposable materialization cache derived from the Percept subconcepts.
     percept_value_maps: BTreeMap<usize, ConceptMap>,
-    // A linked output stores one versioned answer Concept here. Public value
-    // reads return the projection cached inside that same Concept.
+    // A linked output stores one live answer Concept here. Public value reads
+    // return the projection cached inside that same Concept.
     percept_values: BTreeMap<usize, ConceptId>,
     // Percepts updated as replaceable current values are input/output Percepts
     // when experience is captured. Percepts populated by experience remain
@@ -1961,19 +1961,19 @@ impl Pangine {
         self.shared_live_answer(concept)?.1.answer.shape(self)
     }
 
-    /// Returns the ordinary versioned answer Concept shared by every output in
+    /// Returns the ordinary live answer Concept shared by every output in
     /// `concept`.
     ///
     /// The returned value contains the complete rows, proof details, active
     /// outputs, cached projections, and current revision. It can be formatted,
     /// parsed by another engine, and installed on its encoded output group. The
-    /// exact encoding is not yet a persistence compatibility promise.
+    /// exact internal encoding moves with this crate.
     pub fn linked_answer_value(&self, concept: &ConceptId) -> Option<ConceptId> {
         Some(self.shared_live_answer(concept)?.0)
     }
 
-    /// Installs an owned versioned answer Concept on the output group encoded
-    /// inside it.
+    /// Installs an owned live answer Concept on the output group encoded inside
+    /// it.
     ///
     /// The complete group is validated before any Percept changes. Existing
     /// linked outputs outside the installed group are detached in the same way

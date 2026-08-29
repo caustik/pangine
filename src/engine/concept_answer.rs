@@ -4,6 +4,9 @@
 //! transport form, and result of every operation are ordinary Concepts. This
 //! preserves collapse, adjustment, extension, and reduction without installing
 //! a second kind of state behind any Percept.
+//!
+//! The codec omits empty proof annotations and default relevance values.
+//! Decoding restores those values before any Answer operation sees them.
 
 use super::{
     completion::CompletionEvidenceParts, Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow,
@@ -12,7 +15,7 @@ use super::{
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
 
-const ANSWER: &str = "pangine-answer-v1";
+const ANSWER: &str = "pangine-answer";
 const QUESTIONS: &str = "pangine-answer-questions";
 const OUTPUTS: &str = "pangine-answer-outputs";
 const ROWS: &str = "pangine-answer-rows";
@@ -43,8 +46,9 @@ const REMAINDERS: &str = "pangine-answer-remainders";
 const REMAINDER: &str = "pangine-answer-remainder";
 const SOURCE_REMAINDER: &str = "pangine-answer-source-remainder";
 const QUESTION_REMAINDER: &str = "pangine-answer-question-remainder";
+const CONTRIBUTION: &str = "pangine-answer-contribution";
 const ADJUSTED_OUTPUTS: &str = "pangine-answer-adjusted-outputs";
-const VERSIONED_ANSWER: &str = "pangine-versioned-answer";
+const LIVE_ANSWER: &str = "pangine-live-answer";
 const LIVE_PROJECTIONS: &str = "pangine-answer-live-projections";
 const LIVE_PROJECTION: &str = "pangine-answer-live-projection";
 const LIVE_VALUE: &str = "pangine-answer-live-value";
@@ -96,11 +100,11 @@ impl LiveConceptAnswer {
             })
             .collect::<Vec<_>>();
         let projections = encode_concept_set(pangine, LIVE_PROJECTIONS, projections);
-        tagged(pangine, VERSIONED_ANSWER, vec![revision, answer, projections])
+        tagged(pangine, LIVE_ANSWER, vec![revision, answer, projections])
     }
 
     pub(super) fn decode(pangine: &Pangine, concept: &ConceptId) -> Option<Self> {
-        let [revision, answer, projections] = fixed_fields(pangine, concept, VERSIONED_ANSWER)?;
+        let [revision, answer, projections] = fixed_fields(pangine, concept, LIVE_ANSWER)?;
         let answer = ConceptAnswer::decode(pangine, answer)?;
         let projections = tagged_fields(pangine, projections, LIVE_PROJECTIONS)?
             .iter()
@@ -307,18 +311,54 @@ fn encode_evidence(pangine: &mut Pangine, evidence: &CompletionEvidence) -> Conc
     let products = encode_route_set(pangine, SOURCE_ROUTE_PRODUCTS, evidence.source_route_products());
     let assignment = encode_bindings(pangine, BINDINGS, evidence.bindings());
     let remainders = evidence.remainders().map(|remainder| encode_remainder(pangine, remainder)).collect::<Vec<_>>();
-    let remainders = encode_concept_set(pangine, REMAINDERS, remainders);
-    let contribution = encode_signed(pangine, evidence.source_contribution().weight());
-    let adjusted_outputs = encode_concept_set(pangine, ADJUSTED_OUTPUTS, evidence.adjusted_outputs().cloned());
-    tagged(
-        pangine,
-        EVIDENCE,
-        vec![source, evidence.clause().clone(), evidence.matched().clone(), routes, products, assignment, remainders, contribution, adjusted_outputs],
-    )
+    let adjusted_outputs = evidence.adjusted_outputs().cloned().collect::<Vec<_>>();
+    let mut fields = vec![source, evidence.clause().clone(), evidence.matched().clone(), routes, products, assignment];
+    if !remainders.is_empty() {
+        fields.push(encode_concept_set(pangine, REMAINDERS, remainders));
+    }
+    if evidence.source_contribution() != Relevance::DEFAULT {
+        let contribution = encode_signed(pangine, evidence.source_contribution().weight());
+        fields.push(tagged(pangine, CONTRIBUTION, vec![contribution]));
+    }
+    if !adjusted_outputs.is_empty() {
+        fields.push(encode_concept_set(pangine, ADJUSTED_OUTPUTS, adjusted_outputs));
+    }
+    tagged(pangine, EVIDENCE, fields)
 }
 
 fn decode_evidence(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionEvidence> {
-    let [source, clause, matched, routes, products, assignment, remainders, contribution, adjusted_outputs] = fixed_fields(pangine, concept, EVIDENCE)?;
+    let fields = tagged_fields(pangine, concept, EVIDENCE)?;
+    let required: &[ConceptId; 6] = fields.get(..6)?.try_into().ok()?;
+    let [source, clause, matched, routes, products, assignment] = required;
+    let mut remainders = BTreeSet::new();
+    let mut contribution = Relevance::DEFAULT;
+    let mut adjusted_outputs = BTreeSet::new();
+    let mut has_remainders = false;
+    let mut has_contribution = false;
+    let mut has_adjusted_outputs = false;
+    for field in &fields[6..] {
+        if let Some(values) = tagged_fields(pangine, field, REMAINDERS) {
+            if has_remainders {
+                return None;
+            }
+            has_remainders = true;
+            remainders = values.iter().map(|remainder| decode_remainder(pangine, remainder)).collect::<Option<_>>()?;
+        } else if let Some([value]) = fixed_fields(pangine, field, CONTRIBUTION) {
+            if has_contribution {
+                return None;
+            }
+            has_contribution = true;
+            contribution = Relevance::new(decode_signed(pangine, value)?);
+        } else if tagged_fields(pangine, field, ADJUSTED_OUTPUTS).is_some() {
+            if has_adjusted_outputs {
+                return None;
+            }
+            has_adjusted_outputs = true;
+            adjusted_outputs = decode_concept_set(pangine, field, ADJUSTED_OUTPUTS)?;
+        } else {
+            return None;
+        }
+    }
     Some(CompletionEvidence::from_parts(CompletionEvidenceParts {
         source: decode_source(pangine, source)?,
         clause: clause.clone(),
@@ -326,12 +366,9 @@ fn decode_evidence(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionE
         routes: decode_route_set(pangine, routes, ROUTES)?,
         source_route_products: decode_route_set(pangine, products, SOURCE_ROUTE_PRODUCTS)?,
         assignment: decode_bindings(pangine, assignment, BINDINGS)?,
-        remainders: tagged_fields(pangine, remainders, REMAINDERS)?
-            .iter()
-            .map(|remainder| decode_remainder(pangine, remainder))
-            .collect::<Option<BTreeSet<_>>>()?,
-        contribution: Relevance::new(decode_signed(pangine, contribution)?),
-        adjusted_outputs: decode_concept_set(pangine, adjusted_outputs, ADJUSTED_OUTPUTS)?,
+        remainders,
+        contribution,
+        adjusted_outputs,
     }))
 }
 
@@ -340,13 +377,19 @@ fn encode_source(pangine: &mut Pangine, evidence: &CompletionEvidence) -> Concep
         .source_percept()
         .map(|percept| tagged(pangine, PERCEPT_SOURCE, vec![percept.clone()]))
         .unwrap_or_else(|| tagged(pangine, SUBJECT_SOURCE, Vec::new()));
-    let relevance = encode_signed(pangine, evidence.source_relevance().weight());
-    tagged(pangine, SOURCE, vec![origin, evidence.source_concept().clone(), relevance])
+    let mut fields = vec![origin, evidence.source_concept().clone()];
+    if evidence.source_relevance() != Relevance::DEFAULT {
+        fields.push(encode_signed(pangine, evidence.source_relevance().weight()));
+    }
+    tagged(pangine, SOURCE, fields)
 }
 
 fn decode_source(pangine: &Pangine, concept: &ConceptId) -> Option<QuestionSource> {
-    let [origin, source, relevance] = fixed_fields(pangine, concept, SOURCE)?;
-    let relevance = Relevance::new(decode_signed(pangine, relevance)?);
+    let (origin, source, relevance) = match tagged_fields(pangine, concept, SOURCE)? {
+        [origin, source] => (origin, source, Relevance::DEFAULT),
+        [origin, source, relevance] => (origin, source, Relevance::new(decode_signed(pangine, relevance)?)),
+        _ => return None,
+    };
     if let Some([percept]) = fixed_fields(pangine, origin, PERCEPT_SOURCE) {
         Some(QuestionSource::from_percept(percept.clone(), source.clone(), relevance))
     } else if tagged_fields(pangine, origin, SUBJECT_SOURCE)?.is_empty() && relevance == Relevance::DEFAULT {
@@ -457,60 +500,101 @@ fn decode_index_path(pangine: &Pangine, concept: &ConceptId) -> Option<Vec<usize
 }
 
 fn encode_route_set<'a>(pangine: &mut Pangine, tag: &str, routes: impl IntoIterator<Item = &'a CompletionRoute>) -> ConceptId {
-    let routes = routes.into_iter().map(|route| encode_route(pangine, route)).collect::<Vec<_>>();
+    let routes = routes.into_iter().collect::<Vec<_>>();
+    assert!(!routes.is_empty(), "completion evidence must retain at least one route");
+    let routes = if routes.len() == 1 && routes[0] == &CompletionRoute::default() {
+        Vec::new()
+    } else {
+        routes.into_iter().map(|route| encode_route(pangine, route)).collect()
+    };
     encode_concept_set(pangine, tag, routes)
 }
 
 fn decode_route_set(pangine: &Pangine, concept: &ConceptId, tag: &str) -> Option<BTreeSet<CompletionRoute>> {
-    tagged_fields(pangine, concept, tag)?.iter().map(|route| decode_route(pangine, route)).collect()
+    let routes = tagged_fields(pangine, concept, tag)?;
+    if routes.is_empty() {
+        return Some(BTreeSet::from([CompletionRoute::default()]));
+    }
+    routes.iter().map(|route| decode_route(pangine, route)).collect()
 }
 
 fn encode_route(pangine: &mut Pangine, route: &CompletionRoute) -> ConceptId {
-    let coefficients = encode_concept_set(pangine, COEFFICIENT_ANCESTORS, route.coefficient_ancestors.iter().cloned());
-    let selected =
-        route.selected_entries.iter().map(|(container, entry)| tagged(pangine, SELECTED_ENTRY, vec![container.clone(), entry.clone()])).collect::<Vec<_>>();
-    let selected = encode_concept_set(pangine, SELECTED_ENTRIES, selected);
-    let windows = route.ordered_windows.iter().map(|window| encode_window(pangine, window)).collect::<Vec<_>>();
-    let windows = encode_concept_set(pangine, ORDERED_WINDOWS, windows);
-    let origins = route
-        .binding_origins
-        .iter()
-        .map(|(percept, origins)| {
-            let origins = origins.iter().map(|origin| encode_origin(pangine, origin)).collect::<Vec<_>>();
-            let origins = encode_concept_set(pangine, BINDING_ORIGINS, origins);
-            tagged(pangine, BINDING_ORIGIN_ENTRY, vec![percept.clone(), origins])
-        })
-        .collect::<Vec<_>>();
-    let origins = encode_concept_set(pangine, BINDING_ORIGIN_ENTRIES, origins);
-    tagged(pangine, ROUTE, vec![coefficients, selected, windows, origins])
+    let mut fields = Vec::new();
+    if !route.coefficient_ancestors.is_empty() {
+        fields.push(encode_concept_set(pangine, COEFFICIENT_ANCESTORS, route.coefficient_ancestors.iter().cloned()));
+    }
+    if !route.selected_entries.is_empty() {
+        let selected =
+            route.selected_entries.iter().map(|(container, entry)| tagged(pangine, SELECTED_ENTRY, vec![container.clone(), entry.clone()])).collect::<Vec<_>>();
+        fields.push(encode_concept_set(pangine, SELECTED_ENTRIES, selected));
+    }
+    if !route.ordered_windows.is_empty() {
+        let windows = route.ordered_windows.iter().map(|window| encode_window(pangine, window)).collect::<Vec<_>>();
+        fields.push(encode_concept_set(pangine, ORDERED_WINDOWS, windows));
+    }
+    if !route.binding_origins.is_empty() {
+        let origins = route
+            .binding_origins
+            .iter()
+            .map(|(percept, origins)| {
+                let origins = origins.iter().map(|origin| encode_origin(pangine, origin)).collect::<Vec<_>>();
+                let origins = encode_concept_set(pangine, BINDING_ORIGINS, origins);
+                tagged(pangine, BINDING_ORIGIN_ENTRY, vec![percept.clone(), origins])
+            })
+            .collect::<Vec<_>>();
+        fields.push(encode_concept_set(pangine, BINDING_ORIGIN_ENTRIES, origins));
+    }
+    tagged(pangine, ROUTE, fields)
 }
 
 fn decode_route(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionRoute> {
-    let [coefficients, selected, windows, origins] = fixed_fields(pangine, concept, ROUTE)?;
-    let mut selected_entries = BTreeMap::new();
-    for entry in tagged_fields(pangine, selected, SELECTED_ENTRIES)? {
-        let [container, selected] = fixed_fields(pangine, entry, SELECTED_ENTRY)?;
-        if selected_entries.insert(container.clone(), selected.clone()).is_some() {
+    let mut route = CompletionRoute::default();
+    let mut has_coefficients = false;
+    let mut has_selected = false;
+    let mut has_windows = false;
+    let mut has_origins = false;
+    for field in tagged_fields(pangine, concept, ROUTE)? {
+        if tagged_fields(pangine, field, COEFFICIENT_ANCESTORS).is_some() {
+            if has_coefficients {
+                return None;
+            }
+            has_coefficients = true;
+            route.coefficient_ancestors = decode_concept_set(pangine, field, COEFFICIENT_ANCESTORS)?;
+        } else if let Some(entries) = tagged_fields(pangine, field, SELECTED_ENTRIES) {
+            if has_selected {
+                return None;
+            }
+            has_selected = true;
+            for entry in entries {
+                let [container, selected] = fixed_fields(pangine, entry, SELECTED_ENTRY)?;
+                if route.selected_entries.insert(container.clone(), selected.clone()).is_some() {
+                    return None;
+                }
+            }
+        } else if let Some(windows) = tagged_fields(pangine, field, ORDERED_WINDOWS) {
+            if has_windows {
+                return None;
+            }
+            has_windows = true;
+            route.ordered_windows = windows.iter().map(|window| decode_window(pangine, window)).collect::<Option<_>>()?;
+        } else if let Some(entries) = tagged_fields(pangine, field, BINDING_ORIGIN_ENTRIES) {
+            if has_origins {
+                return None;
+            }
+            has_origins = true;
+            for entry in entries {
+                let [percept, origins] = fixed_fields(pangine, entry, BINDING_ORIGIN_ENTRY)?;
+                let origins =
+                    tagged_fields(pangine, origins, BINDING_ORIGINS)?.iter().map(|origin| decode_origin(pangine, origin)).collect::<Option<BTreeSet<_>>>()?;
+                if route.binding_origins.insert(percept.clone(), origins).is_some() {
+                    return None;
+                }
+            }
+        } else {
             return None;
         }
     }
-    let mut binding_origins = BTreeMap::new();
-    for entry in tagged_fields(pangine, origins, BINDING_ORIGIN_ENTRIES)? {
-        let [percept, origins] = fixed_fields(pangine, entry, BINDING_ORIGIN_ENTRY)?;
-        let origins = tagged_fields(pangine, origins, BINDING_ORIGINS)?.iter().map(|origin| decode_origin(pangine, origin)).collect::<Option<BTreeSet<_>>>()?;
-        if binding_origins.insert(percept.clone(), origins).is_some() {
-            return None;
-        }
-    }
-    Some(CompletionRoute {
-        coefficient_ancestors: decode_concept_set(pangine, coefficients, COEFFICIENT_ANCESTORS)?,
-        selected_entries,
-        ordered_windows: tagged_fields(pangine, windows, ORDERED_WINDOWS)?
-            .iter()
-            .map(|window| decode_window(pangine, window))
-            .collect::<Option<BTreeSet<_>>>()?,
-        binding_origins,
-    })
+    Some(route)
 }
 
 fn encode_steps(pangine: &mut Pangine, steps: &[CompletionOrderedStep]) -> ConceptId {
