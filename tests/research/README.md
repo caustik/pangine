@@ -25,6 +25,7 @@ Research programs that compare independent views copy a `$` result into a detach
 
 - `action_loop.rs` forms and chooses a complete two-step route, continues from an observed position, and compares step evidence with complete-route experience without selecting a new Relevance rule.
 - `application_choice.rs` compares two application-side rules with Pangine's current additive result. The rules can reject a larger total or abstain, but the fixtures do not establish that the application should own decisions.
+- `current_records.rs` shows that complete fixed-shape records can be queried, exactly filtered, replaced, and cleared when the caller supplies every member Percept. It keeps missing collection discovery, logical keys, arbitrary values, persistence, and rollback visible.
 - `decision_contract.rs` compares addition, multiplication, rescaling, ties, and distinct source histories. It keeps the information a future decision contract may need without choosing one formula.
 - `decision_fallback.rs` records the current positive filter and canonical tie rule behind `^`.
 - `decision_record.rs` compares saved totals, complete rows, evaluated values, and unchanged source Percepts. Each preserves a different part of an old decision.
