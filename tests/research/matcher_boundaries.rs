@@ -25,11 +25,11 @@ fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evalua
     let answer = must_ref(&mut pangine, "[Alice] @ ['answer']");
     assert_eq!(pangine.format_concept(&answer, false), "[Alice]");
     assert_eq!(must_ref(&mut pangine, "$['answer']"), answer);
+    assert!(pangine.reference_concept("['*'] @ ['global-answer']").is_ok(), "the read-only global Percept follows the ordinary Percept selector path");
 
     for invalid in [
         "x2['Alice'] @ ['invalid-answer']",
         "['Alice']['Alice'] @ ['invalid-answer']",
-        "['*'] @ ['invalid-answer']",
         "!['Alice'] @ ['invalid-answer']",
         "['Alice']->[context] @ ['invalid-answer']",
     ] {

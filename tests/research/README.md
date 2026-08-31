@@ -25,7 +25,6 @@ Research programs that compare independent views copy a `$` result into a detach
 
 - `action_loop.rs` forms and chooses a complete two-step route, continues from an observed position, and compares step evidence with complete-route experience without selecting a new Relevance rule.
 - `application_choice.rs` compares two application-side rules with Pangine's current additive result. The rules can reject a larger total or abstain, but the fixtures do not establish that the application should own decisions.
-- `current_records.rs` shows that complete fixed-shape records can be queried, exactly filtered, replaced, and cleared when the caller supplies every member Percept. It keeps missing collection discovery, logical keys, arbitrary values, persistence, and rollback visible.
 - `decision_contract.rs` compares addition, multiplication, rescaling, ties, and distinct source histories. It keeps the information a future decision contract may need without choosing one formula.
 - `decision_fallback.rs` records the current positive filter and canonical tie rule behind `^`.
 - `decision_record.rs` compares saved totals, complete rows, evaluated values, and unchanged source Percepts. Each preserves a different part of an old decision.
@@ -35,6 +34,7 @@ Research programs that compare independent views copy a `$` result into a detach
 - `matcher_boundaries.rs` keeps open questions around ordered nesting, valid `@` subjects, and enclosing-entry correlation.
 - `outcome_learning.rs` compares actual transitions with identified episode outcomes, keeps untried routes through repeated regenerated detached choices, and preserves the old literal-adjustment boundary.
 - `question_support.rs` records how direct Percept-member weights currently reach output coefficients.
+- `current_records.rs` keeps complete query, filter, replacement, and clear behind a warning because the caller must still retain and supply every member Percept.
 - `represented_choice.rs` keeps focused counterexamples for experience, current state, context, stance, question order, source identity, records, and coefficients without host-side scoring.
 - `row_choice.rs` shows that collapsing complete rows into totals can discard information needed by some decisions.
 - `src/engine/research/source_state_copy.rs` compares value copies, live references, direct source-state copies, and represented version scopes. The behavior is test-only and does not choose a public lifecycle.
@@ -49,6 +49,8 @@ Accepted behavior belongs in ordinary tests:
 - `tests/answer_cycles.rs` covers repeated outcome-guided choices, compact possibility inspection, and the same cycle over an unordered three-output shape.
 - `tests/completion_questions.rs` covers the current structural evaluator and correlated results.
 - `tests/joint_answers.rs` covers visible shared answer shapes, answer extension, conditioning, subset choice, order effects, and detachment from a shared answer.
+- `tests/percept_selectors.rs` proves selector meaning does not depend on a Percept's value shape and that the read-only global Percept follows the same source-selection path as other Percepts.
+- `tests/concept_lifetime.rs` covers the global view's lifetime, read-only behavior, raw-Percept exclusion, and retention of ordinary Concepts that contain Percept references.
 - `tests/percept_integration.rs` covers grouped input validation, assigned-input capture, stable experience, and the Rust-input-to-Pangine-output cycle.
 
 Former projection, annotation, reduction, and successive decision-pipeline fixtures were removed after their distinct conclusions were summarized and kept in smaller warning checks. They were test-local experiments, not production behavior.

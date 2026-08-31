@@ -1,5 +1,6 @@
 use super::{
-    CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSource, QuestionSourceView, QuestionWitness,
+    CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSelector, QuestionSource, QuestionSourceView,
+    QuestionWitness,
 };
 use crate::Relevance;
 use std::cmp::Ordering;
@@ -440,6 +441,25 @@ struct Injection {
 }
 
 impl Pangine {
+    /// Completes a structural question using the same selector rules as `@`.
+    ///
+    /// The selector may be one Percept, an unordered default-relevance set of
+    /// distinct Percepts, or one grounded subject Concept. The read-only global
+    /// Percept supplies its computed view of live ordinary Concepts through the
+    /// same Percept path; selector meaning never depends on a Percept's value
+    /// shape.
+    pub fn complete_selector(&mut self, selector: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
+        let selector = self.question_selector(selector)?;
+        self.complete_selected_question(selector, question)
+    }
+
+    pub(super) fn complete_selected_question(&mut self, selector: QuestionSelector, question: &ConceptId) -> Option<CompletionResult> {
+        match selector {
+            QuestionSelector::Percepts(percepts) => self.complete_question(&percepts, question),
+            QuestionSelector::Subject(subject) => self.complete_subject(&subject, question),
+        }
+    }
+
     /// Completes a structural question against Concepts retained by Percepts.
     ///
     /// Top-level unordered collections of ordered clauses form one conjunction.
@@ -450,7 +470,7 @@ impl Pangine {
     pub fn complete_question(&mut self, sources: &[ConceptId], question: &ConceptId) -> Option<CompletionResult> {
         if sources.is_empty()
             || !self.owns(question)
-            || sources.iter().any(|source| !self.is_mutable_percept(source))
+            || sources.iter().any(|source| !self.is_percept(source))
             || sources.iter().collect::<BTreeSet<_>>().len() != sources.len()
         {
             return None;

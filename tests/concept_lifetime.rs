@@ -1,4 +1,5 @@
 use pangine::{Pangine, ParseError};
+use std::collections::BTreeSet;
 
 #[test]
 fn ordinary_concepts_live_as_long_as_owning_handles() {
@@ -127,4 +128,19 @@ fn global_snapshot_excludes_percept_references() {
     assert_eq!(pangine.get_value(&global), None);
     assert_eq!(pangine.concept_count(), 0);
     drop(memory);
+}
+
+#[test]
+fn global_snapshot_keeps_ordinary_concepts_that_contain_percept_references() {
+    let mut pangine = Pangine::new();
+    let global = pangine.global_percept();
+    let memory = pangine.reference_percept("memory");
+    let relationship = pangine.reference_concept("[subject]->['memory']").unwrap().unwrap();
+    let snapshot = pangine.get_value(&global).unwrap();
+    let members = pangine.get_relevance_map(&snapshot).into_iter().map(|(_, concept)| concept).collect::<BTreeSet<_>>();
+    let direct_members = pangine.get_relevance_map(&global).into_iter().map(|(_, concept)| concept).collect::<BTreeSet<_>>();
+
+    assert!(members.contains(&relationship));
+    assert!(!members.contains(&memory));
+    assert_eq!(direct_members, members);
 }

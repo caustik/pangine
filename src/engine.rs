@@ -142,6 +142,7 @@ Percept operations:
   ['name'] ~= expression     Capture one experience
   subject @ expression       Complete a Concept; return rows and bind holes
   ['source'] @ expression    Complete one retained Percept source
+  ['*'] @ expression         Complete the global Percept's Concepts
   ['a']['b'] @ expression   Complete several retained sources together
   &operand                   Return the shared answer shape for linked Percepts
   $operand                   Read Percepts without changing their shared answer
@@ -726,11 +727,14 @@ impl Pangine {
 
     /// Returns entries ordered by descending `x`, then canonical Concept order.
     ///
-    /// A mutable Percept returns its direct retained subconcepts. An unordered
+    /// A Percept returns its direct represented Concepts. The read-only global
+    /// Percept computes that set from every live ordinary Concept. An unordered
     /// composition returns its member edges. Any other Concept is treated as a
     /// single default-coefficient entry.
     pub fn get_relevance_map(&self, concept: &ConceptId) -> Vec<(Relevance, ConceptId)> {
-        let map = if self.is_mutable_percept(concept) {
+        let map = if self.is_global_percept(concept) {
+            self.global_concept_map().into_iter().map(|(concept, relevance)| (relevance, concept)).collect()
+        } else if self.is_mutable_percept(concept) {
             if self.live_answer_value(concept).is_some() {
                 self.get_value(concept).into_iter().map(|value| (Relevance::DEFAULT, value)).collect()
             } else {
@@ -1291,10 +1295,12 @@ impl Pangine {
         self.names.values().chain(&self.composites).filter_map(Weak::upgrade).map(ConceptId)
     }
 
-    fn global_value(&self) -> Option<ConceptId> {
-        let map = self.live_ordinary_concepts().map(|concept| (concept, Relevance::DEFAULT)).collect::<ConceptMap>();
+    fn global_concept_map(&self) -> ConceptMap {
+        self.live_ordinary_concepts().map(|concept| (concept, Relevance::DEFAULT)).collect()
+    }
 
-        self.reference_transient_map(map)
+    fn global_value(&self) -> Option<ConceptId> {
+        self.reference_transient_map(self.global_concept_map())
     }
 
     fn set_percept_subconcepts(&mut self, percept: &ConceptId, subconcepts: ConceptMap) -> Option<ConceptId> {
@@ -1351,6 +1357,10 @@ impl Pangine {
     }
 
     fn question_source_map(&self, percept: &ConceptId) -> Option<ConceptMap> {
+        if self.is_global_percept(percept) {
+            return Some(self.global_concept_map());
+        }
+
         if let Some((_, live)) = self.live_answer_value(percept) {
             let projection = live.projection(percept)?;
             return Some(projection.into_iter().map(|concept| (concept, Relevance::DEFAULT)).collect());
@@ -1506,7 +1516,7 @@ impl Pangine {
     }
 
     fn question_percepts(&self, selector: &ConceptId) -> Option<Vec<ConceptId>> {
-        if self.is_mutable_percept(selector) {
+        if self.is_percept(selector) {
             return Some(vec![selector.clone()]);
         }
         if !matches!(selector.0.kind, ConceptKind::Unordered) {
@@ -1516,7 +1526,7 @@ impl Pangine {
         let percepts = self
             .canonical_entries(&selector.0.subconcepts)
             .into_iter()
-            .map(|(concept, relevance)| (self.is_mutable_percept(&concept) && relevance == Relevance::DEFAULT).then_some(concept))
+            .map(|(concept, relevance)| (self.is_percept(&concept) && relevance == Relevance::DEFAULT).then_some(concept))
             .collect::<Option<Vec<_>>>()?;
         (!percepts.is_empty()).then_some(percepts)
     }
@@ -1581,10 +1591,7 @@ impl Pangine {
 
     fn answer_question(&mut self, selector: QuestionSelector, question: Option<ConceptId>) -> Option<ConceptId> {
         let question = question?;
-        let mut result = match selector {
-            QuestionSelector::Percepts(percepts) => self.complete_question(&percepts, &question)?,
-            QuestionSelector::Subject(subject) => self.complete_subject(&subject, &question)?,
-        };
+        let mut result = self.complete_selected_question(selector, &question)?;
         let mut outputs = BTreeSet::new();
         self.collect_output_percepts(&question, &mut outputs);
         if outputs.is_empty() {
@@ -1660,8 +1667,15 @@ impl Pangine {
             .iter()
             .flat_map(|percept| {
                 let index = percept.index();
-                let candidates = self.percept_question_indexes.get(&index).map(|index| index.candidate_sources(&patterns)).unwrap_or_default();
                 let subconcepts = self.question_source_map(percept);
+                let candidates = if self.is_global_percept(percept) {
+                    subconcepts
+                        .as_ref()
+                        .map(|subconcepts| PerceptQuestionIndex::from_sources(subconcepts.keys()).candidate_sources(&patterns))
+                        .unwrap_or_default()
+                } else {
+                    self.percept_question_indexes.get(&index).map(|index| index.candidate_sources(&patterns)).unwrap_or_default()
+                };
                 candidates
                     .into_iter()
                     .filter_map(|concept| {
@@ -2662,6 +2676,7 @@ mod tests {
             "['name'] ~= expression     Capture one experience",
             "subject @ expression       Complete a Concept",
             "['source'] @ expression    Complete one retained Percept source",
+            "['*'] @ expression         Complete the global Percept's Concepts",
             "['a']['b'] @ expression   Complete several retained sources together",
             "&operand                   Return the shared answer shape",
             "['target'] @+= ['evidence'] Add matching evidence",

@@ -59,6 +59,23 @@ The result is `[mortal]`. Pangine does not know that `is-a` is logical. The ques
 
 Parentheses preserve a complete unordered member. This keeps alternatives such as `([person]->[Alice])([pet]->[cat])` together. `*` explicitly merges direct members when they are meant to share one pool. The matcher also tracks represented occurrences while a question runs, so equal values in different parts of a longer source do not create unsupported cross-pairings. This temporary bookkeeping is not added to the returned Concept.
 
+## The global Percept
+
+`['*']` is a read-only computed Percept whose current value contains the ordinary Concepts live in the engine. It does not include standalone Percept references as top-level members. It does include an ordinary Concept whose structure contains a Percept reference. Reading it with `$` follows those nested references in the same way as any other Percept read.
+
+The global Percept follows the ordinary question rule:
+
+```text
+command> ['memory'] = [known]
+  [known]
+command> ['*'] @ ['answer']
+  [known]
+```
+
+In this question, `['*']` remains the one selected source. It does not expand into the identities of other Percepts. Its read-only status prevents assignment but does not prevent selection. Rust exposes the same selector rules through `complete_selector`.
+
+Pangine does not inspect a Percept's current value to choose selector semantics. `['source'] @ question` always questions that one Percept, even if its value happens to contain only Percept references. Recovering the changing Percept members of a represented collection without a caller-owned list remains unresolved.
+
 ## Experience and choice
 
 Repeating an experience raises its current integer weight:
@@ -160,7 +177,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `['memory'] += expression` | Add a value |
 | `['memory'] -= expression` | Subtract a value |
 | `['memory'] ~= expression` | Capture assigned inputs and remember one experience |
-| `subject @ question` | Fill the question's Percept blanks |
+| `subject @ question` | Fill blanks from a Concept or one or more selected Percepts; `['*']` follows the same Percept rule |
 | `['target'] @+= ['evidence']` | Add matching sources from another linked answer |
 | `['target'] @-= ['evidence']` | Subtract matching sources from another linked answer |
 | `&operand` | Return the shared answer shape |
@@ -174,7 +191,7 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 ## Current scope
 
-The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
+The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only computed global Percept, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
 
 The current signed integer and deterministic choice rule are useful placeholders. `AnswerView::possibilities` exposes each projected value, its current strength, complete-row count, distinct source contributions, and whether it shares the greatest positive strength. The complete rows and question shape remain available through the Answer itself.
 
