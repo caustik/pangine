@@ -9,16 +9,16 @@ use pangine::Pangine;
 #[test]
 #[ignore = "warning: positive greatest-coefficient choice is a placeholder"]
 fn current_decision_prefers_the_greatest_positive_coefficient() {
-    assert_eq!(run("['choice'] = x2[tea]x3[coffee]; ^['choice']"), Some("[coffee]".to_owned()));
-    assert_eq!(run("['mixed'] = x2[tea]![coffee]; ^['mixed']"), Some("[tea]".to_owned()));
-    assert_eq!(run("['negative'] = ![tea]![coffee]; ^['negative']"), None);
+    assert_eq!(run("{choice} = x2[tea]x3[coffee]; ^{choice}"), Some("[coffee]".to_owned()));
+    assert_eq!(run("{mixed} = x2[tea]![coffee]; ^{mixed}"), Some("[tea]".to_owned()));
+    assert_eq!(run("{negative} = ![tea]![coffee]; ^{negative}"), None);
 }
 
 #[test]
 #[ignore = "warning: canonical tie breaking is a placeholder"]
 fn current_decision_breaks_ties_by_canonical_spelling() {
-    assert_eq!(run("['keep-a']=[A];['keep-b']=[B];['choice']=$['keep-a']*$['keep-b'];^['choice']"), Some("[A]".to_owned()));
-    assert_eq!(run("['keep-b']=[B];['keep-a']=[A];['choice']=$['keep-a']*$['keep-b'];^['choice']"), Some("[A]".to_owned()));
+    assert_eq!(run("{keep-a}=[A];{keep-b}=[B];{choice}=${keep-a}*${keep-b};^{choice}"), Some("[A]".to_owned()));
+    assert_eq!(run("{keep-b}=[B];{keep-a}=[A];{choice}=${keep-a}*${keep-b};^{choice}"), Some("[A]".to_owned()));
 }
 
 fn run(script: &str) -> Option<String> {

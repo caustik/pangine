@@ -39,6 +39,13 @@ enum ConceptShape {
     Ordered(usize),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormatContext {
+    Root,
+    UnionMember,
+    OrderedComponent,
+}
+
 #[derive(Clone, Copy)]
 enum PerceptEvaluation {
     All,
@@ -122,9 +129,11 @@ Commands:
   quit, q          Exit
 
 Concept syntax:
-  []                         Null / no Concept
+  []                         No Concept
   [name]                     Named Concept
-  ['name']                   Percept reference
+  [\"escaped text\"]           Named Concept with escaped text
+  {name}                     Percept reference
+  {\"escaped text\"}           Percept reference with escaped text
   (expression)               Make one complete surrounding operand
   [A][B]                     Union
   [A]*[B]                    Merge unordered Concept members
@@ -134,27 +143,27 @@ Concept syntax:
   x2[A]x3[B]                 Signed integer coefficients
 
 Percept operations:
-  ['name'] = expression      Assign
-  ['name'] += expression     Union addition
-  ['name'] -= expression     Union subtraction
-  ['name'] *= expression     Merge unordered Concept members
-  ['name'] /= expression     Inverse merge
-  ['name'] ~= expression     Capture one experience
+  {name} = expression      Assign
+  {name} += expression     Union addition
+  {name} -= expression     Union subtraction
+  {name} *= expression     Merge unordered Concept members
+  {name} /= expression     Inverse merge
+  {name} ~= expression     Capture one experience
   subject @ expression       Complete a Concept; return rows and bind holes
-  ['source'] @ expression    Complete one retained Percept source
-  ['*'] @ expression         Complete the global Percept's Concepts
-  ['a']['b'] @ expression   Complete several retained sources together
+  {source} @ expression    Complete one retained Percept source
+  {*} @ expression         Complete the global Percept's Concepts
+  {a}{b} @ expression   Complete several retained sources together
   &operand                   Return the shared answer shape for linked Percepts
   $operand                   Read Percepts without changing their shared answer
-  ['target'] @+= ['evidence'] Add matching evidence to a linked Answer
-  ['target'] @-= ['evidence'] Subtract matching evidence from a linked Answer
-  $['*']                     Inspect all live ordinary Concepts
+  {target} @+= {evidence} Add matching evidence to a linked Answer
+  {target} @-= {evidence} Subtract matching evidence from a linked Answer
+  ${*}                     Inspect all live ordinary Concepts
 
 Experience:
-  ['input'] = [purrs]
-  ['memory'] ~= {[cat]->['input']}
+  {input} = [purrs]
+  {memory} ~= [cat]->{input}
   Evaluates assigned Percepts in the complete input, then records the grounded
-  result as one experience owned by ['memory']. Percepts populated by experience
+  result as one experience owned by {memory}. Percepts populated by experience
   remain references. Repeating an equal Concept adds default relevance to that
   member. Questions derive recursive matches without multiplying one experience
   by match routes.
@@ -169,9 +178,9 @@ Choice:
   from one question, it removes incompatible answers and refreshes every linked
   output. Several output Percepts in one operand are chosen together.
 
-  ['choice'] = x2[tea]x3[coffee]
-  ^['choice']             returns [coffee]
-  ^(['animal']->['food']) chooses one complete animal-food pair
+  {choice} = x2[tea]x3[coffee]
+  ^{choice}             returns [coffee]
+  ^({animal}->{food}) chooses one complete animal-food pair
 
   Exact top-weight ties use the earliest canonical Concept spelling. If no
   entry has positive weight, ^ returns []. Zero-weight entries disappear when
@@ -562,6 +571,21 @@ impl Pangine {
 
 // Concept identity, state, and public mutation.
 impl Pangine {
+    /// Returns the stable named Concept for the exact UTF-8 text, creating it if necessary.
+    ///
+    /// Empty text is a named Concept and remains distinct from `[]`, which
+    /// represents no Concept in Pangine syntax.
+    pub fn reference_name(&mut self, name: &str) -> ConceptId {
+        if let Some(concept) = self.names.get(name).and_then(Weak::upgrade) {
+            return ConceptId(concept);
+        }
+
+        let concept = self.alloc(ConceptKind::Named(name.to_owned()), ConceptMap::new());
+        self.names.insert(name.to_owned(), Rc::downgrade(&concept.0));
+        self.maybe_prune_indexes();
+        concept
+    }
+
     /// Returns the stable percept handle for `name`, creating it if necessary.
     pub fn reference_percept(&mut self, name: &str) -> ConceptId {
         if let Some(concept) = self.percepts.get(name) {
@@ -805,7 +829,7 @@ impl Pangine {
         }
 
         let mut active = BTreeSet::new();
-        self.format_inner(concept, evaluate, &mut active)
+        self.format_inner(concept, evaluate, &mut active, FormatContext::Root)
     }
 
     /// Formats a concept, optionally evaluating percept references recursively.
@@ -1024,7 +1048,7 @@ impl Pangine {
                 Ok(concept.map(ParsedUnionOperand::ordinary))
             }
             Some('[') => Ok(self.parse_bracket(parser)?.map(ParsedUnionOperand::ordinary)),
-            Some('{') => Ok(self.parse_ordered(parser)?.map(ParsedUnionOperand::ordinary)),
+            Some('{') => Ok(self.parse_percept(parser)?.map(ParsedUnionOperand::ordinary)),
             Some(operator @ ('$' | '&' | '^')) => {
                 parser.next();
                 let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
@@ -1054,43 +1078,36 @@ impl Pangine {
         }
     }
 
-    fn parse_ordered(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
+    fn parse_percept(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.next();
-        let first = self.parse_merge_expression(parser)?.ok_or(ParseError::InvalidSyntax)?;
-        let mut components = vec![first];
-
-        loop {
-            parser.skip_ws();
-            if !parser.consume_str("->") {
-                break;
+        let name = if parser.peek() == Some('"') {
+            parser.parse_quoted_text()?
+        } else if parser.consume('*') {
+            GLOBAL_PERCEPT_NAME.to_owned()
+        } else {
+            let name = parser.parse_name(true);
+            if name.is_empty() {
+                return Err(ParseError::InvalidSyntax);
             }
-
-            components.push(self.parse_merge_expression(parser)?.ok_or(ParseError::InvalidSyntax)?);
-        }
-
-        if components.len() < 2 {
-            return Err(ParseError::InvalidSyntax);
-        }
+            name
+        };
+        let percept = self.reference_percept(&name);
         parser.expect('}')?;
-        Ok(Some(self.reference_ordered(components)))
+
+        parser.skip_ws();
+        self.parse_percept_action(parser, percept)
     }
 
     fn parse_bracket(&mut self, parser: &mut Parser) -> ParseResult<Option<ConceptId>> {
         parser.next();
 
-        if parser.consume('\'') {
-            let name = if parser.consume('*') { GLOBAL_PERCEPT_NAME.to_owned() } else { parser.parse_name(true) };
-            let percept = self.reference_percept(&name);
-
-            parser.expect('\'')?;
-            parser.expect(']')?;
-
-            parser.skip_ws();
-            return self.parse_percept_action(parser, percept);
-        }
-
-        let name = parser.parse_name(true);
-        let concept = self.reference_named(&name);
+        let concept = if parser.peek() == Some('"') {
+            let name = parser.parse_quoted_text()?;
+            Some(self.reference_name(&name))
+        } else {
+            let name = parser.parse_name(true);
+            self.reference_named(&name)
+        };
         parser.expect(']')?;
 
         Ok(concept)
@@ -1145,18 +1162,7 @@ impl Pangine {
 // Concept interning and engine ownership.
 impl Pangine {
     fn reference_named(&mut self, name: &str) -> Option<ConceptId> {
-        if name.is_empty() {
-            return None;
-        }
-
-        if let Some(concept) = self.names.get(name).and_then(Weak::upgrade) {
-            return Some(ConceptId(concept));
-        }
-
-        let concept = self.alloc(ConceptKind::Named(name.to_owned()), ConceptMap::new());
-        self.names.insert(name.to_owned(), Rc::downgrade(&concept.0));
-        self.maybe_prune_indexes();
-        Some(concept)
+        (!name.is_empty()).then(|| self.reference_name(name))
     }
 
     fn reference_merge_with_inversion(&mut self, left: Option<ConceptId>, right: Option<ConceptId>, right_inversion: bool) -> ParseResult<Option<ConceptId>> {
@@ -2202,39 +2208,84 @@ impl Pangine {
 
 // Canonical and diagnostic formatting.
 impl Pangine {
-    fn format_inner(&self, concept: &ConceptId, evaluate: bool, active: &mut BTreeSet<ConceptId>) -> String {
+    fn format_inner(&self, concept: &ConceptId, evaluate: bool, active: &mut BTreeSet<ConceptId>, context: FormatContext) -> String {
         if !active.insert(concept.clone()) {
             return match &concept.0.kind {
-                ConceptKind::Named(name) => format!("[{name}]"),
-                ConceptKind::Percept { name } => format!("['{name}']"),
+                ConceptKind::Named(name) => self.format_named(name),
+                ConceptKind::Percept { name } => self.format_percept(name),
                 _ => format!("[#{}]", concept.index()),
             };
         }
 
         let formatted = match &concept.0.kind {
-            ConceptKind::Named(name) => format!("[{name}]"),
+            ConceptKind::Named(name) => self.format_named(name),
             ConceptKind::Percept { name } => {
                 if evaluate {
-                    self.get_value(concept).map_or_else(|| "[]".to_owned(), |value| self.format_inner(&value, evaluate, active))
+                    self.get_value(concept).map_or_else(|| "[]".to_owned(), |value| self.format_inner(&value, evaluate, active, context))
                 } else {
-                    format!("['{name}']")
+                    self.format_percept(name)
                 }
             }
             ConceptKind::Ordered { components } => {
-                let mut ordered = String::from("{");
+                let mut ordered = String::new();
                 for (index, component) in components.iter().enumerate() {
                     if index > 0 {
                         ordered.push_str("->");
                     }
-                    ordered.push_str(&self.format_inner(component, evaluate, active));
+                    ordered.push_str(&self.format_inner(component, evaluate, active, FormatContext::OrderedComponent));
                 }
-                ordered.push('}');
-                ordered
+                if context == FormatContext::Root {
+                    ordered
+                } else {
+                    format!("({ordered})")
+                }
             }
-            ConceptKind::Unordered => self.format_relevance(&concept.0.subconcepts, evaluate, active),
+            ConceptKind::Unordered => {
+                let unordered = self.format_relevance(&concept.0.subconcepts, evaluate, active);
+                if context == FormatContext::UnionMember {
+                    format!("({unordered})")
+                } else {
+                    unordered
+                }
+            }
         };
 
         active.remove(concept);
+        formatted
+    }
+
+    fn format_named(&self, name: &str) -> String {
+        self.format_name(name, '[', ']', false)
+    }
+
+    fn format_percept(&self, name: &str) -> String {
+        self.format_name(name, '{', '}', name == GLOBAL_PERCEPT_NAME)
+    }
+
+    fn format_name(&self, name: &str, opening: char, closing: char, reserved_compact: bool) -> String {
+        if reserved_compact || (!name.is_empty() && name.chars().all(|character| is_name_char(character, true))) {
+            return format!("{opening}{name}{closing}");
+        }
+
+        let mut formatted = String::new();
+        formatted.push(opening);
+        formatted.push('"');
+        for character in name.chars() {
+            match character {
+                '"' => formatted.push_str("\\\""),
+                '\\' => formatted.push_str("\\\\"),
+                '\0' => formatted.push_str("\\0"),
+                '\u{0008}' => formatted.push_str("\\b"),
+                '\t' => formatted.push_str("\\t"),
+                '\n' => formatted.push_str("\\n"),
+                '\u{000c}' => formatted.push_str("\\f"),
+                '\r' => formatted.push_str("\\r"),
+                character if character.is_control() => formatted.push_str(&format!("\\u{{{:x}}}", u32::from(character))),
+                character => formatted.push(character),
+            }
+        }
+        formatted.push('"');
+        formatted.push(closing);
         formatted
     }
 
@@ -2327,14 +2378,7 @@ impl Pangine {
 
         for (concept, relevance) in self.canonical_entries(map) {
             out.push_str(&format_x_coefficient(relevance));
-            let wrap_concept = matches!(concept.0.kind, ConceptKind::Unordered);
-            if wrap_concept {
-                out.push('(');
-            }
-            out.push_str(&self.format_inner(&concept, evaluate, active));
-            if wrap_concept {
-                out.push(')');
-            }
+            out.push_str(&self.format_inner(&concept, evaluate, active, FormatContext::UnionMember));
         }
 
         out
@@ -2343,7 +2387,7 @@ impl Pangine {
     fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId) -> String {
         let mut out = String::from("  ");
         let add_separator = relevance.x_coefficient != 1 && relevance.x_coefficient != -1;
-        let wrap_concept = relevance.x_coefficient != 1 && matches!(concept.0.kind, ConceptKind::Unordered);
+        let wrap_concept = relevance.x_coefficient != 1 && matches!(concept.0.kind, ConceptKind::Unordered | ConceptKind::Ordered { .. });
 
         if relevance.x_coefficient == -1 {
             out.push('!');
@@ -2474,6 +2518,58 @@ impl Parser {
         self.chars[start..self.pos].iter().collect()
     }
 
+    fn parse_quoted_text(&mut self) -> ParseResult<String> {
+        self.expect('"')?;
+        let mut text = String::new();
+
+        loop {
+            match self.next().ok_or(ParseError::InvalidSyntax)? {
+                '"' => return Ok(text),
+                '\\' => text.push(self.parse_text_escape()?),
+                character if character.is_control() => return Err(ParseError::InvalidSyntax),
+                character => text.push(character),
+            }
+        }
+    }
+
+    fn parse_text_escape(&mut self) -> ParseResult<char> {
+        match self.next().ok_or(ParseError::InvalidSyntax)? {
+            '"' => Ok('"'),
+            '\\' => Ok('\\'),
+            '0' => Ok('\0'),
+            'b' => Ok('\u{0008}'),
+            't' => Ok('\t'),
+            'n' => Ok('\n'),
+            'f' => Ok('\u{000c}'),
+            'r' => Ok('\r'),
+            'u' => self.parse_unicode_escape(),
+            _ => Err(ParseError::InvalidSyntax),
+        }
+    }
+
+    fn parse_unicode_escape(&mut self) -> ParseResult<char> {
+        self.expect('{')?;
+
+        let mut value = 0_u32;
+        let mut digits = 0;
+        while let Some(digit) = self.peek().and_then(|character| character.to_digit(16)) {
+            if digits == 6 {
+                return Err(ParseError::InvalidSyntax);
+            }
+
+            self.next();
+            value = value.checked_mul(16).and_then(|current| current.checked_add(digit)).ok_or(ParseError::InvalidSyntax)?;
+            digits += 1;
+        }
+
+        if digits == 0 {
+            return Err(ParseError::InvalidSyntax);
+        }
+
+        self.expect('}')?;
+        char::from_u32(value).ok_or(ParseError::InvalidSyntax)
+    }
+
     fn starts_union_operand(&mut self) -> bool {
         self.peek().is_some_and(|c| matches!(c, '(' | '[' | '{' | '$' | '&' | '^' | '!' | 'x'))
     }
@@ -2540,6 +2636,8 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
     let mut has_semicolons = false;
     let mut in_block_comment = false;
     let mut in_line_comment = false;
+    let mut in_quoted_text = false;
+    let mut quoted_escape = false;
     let mut split_before_line_comment = false;
     let mut chars = script.char_indices().peekable();
 
@@ -2566,7 +2664,19 @@ fn split_script_statements(script: &str) -> ScriptStatements<'_> {
             continue;
         }
 
+        if in_quoted_text {
+            if quoted_escape {
+                quoted_escape = false;
+            } else if ch == '\\' {
+                quoted_escape = true;
+            } else if ch == '"' {
+                in_quoted_text = false;
+            }
+            continue;
+        }
+
         match ch {
+            '"' => in_quoted_text = true,
             '#' if stack.is_empty() => {
                 statements.push(&script[start..index]);
                 in_line_comment = true;
@@ -2668,22 +2778,22 @@ mod tests {
         assert_eq!(debug_console_help("[help]"), None);
         for expected in [
             "inspect operand  Show linked values",
-            "[]                         Null",
+            "[]                         No Concept",
             "(expression)               Make one complete surrounding operand",
             "[A]*[B]                    Merge unordered Concept members",
             "[A]/[B]",
             "x2[A]x3[B]                 Signed integer coefficients",
-            "['name'] ~= expression     Capture one experience",
+            "{name} ~= expression     Capture one experience",
             "subject @ expression       Complete a Concept",
-            "['source'] @ expression    Complete one retained Percept source",
-            "['*'] @ expression         Complete the global Percept's Concepts",
-            "['a']['b'] @ expression   Complete several retained sources together",
+            "{source} @ expression    Complete one retained Percept source",
+            "{*} @ expression         Complete the global Percept's Concepts",
+            "{a}{b} @ expression   Complete several retained sources together",
             "&operand                   Return the shared answer shape",
-            "['target'] @+= ['evidence'] Add matching evidence",
-            "['target'] @-= ['evidence'] Subtract matching evidence",
-            "$['*']                     Inspect all live ordinary Concepts",
+            "{target} @+= {evidence} Add matching evidence",
+            "{target} @-= {evidence} Subtract matching evidence",
+            "${*}                     Inspect all live ordinary Concepts",
             "Repeating an equal Concept adds default relevance",
-            "^['choice']",
+            "^{choice}",
         ] {
             assert!(help.contains(expected), "missing help entry: {expected}");
         }
@@ -2695,10 +2805,10 @@ mod tests {
         assert!(debug_console_quit("quit"));
         assert!(!debug_console_quit("query"));
         assert!(!debug_console_quit("quitting"));
-        assert_eq!(debug_console_inspection_operand("inspect ['choice']"), Some("['choice']"));
-        assert_eq!(debug_console_inspection_operand("inspect\t['choice']"), Some("['choice']"));
+        assert_eq!(debug_console_inspection_operand("inspect {choice}"), Some("{choice}"));
+        assert_eq!(debug_console_inspection_operand("inspect\t{choice}"), Some("{choice}"));
         assert_eq!(debug_console_inspection_operand("inspect"), Some(""));
-        assert_eq!(debug_console_inspection_operand("inspector ['choice']"), None);
+        assert_eq!(debug_console_inspection_operand("inspector {choice}"), None);
         assert_eq!(debug_console_inspection_operand("[inspect]"), None);
     }
 
@@ -2706,32 +2816,32 @@ mod tests {
     fn debug_console_inspection_shows_values_rows_ties_and_complete_sources() {
         let mut pangine = Pangine::new();
         for script in [
-            "['candidates'] ~= [A]",
-            "['candidates'] ~= [B]",
-            "['helpful'] ~= [A]",
-            "['failed'] ~= [A]",
-            "['failed'] ~= [A]",
-            "['candidates'] @ ['choice']",
-            "['helpful'] @ ['helpful-choice']",
-            "['choice'] @+= ['helpful-choice']",
-            "['failed'] @ ['failed-choice']",
-            "['choice'] @-= ['failed-choice']",
+            "{candidates} ~= [A]",
+            "{candidates} ~= [B]",
+            "{helpful} ~= [A]",
+            "{failed} ~= [A]",
+            "{failed} ~= [A]",
+            "{candidates} @ {choice}",
+            "{helpful} @ {helpful-choice}",
+            "{choice} @+= {helpful-choice}",
+            "{failed} @ {failed-choice}",
+            "{choice} @-= {failed-choice}",
         ] {
             assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
         }
 
         assert_eq!(
-            pangine.debug_answer_inspection_lines("['choice']"),
+            pangine.debug_answer_inspection_lines("{choice}"),
             Ok(vec![
                 "    +0, 1 row: [A]".to_owned(),
-                "      +1 from ['candidates']: [A]".to_owned(),
-                "      -2 from ['failed']: [A]".to_owned(),
-                "      +1 from ['helpful']: [A]".to_owned(),
+                "      +1 from {candidates}: [A]".to_owned(),
+                "      -2 from {failed}: [A]".to_owned(),
+                "      +1 from {helpful}: [A]".to_owned(),
                 "  * +1, 1 row: [B]".to_owned(),
-                "      +1 from ['candidates']: [B]".to_owned(),
+                "      +1 from {candidates}: [B]".to_owned(),
             ])
         );
-        assert_eq!(pangine.debug_answer_inspection_lines("['missing']"), Err("operand is not part of one linked Answer".to_owned()));
+        assert_eq!(pangine.debug_answer_inspection_lines("{missing}"), Err("operand is not part of one linked Answer".to_owned()));
     }
 
     #[test]
@@ -2739,7 +2849,7 @@ mod tests {
         let weak_value = {
             let mut pangine = Pangine::new();
             let percept = pangine.reference_percept("memory");
-            let value = pangine.reference_concept("['memory'][A]").unwrap().unwrap();
+            let value = pangine.reference_concept("{memory}[A]").unwrap().unwrap();
             let weak_value = Rc::downgrade(&value.0);
 
             assert!(pangine.set_percept_value(&percept, Some(value.clone())));
@@ -2754,8 +2864,8 @@ mod tests {
     #[test]
     fn ordinary_answer_values_are_replaced_and_released_during_detachment() {
         let mut pangine = Pangine::new();
-        pangine.reference_concept("['memory'] ~= [cat]->[purrs]").unwrap();
-        pangine.reference_concept("['memory'] @ ['animal']->['sound']").unwrap();
+        pangine.reference_concept("{memory} ~= [cat]->[purrs]").unwrap();
+        pangine.reference_concept("{memory} @ {animal}->{sound}").unwrap();
         let animal = pangine.reference_percept("animal");
         let sound = pangine.reference_percept("sound");
         let initial = pangine.percept_values[&animal.index()].clone();
@@ -2763,13 +2873,13 @@ mod tests {
         let weak_initial = Rc::downgrade(&initial.0);
         drop(initial);
 
-        pangine.reference_concept("['animal'] = []").unwrap();
+        pangine.reference_concept("{animal} = []").unwrap();
         assert!(weak_initial.upgrade().is_none());
         let remaining = pangine.percept_values[&sound.index()].clone();
         let weak_remaining = Rc::downgrade(&remaining.0);
         drop(remaining);
 
-        pangine.reference_concept("['sound'] = []").unwrap();
+        pangine.reference_concept("{sound} = []").unwrap();
         assert!(weak_remaining.upgrade().is_none());
     }
 
@@ -2779,18 +2889,18 @@ mod tests {
         let meals = pangine.reference_percept("meals");
         let meal = pangine.reference_concept("[cat]->[eats]->[fish]").unwrap().unwrap();
         assert!(pangine.set_percept_subconcepts(&meals, ConceptMap::from([(meal, Relevance::new(i64::MAX))])).is_some());
-        pangine.reference_concept("['meals'] @ ['animal']->[eats]->['food']").unwrap().unwrap();
-        pangine.reference_concept("['home'] = [old-home]").unwrap().unwrap();
+        pangine.reference_concept("{meals} @ {animal}->[eats]->{food}").unwrap().unwrap();
+        pangine.reference_concept("{home} = [old-home]").unwrap().unwrap();
 
-        let linked_before = pangine.reference_concept("&['animal']").unwrap().unwrap();
-        let animal_before = pangine.reference_concept("$['animal']").unwrap().unwrap();
-        assert!(pangine.reference_concept("([cat]->[lives-in]->[house]) @ ['animal']->[lives-in]->['home']").unwrap().is_none());
+        let linked_before = pangine.reference_concept("&{animal}").unwrap().unwrap();
+        let animal_before = pangine.reference_concept("${animal}").unwrap().unwrap();
+        assert!(pangine.reference_concept("([cat]->[lives-in]->[house]) @ {animal}->[lives-in]->{home}").unwrap().is_none());
 
-        assert_eq!(pangine.reference_concept("&['animal']").unwrap(), Some(linked_before));
-        assert_eq!(pangine.reference_concept("$['animal']").unwrap(), Some(animal_before));
+        assert_eq!(pangine.reference_concept("&{animal}").unwrap(), Some(linked_before));
+        assert_eq!(pangine.reference_concept("${animal}").unwrap(), Some(animal_before));
         let old_home = pangine.reference_concept("[old-home]").unwrap();
-        assert_eq!(pangine.reference_concept("$['home']").unwrap(), old_home);
-        assert!(pangine.reference_concept("&['home']").unwrap().is_none());
+        assert_eq!(pangine.reference_concept("${home}").unwrap(), old_home);
+        assert!(pangine.reference_concept("&{home}").unwrap().is_none());
     }
 
     #[test]
@@ -2880,20 +2990,20 @@ mod tests {
             "[C]*[sound]*[calm]",
             "[C]x2[bridge]",
             "[bridge]![E]",
-            "{[C]->{[A]->[Z]}}",
+            "[C]->([A]->[Z])",
             "x2(([weighted-left]->[A])([weighted-right]->[A]))",
         ] {
-            let command = format!("['world'] ~= {concept}");
+            let command = format!("{{world}} ~= {concept}");
             assert!(pangine.reference_concept(&command).unwrap().is_some());
         }
 
         let source = pangine.reference_percept("world");
         for question_text in [
-            "[C]*[sound]*['unordered-answer']",
-            "[C]->[sound]->['ordered-answer']",
-            "{['who']->{[A]->[Z]}}",
-            "([weighted-left]->['weighted-answer'])([weighted-right]->['weighted-answer'])",
-            "['anything']",
+            "[C]*[sound]*{unordered-answer}",
+            "[C]->[sound]->{ordered-answer}",
+            "{who}->([A]->[Z])",
+            "([weighted-left]->{weighted-answer})([weighted-right]->{weighted-answer})",
+            "{anything}",
         ] {
             let question = pangine.reference_concept(question_text).unwrap().unwrap();
             let filtered = pangine.question_snapshot(std::slice::from_ref(&source), &question);
@@ -2905,11 +3015,11 @@ mod tests {
             assert!(filtered_results.completions() == full_results.completions(), "question {question_text}");
         }
 
-        let unordered = pangine.reference_concept("[C]*[sound]*['unordered-answer']").unwrap().unwrap();
+        let unordered = pangine.reference_concept("[C]*[sound]*{unordered-answer}").unwrap().unwrap();
         let unordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &unordered);
         assert!(unordered_snapshot.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Unordered));
 
-        let ordered = pangine.reference_concept("[C]->[sound]->['ordered-answer']").unwrap().unwrap();
+        let ordered = pangine.reference_concept("[C]->[sound]->{ordered-answer}").unwrap().unwrap();
         let ordered_snapshot = pangine.question_snapshot(std::slice::from_ref(&source), &ordered);
         assert!(ordered_snapshot.keys().all(|(_, matched, _)| matched.0.shape() == ConceptShape::Ordered(3)));
 

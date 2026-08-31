@@ -10,18 +10,18 @@ use std::time::{Duration, Instant};
 const DEFAULT_ANSWER_REPLAY_SIZES: &str = "10,100,1000";
 
 const DECISION_QUESTION: &str = "
-    (['candidate']->[action]->['action'])
-    (['candidate']->[tool]->['tool'])";
+    ({candidate}->[action]->{action})
+    ({candidate}->[tool]->{tool})";
 
 const HELPFUL_QUESTION: &str = "
-    (['helpful-episode']->[action]->['helpful-action'])
-    (['helpful-episode']->[tool]->['helpful-tool'])
-    (['helpful-episode']->[outcome]->[helpful])";
+    ({helpful-episode}->[action]->{helpful-action})
+    ({helpful-episode}->[tool]->{helpful-tool})
+    ({helpful-episode}->[outcome]->[helpful])";
 
 const FAILED_QUESTION: &str = "
-    (['failed-episode']->[action]->['failed-action'])
-    (['failed-episode']->[tool]->['failed-tool'])
-    (['failed-episode']->[outcome]->[failed])";
+    ({failed-episode}->[action]->{failed-action})
+    ({failed-episode}->[tool]->{failed-tool})
+    ({failed-episode}->[outcome]->[failed])";
 
 const CANDIDATES: [(&str, &str); 3] = [("inspect-symbols", "dumpbin"), ("inspect-symbols", "link-map"), ("reconfigure", "cmake")];
 
@@ -45,11 +45,11 @@ impl ResearchQuestions {
     fn new(pangine: &mut Pangine) -> Self {
         Self {
             decision: must_ref(pangine, DECISION_QUESTION),
-            decision_projection: must_ref(pangine, "['action']->['tool']"),
+            decision_projection: must_ref(pangine, "{action}->{tool}"),
             helpful: must_ref(pangine, HELPFUL_QUESTION),
-            helpful_projection: must_ref(pangine, "['helpful-action']->['helpful-tool']"),
+            helpful_projection: must_ref(pangine, "{helpful-action}->{helpful-tool}"),
             failed: must_ref(pangine, FAILED_QUESTION),
-            failed_projection: must_ref(pangine, "['failed-action']->['failed-tool']"),
+            failed_projection: must_ref(pangine, "{failed-action}->{failed-tool}"),
         }
     }
 }
@@ -211,13 +211,13 @@ fn remember_cycle_outcome(pangine: &mut Pangine, cycle: usize) -> ConceptId {
 
 fn remember_candidate(pangine: &mut Pangine, index: usize, action: &str, tool: &str) -> ConceptId {
     let source = format!("candidate-source-{index}");
-    must_ref(pangine, &format!("['{source}'] ~= ([candidate-{index}]->[action]->[{action}])([candidate-{index}]->[tool]->[{tool}])"));
+    must_ref(pangine, &format!("{{{source}}} ~= ([candidate-{index}]->[action]->[{action}])([candidate-{index}]->[tool]->[{tool}])"));
     pangine.reference_percept(&source)
 }
 
 fn remember_outcome(pangine: &mut Pangine, episode: &str, (action, tool): (&str, &str), outcome: &str) -> ConceptId {
     let source = format!("{episode}-source");
-    must_ref(pangine, &format!("['{source}'] ~= ([{episode}]->[action]->[{action}])([{episode}]->[tool]->[{tool}])([{episode}]->[outcome]->[{outcome}])"));
+    must_ref(pangine, &format!("{{{source}}} ~= ([{episode}]->[action]->[{action}])([{episode}]->[tool]->[{tool}])([{episode}]->[outcome]->[{outcome}])"));
     pangine.reference_percept(&source)
 }
 

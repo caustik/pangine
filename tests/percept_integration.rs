@@ -2,8 +2,8 @@ use pangine::{ConceptId, Pangine, PerceptUpdateError, Relevance};
 use std::collections::BTreeMap;
 
 const DECISION_PROGRAM: &str = "
-    ['lived-experience'] @ [observation]->[context]->$['context-input']->[reading]->['decision-candidate']->[result]->$['result-input'];
-    ['decision-output'] = ^['decision-candidate']
+    {lived-experience} @ [observation]->[context]->${context-input}->[reading]->{decision-candidate}->[result]->${result-input};
+    {decision-output} = ^{decision-candidate}
 ";
 
 #[test]
@@ -53,17 +53,17 @@ fn rust_can_ground_one_complete_input_group_without_rewriting_history() {
     let reading = pangine.reference_percept("reading-input");
     let result = pangine.reference_percept("result-input");
     let experience = pangine.reference_percept("lived-experience");
-    let template = must_ref(&mut pangine, "[observation]->[context]->['context-input']->[reading]->['reading-input']->[result]->['result-input']");
+    let template = must_ref(&mut pangine, "[observation]->[context]->{context-input}->[reading]->{reading-input}->[result]->{result-input}");
 
     set_frame(&mut pangine, [&context, &reading, &result], ["opal", "cedar", "pearl"]);
     let grounded = pangine.evaluate_concept(&template).expect("complete input group");
-    assert_eq!(pangine.format_concept(&grounded, false), "{[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]}");
+    assert_eq!(pangine.format_concept(&grounded, false), "[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]");
     pangine.perform_experience(&experience, Some(&grounded)).expect("valid grounded experience");
 
     set_frame(&mut pangine, [&context, &reading, &result], ["opal", "violet", "pearl"]);
     assert_eq!(
         pangine.format_concept(&pangine.get_value(&experience).expect("retained experience"), false),
-        "{[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]}",
+        "[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]",
         "later input does not alter the grounded experience"
     );
 
@@ -83,7 +83,7 @@ fn input_and_output_percepts_complete_a_living_decision_cycle() {
     let result = pangine.reference_percept("result-input");
     let experience = pangine.reference_percept("lived-experience");
     let output = pangine.reference_percept("decision-output");
-    let template = must_ref(&mut pangine, "[observation]->[context]->['context-input']->[reading]->['reading-input']->[result]->['result-input']");
+    let template = must_ref(&mut pangine, "[observation]->[context]->{context-input}->[reading]->{reading-input}->[result]->{result-input}");
     let inputs = [&context, &reading, &result];
 
     for _ in 0..3 {

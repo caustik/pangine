@@ -19,11 +19,11 @@ fn required_source_agreement_can_override_a_larger_additive_total() {
     experience(&mut pangine, "left-source", "[signal]->[B]", 10);
     experience(&mut pangine, "right-source", "[signal]->[A]", 1);
 
-    let (result, choice, required_sources) = complete(&mut pangine, &["left-source", "right-source"], "[signal]->['choice']");
+    let (result, choice, required_sources) = complete(&mut pangine, &["left-source", "right-source"], "[signal]->{choice}");
     assert!(result.completions().iter().all(|completion| completion.evidence().len() == 1));
     let inventory = source_inventory(&pangine, &result, &choice);
 
-    assert_eq!(inventory, expected_inventory(&[("[A]", &[("['left-source']", 1), ("['right-source']", 1)]), ("[B]", &[("['left-source']", 10)]),]));
+    assert_eq!(inventory, expected_inventory(&[("[A]", &[("{left-source}", 1), ("{right-source}", 1)]), ("[B]", &[("{left-source}", 10)]),]));
     let totals = additive_totals(&inventory);
     assert_eq!(totals, score_map(&[("[A]", 2), ("[B]", 10)]));
     assert_eq!(only_greatest(&totals), Some("[B]".to_owned()));
@@ -38,12 +38,12 @@ fn the_same_required_source_rule_works_for_a_two_step_path_question() {
     experience(&mut pangine, "left-source", "[root]->[r]->[middle-B]->[s]->[B]", 10);
     experience(&mut pangine, "right-source", "[root]->[r]->[middle-C]->[s]->[A]", 1);
 
-    let question = "(['start']->[r]->['middle'])(['middle']->[s]->['choice'])";
+    let question = "({start}->[r]->{middle})({middle}->[s]->{choice})";
     let (result, choice, required_sources) = complete(&mut pangine, &["left-source", "right-source"], question);
     assert!(result.completions().iter().all(|completion| completion.evidence().len() == 2));
     let inventory = source_inventory(&pangine, &result, &choice);
 
-    assert_eq!(inventory, expected_inventory(&[("[A]", &[("['left-source']", 1), ("['right-source']", 1)]), ("[B]", &[("['left-source']", 10)]),]));
+    assert_eq!(inventory, expected_inventory(&[("[A]", &[("{left-source}", 1), ("{right-source}", 1)]), ("[B]", &[("{left-source}", 10)]),]));
     let totals = additive_totals(&inventory);
     assert_eq!(totals, score_map(&[("[A]", 2), ("[B]", 10)]));
     assert_eq!(only_greatest(&totals), Some("[B]".to_owned()));
@@ -57,9 +57,9 @@ fn required_source_disagreement_can_abstain_despite_a_large_numeric_lead() {
     experience(&mut pangine, "left-source", "[signal]->[A]", 10);
     experience(&mut pangine, "right-source", "[signal]->[B]", 1);
 
-    let (result, choice, required_sources) = complete(&mut pangine, &["left-source", "right-source"], "[signal]->['choice']");
+    let (result, choice, required_sources) = complete(&mut pangine, &["left-source", "right-source"], "[signal]->{choice}");
     let inventory = source_inventory(&pangine, &result, &choice);
-    assert_eq!(inventory, expected_inventory(&[("[A]", &[("['left-source']", 10)]), ("[B]", &[("['right-source']", 1)])]));
+    assert_eq!(inventory, expected_inventory(&[("[A]", &[("{left-source}", 10)]), ("[B]", &[("{right-source}", 1)])]));
 
     let totals = additive_totals(&inventory);
     assert_eq!(totals, score_map(&[("[A]", 10), ("[B]", 1)]));
@@ -74,10 +74,10 @@ fn an_external_cost_limit_can_override_a_larger_additive_total() {
     experience(&mut pangine, "memory", "[signal]->[A]", 10);
     experience(&mut pangine, "memory", "[signal]->[B]", 4);
 
-    let (result, choice, _) = complete(&mut pangine, &["memory"], "[signal]->['choice']");
+    let (result, choice, _) = complete(&mut pangine, &["memory"], "[signal]->{choice}");
     assert!(result.completions().iter().all(|completion| completion.evidence().len() == 1));
     let inventory = source_inventory(&pangine, &result, &choice);
-    assert_eq!(inventory, expected_inventory(&[("[A]", &[("['memory']", 10)]), ("[B]", &[("['memory']", 4)])]));
+    assert_eq!(inventory, expected_inventory(&[("[A]", &[("{memory}", 10)]), ("[B]", &[("{memory}", 4)])]));
 
     let totals = additive_totals(&inventory);
     let costs = cost_map(&[("[A]", 5), ("[B]", 2)]);
@@ -92,11 +92,11 @@ fn the_same_external_cost_limit_works_for_a_two_step_path_question() {
     experience(&mut pangine, "memory", "[root]->[r]->[middle-A]->[s]->[A]", 10);
     experience(&mut pangine, "memory", "[root]->[r]->[middle-B]->[s]->[B]", 4);
 
-    let question = "(['start']->[r]->['middle'])(['middle']->[s]->['choice'])";
+    let question = "({start}->[r]->{middle})({middle}->[s]->{choice})";
     let (result, choice, _) = complete(&mut pangine, &["memory"], question);
     assert!(result.completions().iter().all(|completion| completion.evidence().len() == 2));
     let inventory = source_inventory(&pangine, &result, &choice);
-    assert_eq!(inventory, expected_inventory(&[("[A]", &[("['memory']", 10)]), ("[B]", &[("['memory']", 4)])]));
+    assert_eq!(inventory, expected_inventory(&[("[A]", &[("{memory}", 10)]), ("[B]", &[("{memory}", 4)])]));
 
     let totals = additive_totals(&inventory);
     let costs = cost_map(&[("[A]", 5), ("[B]", 2)]);
@@ -111,7 +111,7 @@ fn an_external_cost_limit_can_abstain_despite_a_unique_numeric_winner() {
     experience(&mut pangine, "memory", "[signal]->[A]", 10);
     experience(&mut pangine, "memory", "[signal]->[B]", 4);
 
-    let (result, choice, _) = complete(&mut pangine, &["memory"], "[signal]->['choice']");
+    let (result, choice, _) = complete(&mut pangine, &["memory"], "[signal]->{choice}");
     let inventory = source_inventory(&pangine, &result, &choice);
     let totals = additive_totals(&inventory);
     let costs = cost_map(&[("[A]", 5), ("[B]", 4)]);
@@ -204,7 +204,7 @@ fn cost_map(entries: &[(&str, i64)]) -> BTreeMap<String, i64> {
 
 fn experience(pangine: &mut Pangine, percept: &str, concept: &str, repetitions: usize) {
     for _ in 0..repetitions {
-        must_ref(pangine, &format!("['{percept}'] ~= {concept}"));
+        must_ref(pangine, &format!("{{{percept}}} ~= {concept}"));
     }
 }
 

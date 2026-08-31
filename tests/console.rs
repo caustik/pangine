@@ -6,19 +6,19 @@ fn route_cycle_changes_its_complete_choice_after_repeated_outcomes() {
     let stdout = run_example("route-cycle.pae");
 
     assert_eq!(
-        command_results(&stdout, "['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']"),
+        command_results(&stdout, "{base-first-action}->{base-middle}->{base-second-action} @-= {negative-route}"),
         vec![
-            "x3{[east]->[C]->[north]}x2{[north]->[B]->[east]}{[west]->[E]->[south]}",
-            "x2{[east]->[C]->[north]}x2{[north]->[B]->[east]}{[west]->[E]->[south]}",
-            "x2{[north]->[B]->[east]}{[east]->[C]->[north]}{[west]->[E]->[south]}",
-            "x3{[north]->[B]->[east]}{[east]->[C]->[north]}{[west]->[E]->[south]}",
+            "x3([east]->[C]->[north])x2([north]->[B]->[east])([west]->[E]->[south])",
+            "x2([east]->[C]->[north])x2([north]->[B]->[east])([west]->[E]->[south])",
+            "x2([north]->[B]->[east])([east]->[C]->[north])([west]->[E]->[south])",
+            "x3([north]->[B]->[east])([east]->[C]->[north])([west]->[E]->[south])",
         ]
     );
     assert_eq!(
-        command_results(&stdout, "['selected-route'] = ^(['base-first-action']->['base-middle']->['base-second-action'])"),
-        vec!["{[east]->[C]->[north]}", "{[east]->[C]->[north]}", "{[north]->[B]->[east]}", "{[north]->[B]->[east]}"]
+        command_results(&stdout, "{selected-route} = ^({base-first-action}->{base-middle}->{base-second-action})"),
+        vec!["[east]->[C]->[north]", "[east]->[C]->[north]", "[north]->[B]->[east]", "[north]->[B]->[east]"]
     );
-    assert_eq!(command_results(&stdout, "$['recorded-outcome']"), vec!["[success]"]);
+    assert_eq!(command_results(&stdout, "${recorded-outcome}"), vec!["[success]"]);
 }
 
 #[test]
@@ -27,15 +27,15 @@ fn setting_choice_collapses_three_linked_outputs_as_one_complete_result() {
 
     assert!(!stdout.lines().any(|line| line.starts_with("ps?   ")));
 
-    assert_eq!(command_results(&stdout, "$(['mode-choice']['amount-choice']['timing-choice'])"), vec!["x3([gentle][light][slow])x2([deep][fast][firm])"]);
+    assert_eq!(command_results(&stdout, "$({mode-choice}{amount-choice}{timing-choice})"), vec!["x3([gentle][light][slow])x2([deep][fast][firm])"]);
     assert_eq!(
-        command_results(&stdout, "['selected-settings'] = ^(([mode]->['mode-choice'])([amount]->['amount-choice'])([timing]->['timing-choice']))"),
-        vec!["{[amount]->[light]}{[mode]->[gentle]}{[timing]->[slow]}"]
+        command_results(&stdout, "{selected-settings} = ^(([mode]->{mode-choice})([amount]->{amount-choice})([timing]->{timing-choice}))"),
+        vec!["([amount]->[light])([mode]->[gentle])([timing]->[slow])"]
     );
-    assert_eq!(command_results(&stdout, "$['selected-mode']"), vec!["[gentle]"]);
-    assert_eq!(command_results(&stdout, "$['selected-amount']"), vec!["[light]"]);
-    assert_eq!(command_results(&stdout, "$['selected-timing']"), vec!["[slow]"]);
-    assert_eq!(command_results(&stdout, "$['recorded-outcome']"), vec!["[accepted]"]);
+    assert_eq!(command_results(&stdout, "${selected-mode}"), vec!["[gentle]"]);
+    assert_eq!(command_results(&stdout, "${selected-amount}"), vec!["[light]"]);
+    assert_eq!(command_results(&stdout, "${selected-timing}"), vec!["[slow]"]);
+    assert_eq!(command_results(&stdout, "${recorded-outcome}"), vec!["[accepted]"]);
 }
 
 fn run_example(name: &str) -> String {

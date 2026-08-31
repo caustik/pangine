@@ -661,7 +661,7 @@ mod tests {
     fn one_concept_round_trips_every_retained_proof_field() {
         let mut pangine = Pangine::new();
         let subject = must_ref(&mut pangine, "x2(([left]->([A]->[r]->[M]->[s]->[D]))([right]->([A]->[r]->[M]->[s]->[D])))");
-        let question = must_ref(&mut pangine, "(['start']->[r]->['middle'])(['middle']->[s]->['end'])");
+        let question = must_ref(&mut pangine, "({start}->[r]->{middle})({middle}->[s]->{end})");
         let result = pangine.complete_subject(&subject, &question).expect("valid path question");
         let answer = ConceptAnswer::from_result(&pangine, &result);
         let encoded = answer.encode(&mut pangine);
@@ -680,7 +680,7 @@ mod tests {
             .any(|route| !route.coefficient_ancestors.is_empty() && !route.ordered_windows.is_empty()));
 
         let residual_source = must_ref(&mut pangine, "([kettle][empty])->([full]/[empty])");
-        let residual_question = must_ref(&mut pangine, "([room][kettle][empty])->['delta']");
+        let residual_question = must_ref(&mut pangine, "([room][kettle][empty])->{delta}");
         let residual = pangine.complete_subject(&residual_source, &residual_question).expect("valid residual question");
         let residual = ConceptAnswer::from_result(&pangine, &residual);
         let residual_encoded = residual.encode(&mut pangine);
@@ -692,10 +692,10 @@ mod tests {
     #[test]
     fn concept_answer_preserves_projection_and_ordered_or_simultaneous_collapse() {
         let mut pangine = weighted_animals();
-        let answer = complete_answer(&mut pangine, &["memory"], "['animal']->['food']");
+        let answer = complete_answer(&mut pangine, &["memory"], "{animal}->{food}");
         let animal = pangine.reference_percept("animal");
         let food = pangine.reference_percept("food");
-        let pair = must_ref(&mut pangine, "['animal']->['food']");
+        let pair = must_ref(&mut pangine, "{animal}->{food}");
         let answer_data = ConceptAnswer::decode(&pangine, &answer).expect("Concept answer");
 
         assert_eq!(answer_data.materialize(&mut pangine, &animal), Some(must_ref(&mut pangine, "x8[cat]x7[dog]")));
@@ -723,9 +723,9 @@ mod tests {
         remember(&mut pangine, "outcomes", "([episode-b]->[decision]->[B])([episode-b]->[outcome]->[helpful])");
         remember(&mut pangine, "reliability", "([review-b]->[episode]->[episode-b])([review-b]->[assessment]->[trusted])");
 
-        let candidates = complete_answer(&mut pangine, &["candidates"], "['candidate']->[decision]->['decision']");
-        let outcomes = complete_answer(&mut pangine, &["outcomes"], "(['episode']->[decision]->['episode-decision'])(['episode']->[outcome]->[helpful])");
-        let trusted = complete_answer(&mut pangine, &["reliability"], "(['review']->[episode]->['trusted-episode'])(['review']->[assessment]->[trusted])");
+        let candidates = complete_answer(&mut pangine, &["candidates"], "{candidate}->[decision]->{decision}");
+        let outcomes = complete_answer(&mut pangine, &["outcomes"], "({episode}->[decision]->{episode-decision})({episode}->[outcome]->[helpful])");
+        let trusted = complete_answer(&mut pangine, &["reliability"], "({review}->[episode]->{trusted-episode})({review}->[assessment]->[trusted])");
         let candidates = ConceptAnswer::decode(&pangine, &candidates).unwrap();
         let outcomes = ConceptAnswer::decode(&pangine, &outcomes).unwrap();
         let trusted = ConceptAnswer::decode(&pangine, &trusted).unwrap();
@@ -745,7 +745,7 @@ mod tests {
         for row in &cancelled.rows {
             assert!(row.evidence().iter().any(|evidence| evidence.source_contribution() == Relevance::DEFAULT));
             assert!(row.evidence().iter().any(|evidence| evidence.source_contribution() == Relevance::new(-1)));
-            assert!(row.evidence().iter().all(|evidence| pangine.format_concept(evidence.source_subject(), false) == "['candidates']"));
+            assert!(row.evidence().iter().all(|evidence| pangine.format_concept(evidence.source_subject(), false) == "{candidates}"));
         }
         assert!(cancelled.materialize(&mut pangine, &decision).is_none());
     }
@@ -754,8 +754,8 @@ mod tests {
     fn concept_answer_join_retains_source_occurrence_constraints() {
         let mut mapper = Pangine::new();
         let subject = must_ref(&mut mapper, "[A]->[r]->[M]->[s]->[D]->[gap]->[X]->[r]->[M]->[s]->[E]");
-        let first = complete_subject_answer(&mut mapper, &subject, "['start']->[r]->['middle']");
-        let second = complete_subject_answer(&mut mapper, &subject, "['middle']->[s]->['end']");
+        let first = complete_subject_answer(&mut mapper, &subject, "{start}->[r]->{middle}");
+        let second = complete_subject_answer(&mut mapper, &subject, "{middle}->[s]->{end}");
         let first = mapper.format_concept(&first, false);
         let second = mapper.format_concept(&second, false);
 
@@ -765,7 +765,7 @@ mod tests {
         let first = ConceptAnswer::decode(&pangine, &first).unwrap();
         let second = ConceptAnswer::decode(&pangine, &second).unwrap();
         let joined = first.join(&mut pangine, &second).expect("compatible extension");
-        let path = must_ref(&mut pangine, "['start']->['middle']->['end']");
+        let path = must_ref(&mut pangine, "{start}->{middle}->{end}");
 
         assert_eq!(joined.materialize(&mut pangine, &path), Some(must_ref(&mut pangine, "([A]->[M]->[D])([X]->[M]->[E])")));
         assert_eq!(joined.rows.len(), 2);
@@ -776,8 +776,8 @@ mod tests {
         let mut mapper = Pangine::new();
         remember(&mut mapper, "first-facts", "[Socrates]->[is-a]->[human]");
         remember(&mut mapper, "second-facts", "[human]->[is-a]->[mortal]");
-        let first = complete_answer(&mut mapper, &["first-facts"], "[Socrates]->[is-a]->['middle']");
-        let second = complete_answer(&mut mapper, &["second-facts"], "['middle']->[is-a]->['conclusion']");
+        let first = complete_answer(&mut mapper, &["first-facts"], "[Socrates]->[is-a]->{middle}");
+        let second = complete_answer(&mut mapper, &["second-facts"], "{middle}->[is-a]->{conclusion}");
         let first = mapper.format_concept(&first, false);
         let second = mapper.format_concept(&second, false);
 
@@ -787,7 +787,7 @@ mod tests {
         let first = ConceptAnswer::decode(&reducer, &first).unwrap();
         let second = ConceptAnswer::decode(&reducer, &second).unwrap();
         let joined = first.join(&mut reducer, &second).expect("shared middle binding");
-        let middle_conclusion = must_ref(&mut reducer, "['middle']->['conclusion']");
+        let middle_conclusion = must_ref(&mut reducer, "{middle}->{conclusion}");
         let conclusion = reducer.reference_percept("conclusion");
 
         assert_eq!(joined.materialize(&mut reducer, &middle_conclusion), Some(must_ref(&mut reducer, "x2([human]->[mortal])")));
@@ -799,9 +799,9 @@ mod tests {
     fn connected_answer_joins_are_associative_and_commutative_across_occurrence_constraints() {
         let mut pangine = Pangine::new();
         let subject = must_ref(&mut pangine, "[A]->[r]->[M]->[s]->[N]->[t]->[D]->[gap]->[X]->[r]->[M]->[s]->[O]->[t]->[E]");
-        let first = complete_subject_answer(&mut pangine, &subject, "['start']->[r]->['middle']");
-        let second = complete_subject_answer(&mut pangine, &subject, "['middle']->[s]->['next']");
-        let third = complete_subject_answer(&mut pangine, &subject, "['next']->[t]->['end']");
+        let first = complete_subject_answer(&mut pangine, &subject, "{start}->[r]->{middle}");
+        let second = complete_subject_answer(&mut pangine, &subject, "{middle}->[s]->{next}");
+        let third = complete_subject_answer(&mut pangine, &subject, "{next}->[t]->{end}");
         let first = ConceptAnswer::decode(&pangine, &first).unwrap();
         let second = ConceptAnswer::decode(&pangine, &second).unwrap();
         let third = ConceptAnswer::decode(&pangine, &third).unwrap();
@@ -812,7 +812,7 @@ mod tests {
         let right = first.join(&mut pangine, &right_pair).unwrap();
         let reverse_pair = third.join(&mut pangine, &second).unwrap();
         let reverse = reverse_pair.join(&mut pangine, &first).unwrap();
-        let path = must_ref(&mut pangine, "['start']->['middle']->['next']->['end']");
+        let path = must_ref(&mut pangine, "{start}->{middle}->{next}->{end}");
 
         assert!(left == right);
         assert!(left == reverse);
@@ -826,7 +826,7 @@ mod tests {
         remember(&mut mapper, "part-a", "([episode]->[a])([pair]->[cat]->[fish])");
         remember(&mut mapper, "part-b", "([episode]->[b])([pair]->[cat]->[milk])");
         remember(&mut mapper, "part-c", "([episode]->[c])([pair]->[dog]->[fish])");
-        let question = "[pair]->['animal']->['food']";
+        let question = "[pair]->{animal}->{food}";
         let mapped = ["part-a", "part-b", "part-c"].map(|source| complete_answer(&mut mapper, &[source], question));
         let full = complete_answer(&mut mapper, &["part-a", "part-b", "part-c"], question);
         let mapped_text = mapped.map(|answer| mapper.format_concept(&answer, false));
@@ -857,7 +857,7 @@ mod tests {
         }
         remember(&mut pangine, "memory", "[target]->[property]->[found]");
         let memory = pangine.reference_percept("memory");
-        let question = must_ref(&mut pangine, "[target]->[property]->['answer']");
+        let question = must_ref(&mut pangine, "[target]->[property]->{answer}");
 
         pangine.question_source_visits = 0;
         let result = pangine.complete_question(&[memory], &question).expect("indexed question");
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn detaching_a_projection_is_an_explicit_concept_transformation() {
         let mut pangine = weighted_animals();
-        let answer = complete_answer(&mut pangine, &["memory"], "['animal']->['food']");
+        let answer = complete_answer(&mut pangine, &["memory"], "{animal}->{food}");
         let answer = ConceptAnswer::decode(&pangine, &answer).unwrap();
         let animal = pangine.reference_percept("animal");
         let food = pangine.reference_percept("food");
@@ -885,7 +885,7 @@ mod tests {
     #[test]
     fn a_live_answer_value_round_trips_into_the_same_console_lifecycle_in_another_engine() {
         let mut mapper = weighted_animals();
-        must_ref(&mut mapper, "['memory'] @ ['animal']->['food']");
+        must_ref(&mut mapper, "{memory} @ {animal}->{food}");
         let animal = mapper.reference_percept("animal");
         let encoded = mapper.linked_answer_value(&animal).expect("ordinary live answer value");
         let mut inconsistent = LiveConceptAnswer::decode(&mapper, &encoded).expect("decoded live answer");
@@ -902,10 +902,10 @@ mod tests {
         let encoded = must_ref(&mut pangine, &encoded);
         assert!(pangine.install_answer_value(&encoded));
 
-        assert_eq!(must_ref(&mut pangine, "&['animal']"), must_ref(&mut pangine, "['animal']->['food']"));
-        assert_eq!(must_ref(&mut pangine, "$['animal']"), must_ref(&mut pangine, "x8[cat]x7[dog]"));
-        assert_eq!(must_ref(&mut pangine, "^['animal']"), must_ref(&mut pangine, "[cat]"));
-        assert_eq!(must_ref(&mut pangine, "$['food']"), must_ref(&mut pangine, "x3[fish]x5[milk]"));
+        assert_eq!(must_ref(&mut pangine, "&{animal}"), must_ref(&mut pangine, "{animal}->{food}"));
+        assert_eq!(must_ref(&mut pangine, "${animal}"), must_ref(&mut pangine, "x8[cat]x7[dog]"));
+        assert_eq!(must_ref(&mut pangine, "^{animal}"), must_ref(&mut pangine, "[cat]"));
+        assert_eq!(must_ref(&mut pangine, "${food}"), must_ref(&mut pangine, "x3[fish]x5[milk]"));
     }
 
     fn weighted_animals() -> Pangine {
@@ -932,7 +932,7 @@ mod tests {
     }
 
     fn remember(pangine: &mut Pangine, source: &str, concept: &str) {
-        must_ref(pangine, &format!("['{source}'] ~= {concept}"));
+        must_ref(pangine, &format!("{{{source}}} ~= {concept}"));
     }
 
     fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

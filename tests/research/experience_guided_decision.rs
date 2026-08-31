@@ -17,21 +17,21 @@ use pangine::{AnswerView, ConceptId, Pangine, Relevance};
 use std::collections::{BTreeMap, BTreeSet};
 
 const CANDIDATE_QUESTION: &str = "
-    (['candidate']->[environment]->$['environment-input'])
-    (['candidate']->[symptom]->$['symptom-input'])
-    (['candidate']->[decision]->['decision'])";
+    ({candidate}->[environment]->${environment-input})
+    ({candidate}->[symptom]->${symptom-input})
+    ({candidate}->[decision]->{decision})";
 
 const OUTCOME_QUESTION: &str = "
-    (['episode']->[environment]->$['environment-input'])
-    (['episode']->[symptom]->$['symptom-input'])
-    (['episode']->[decision]->['episode-decision'])
-    (['episode']->[outcome]->[helpful])";
+    ({episode}->[environment]->${environment-input})
+    ({episode}->[symptom]->${symptom-input})
+    ({episode}->[decision]->{episode-decision})
+    ({episode}->[outcome]->[helpful])";
 
 const REVIEW_QUESTION: &str = "
-    (['review']->[environment]->$['environment-input'])
-    (['review']->[symptom]->$['symptom-input'])
-    (['review']->[episode]->['trusted-episode'])
-    (['review']->[assessment]->[trusted])";
+    ({review}->[environment]->${environment-input})
+    ({review}->[symptom]->${symptom-input})
+    ({review}->[episode]->{trusted-episode})
+    ({review}->[assessment]->[trusted])";
 
 #[test]
 #[ignore = "warning: helpful-minus-failed linked support is one explicit outcome policy"]
@@ -45,15 +45,12 @@ fn linked_outcomes_adjust_complete_troubleshooting_choices_without_hiding_source
     remember_episode(&mut pangine, "episode-clean-failed-2", "clean-build", "cargo", "failed");
     remember_episode(&mut pangine, "episode-inspect-helpful", "inspect-symbols", "dumpbin", "helpful");
 
-    must_ref(&mut pangine, "['environment-input'] = [windows]");
-    must_ref(&mut pangine, "['symptom-input'] = [link-error]");
-    must_ref(&mut pangine, &format!("['candidates'] @ {CANDIDATE_QUESTION}"));
+    must_ref(&mut pangine, "{environment-input} = [windows]");
+    must_ref(&mut pangine, "{symptom-input} = [link-error]");
+    must_ref(&mut pangine, &format!("{{candidates}} @ {CANDIDATE_QUESTION}"));
 
-    assert_eq!(must_ref(&mut pangine, "&['decision']"), must_ref(&mut pangine, CANDIDATE_QUESTION));
-    assert_eq!(
-        must_ref(&mut pangine, "$['decision']"),
-        must_ref(&mut pangine, "([clean-build]->[cargo])([inspect-symbols]->[dumpbin])([reconfigure]->[cmake])")
-    );
+    assert_eq!(must_ref(&mut pangine, "&{decision}"), must_ref(&mut pangine, CANDIDATE_QUESTION));
+    assert_eq!(must_ref(&mut pangine, "${decision}"), must_ref(&mut pangine, "([clean-build]->[cargo])([inspect-symbols]->[dumpbin])([reconfigure]->[cmake])"));
 
     ask_outcome_decisions(&mut pangine, "helpful", "helpful");
     ask_outcome_decisions(&mut pangine, "failed", "failed");
@@ -68,12 +65,12 @@ fn linked_outcomes_adjust_complete_troubleshooting_choices_without_hiding_source
     let adjusted = adjusted.adjust(&mut pangine, &failed, Relevance::new(-1)).expect("failed adjustment").into_view();
     adjusted.answer().publish(&mut pangine).expect("current candidate revision");
 
-    assert_eq!(must_ref(&mut pangine, "&['decision']"), must_ref(&mut pangine, CANDIDATE_QUESTION));
+    assert_eq!(must_ref(&mut pangine, "&{decision}"), must_ref(&mut pangine, CANDIDATE_QUESTION));
     assert_eq!(
-        must_ref(&mut pangine, "$['decision']"),
+        must_ref(&mut pangine, "${decision}"),
         must_ref(&mut pangine, "x2([inspect-symbols]->[dumpbin])([reconfigure]->[cmake])!([clean-build]->[cargo])")
     );
-    assert_eq!(must_ref(&mut pangine, "$['candidate']"), must_ref(&mut pangine, "x2[candidate-inspect][candidate-reconfigure]![candidate-clean]"));
+    assert_eq!(must_ref(&mut pangine, "${candidate}"), must_ref(&mut pangine, "x2[candidate-inspect][candidate-reconfigure]![candidate-clean]"));
 
     let answer = pangine.answer_snapshot(&decision).expect("published decision answer");
     let source_inventory = answer
@@ -93,54 +90,54 @@ fn linked_outcomes_adjust_complete_troubleshooting_choices_without_hiding_source
             (choice, sources)
         })
         .collect::<BTreeMap<_, _>>();
-    assert_sources(&source_inventory, "{[clean-build]->[cargo]}", &["candidate-clean", "episode-clean-failed-1", "episode-clean-failed-2"]);
-    assert_sources(&source_inventory, "{[inspect-symbols]->[dumpbin]}", &["candidate-inspect", "episode-inspect-helpful"]);
-    assert_sources(&source_inventory, "{[reconfigure]->[cmake]}", &["candidate-reconfigure"]);
-    assert!(source_inventory["{[clean-build]->[cargo]}"]
+    assert_sources(&source_inventory, "[clean-build]->[cargo]", &["candidate-clean", "episode-clean-failed-1", "episode-clean-failed-2"]);
+    assert_sources(&source_inventory, "[inspect-symbols]->[dumpbin]", &["candidate-inspect", "episode-inspect-helpful"]);
+    assert_sources(&source_inventory, "[reconfigure]->[cmake]", &["candidate-reconfigure"]);
+    assert!(source_inventory["[clean-build]->[cargo]"]
         .iter()
         .filter(|(source, _)| source.contains("episode-clean-failed"))
         .all(|(_, relevance)| *relevance == (1, -1)));
 
-    must_ref(&mut pangine, "['selected-decision'] = ^['decision']");
-    assert_eq!(must_ref(&mut pangine, "$['selected-decision']"), must_ref(&mut pangine, "[inspect-symbols]->[dumpbin]"));
+    must_ref(&mut pangine, "{selected-decision} = ^{decision}");
+    assert_eq!(must_ref(&mut pangine, "${selected-decision}"), must_ref(&mut pangine, "[inspect-symbols]->[dumpbin]"));
 
     must_ref(
         &mut pangine,
-        "['episodes'] @
-           (['supporting-episode']->[environment]->$['environment-input'])
-           (['supporting-episode']->[symptom]->$['symptom-input'])
-           (['supporting-episode']->[decision]->($['selected-decision']))
-           (['supporting-episode']->[outcome]->['supporting-outcome'])",
+        "{episodes} @
+           ({supporting-episode}->[environment]->${environment-input})
+           ({supporting-episode}->[symptom]->${symptom-input})
+           ({supporting-episode}->[decision]->(${selected-decision}))
+           ({supporting-episode}->[outcome]->{supporting-outcome})",
     );
-    assert_eq!(must_ref(&mut pangine, "$['supporting-episode']"), must_ref(&mut pangine, "[episode-inspect-helpful]"));
-    assert_eq!(must_ref(&mut pangine, "$['supporting-outcome']"), must_ref(&mut pangine, "[helpful]"));
+    assert_eq!(must_ref(&mut pangine, "${supporting-episode}"), must_ref(&mut pangine, "[episode-inspect-helpful]"));
+    assert_eq!(must_ref(&mut pangine, "${supporting-outcome}"), must_ref(&mut pangine, "[helpful]"));
 
-    must_ref(&mut pangine, "['episodes'] @ [episode-clean-failed-1]->[outcome]->['recorded-failure']");
-    assert_eq!(must_ref(&mut pangine, "$['recorded-failure']"), must_ref(&mut pangine, "[failed]"));
+    must_ref(&mut pangine, "{episodes} @ [episode-clean-failed-1]->[outcome]->{recorded-failure}");
+    assert_eq!(must_ref(&mut pangine, "${recorded-failure}"), must_ref(&mut pangine, "[failed]"));
 }
 
 #[test]
 #[ignore = "warning: result roles may be weighted sources or fixed filters depending on the represented program"]
 fn result_role_percepts_add_presence_weight_beyond_the_matching_episodes() {
     let mut evidence = outcome_presence_case();
-    must_ref(&mut evidence, "['positive-result'] = [positive]->[success]");
-    must_ref(&mut evidence, "['negative-result'] = [negative]->[failed]");
+    must_ref(&mut evidence, "{positive-result} = [positive]->[success]");
+    must_ref(&mut evidence, "{negative-result} = [negative]->[failed]");
     must_ref(
         &mut evidence,
-        "['episodes']['positive-result'] @
-            (['positive-episode']->[choice]->['positive-choice'])
-            (['positive-episode']->[outcome]->['positive-outcome'])
-            ([positive]->['positive-outcome'])",
+        "{episodes}{positive-result} @
+            ({positive-episode}->[choice]->{positive-choice})
+            ({positive-episode}->[outcome]->{positive-outcome})
+            ([positive]->{positive-outcome})",
     );
     must_ref(
         &mut evidence,
-        "['episodes']['negative-result'] @
-            (['negative-episode']->[choice]->['negative-choice'])
-            (['negative-episode']->[outcome]->['negative-outcome'])
-            ([negative]->['negative-outcome'])",
+        "{episodes}{negative-result} @
+            ({negative-episode}->[choice]->{negative-choice})
+            ({negative-episode}->[outcome]->{negative-outcome})
+            ([negative]->{negative-outcome})",
     );
-    must_ref(&mut evidence, "['choice'] @+= ['positive-choice']");
-    must_ref(&mut evidence, "['choice'] @-= ['negative-choice']");
+    must_ref(&mut evidence, "{choice} @+= {positive-choice}");
+    must_ref(&mut evidence, "{choice} @-= {negative-choice}");
 
     let evidence_choice = evidence.reference_percept("choice");
     let evidence_answer = evidence.answer_view(&evidence_choice).expect("answer adjusted by result sources");
@@ -155,22 +152,22 @@ fn result_role_percepts_add_presence_weight_beyond_the_matching_episodes() {
     assert_possibility(&mut evidence, &evidence_answer, "[B]", 3, true, &["candidate-b", "b-success-1", "[positive]->[success]"]);
 
     let mut filter = outcome_presence_case();
-    must_ref(&mut filter, "['positive-result'] = [success]");
-    must_ref(&mut filter, "['negative-result'] = [failed]");
+    must_ref(&mut filter, "{positive-result} = [success]");
+    must_ref(&mut filter, "{negative-result} = [failed]");
     must_ref(
         &mut filter,
-        "['episodes'] @
-            (['positive-episode']->[choice]->['positive-choice'])
-            (['positive-episode']->[outcome]->$['positive-result'])",
+        "{episodes} @
+            ({positive-episode}->[choice]->{positive-choice})
+            ({positive-episode}->[outcome]->${positive-result})",
     );
     must_ref(
         &mut filter,
-        "['episodes'] @
-            (['negative-episode']->[choice]->['negative-choice'])
-            (['negative-episode']->[outcome]->$['negative-result'])",
+        "{episodes} @
+            ({negative-episode}->[choice]->{negative-choice})
+            ({negative-episode}->[outcome]->${negative-result})",
     );
-    must_ref(&mut filter, "['choice'] @+= ['positive-choice']");
-    must_ref(&mut filter, "['choice'] @-= ['negative-choice']");
+    must_ref(&mut filter, "{choice} @+= {positive-choice}");
+    must_ref(&mut filter, "{choice} @-= {negative-choice}");
 
     let filter_choice = filter.reference_percept("choice");
     let filter_answer = filter.answer_view(&filter_choice).expect("answer adjusted by filtered episodes");
@@ -236,9 +233,9 @@ struct ChoiceTiming {
 }
 
 fn compare_choice_timing(pangine: &mut Pangine) -> ChoiceTiming {
-    must_ref(pangine, &format!("['candidates'] @ {CANDIDATE_QUESTION}"));
-    must_ref(pangine, &format!("['episodes'] @ {OUTCOME_QUESTION}"));
-    must_ref(pangine, &format!("['reviews'] @ {REVIEW_QUESTION}"));
+    must_ref(pangine, &format!("{{candidates}} @ {CANDIDATE_QUESTION}"));
+    must_ref(pangine, &format!("{{episodes}} @ {OUTCOME_QUESTION}"));
+    must_ref(pangine, &format!("{{reviews}} @ {REVIEW_QUESTION}"));
 
     let decision = pangine.reference_percept("decision");
     let episode = pangine.reference_percept("episode");
@@ -266,7 +263,7 @@ fn remember_context_candidate(pangine: &mut Pangine, candidate: &str, environmen
     must_ref(
         pangine,
         &format!(
-            "['candidates'] ~= ([{candidate}]->[environment]->[{environment}])
+            "{{candidates}} ~= ([{candidate}]->[environment]->[{environment}])
                                ([{candidate}]->[symptom]->[{symptom}])
                                ([{candidate}]->[decision]->[{decision}])"
         ),
@@ -277,7 +274,7 @@ fn remember_context_episode(pangine: &mut Pangine, episode: &str, environment: &
     must_ref(
         pangine,
         &format!(
-            "['episodes'] ~= ([{episode}]->[environment]->[{environment}])
+            "{{episodes}} ~= ([{episode}]->[environment]->[{environment}])
                              ([{episode}]->[symptom]->[{symptom}])
                              ([{episode}]->[decision]->[{decision}])
                              ([{episode}]->[outcome]->[helpful])"
@@ -289,7 +286,7 @@ fn remember_context_review(pangine: &mut Pangine, review: &str, environment: &st
     must_ref(
         pangine,
         &format!(
-            "['reviews'] ~= ([{review}]->[environment]->[{environment}])
+            "{{reviews}} ~= ([{review}]->[environment]->[{environment}])
                             ([{review}]->[symptom]->[{symptom}])
                             ([{review}]->[episode]->[{episode}])
                             ([{review}]->[assessment]->[trusted])"
@@ -298,20 +295,20 @@ fn remember_context_review(pangine: &mut Pangine, review: &str, environment: &st
 }
 
 fn set_current_input(pangine: &mut Pangine, environment: &str, symptom: &str) {
-    must_ref(pangine, &format!("['environment-input'] = [{environment}]"));
-    must_ref(pangine, &format!("['symptom-input'] = [{symptom}]"));
+    must_ref(pangine, &format!("{{environment-input}} = [{environment}]"));
+    must_ref(pangine, &format!("{{symptom-input}} = [{symptom}]"));
 }
 
 fn outcome_presence_case() -> Pangine {
     let mut pangine = Pangine::new();
     for experience in [
-        "['candidates'] ~= [candidate-a]->[choice]->[A]",
-        "['candidates'] ~= [candidate-b]->[choice]->[B]",
-        "['episodes'] ~= ([a-success-1]->[choice]->[A])([a-success-1]->[outcome]->[success])",
-        "['episodes'] ~= ([a-success-2]->[choice]->[A])([a-success-2]->[outcome]->[success])",
-        "['episodes'] ~= ([a-failed-1]->[choice]->[A])([a-failed-1]->[outcome]->[failed])",
-        "['episodes'] ~= ([b-success-1]->[choice]->[B])([b-success-1]->[outcome]->[success])",
-        "['candidates'] @ ['candidate']->[choice]->['choice']",
+        "{candidates} ~= [candidate-a]->[choice]->[A]",
+        "{candidates} ~= [candidate-b]->[choice]->[B]",
+        "{episodes} ~= ([a-success-1]->[choice]->[A])([a-success-1]->[outcome]->[success])",
+        "{episodes} ~= ([a-success-2]->[choice]->[A])([a-success-2]->[outcome]->[success])",
+        "{episodes} ~= ([a-failed-1]->[choice]->[A])([a-failed-1]->[outcome]->[failed])",
+        "{episodes} ~= ([b-success-1]->[choice]->[B])([b-success-1]->[outcome]->[success])",
+        "{candidates} @ {candidate}->[choice]->{choice}",
     ] {
         must_ref(&mut pangine, experience);
     }
@@ -346,7 +343,7 @@ fn remember_candidate(pangine: &mut Pangine, candidate: &str, action: &str, tool
     must_ref(
         pangine,
         &format!(
-            "['candidates'] ~= ([{candidate}]->[environment]->[windows])
+            "{{candidates}} ~= ([{candidate}]->[environment]->[windows])
                                ([{candidate}]->[symptom]->[link-error])
                                ([{candidate}]->[decision]->([{action}]->[{tool}]))"
         ),
@@ -357,7 +354,7 @@ fn remember_episode(pangine: &mut Pangine, episode: &str, action: &str, tool: &s
     must_ref(
         pangine,
         &format!(
-            "['episodes'] ~= ([{episode}]->[environment]->[windows])
+            "{{episodes}} ~= ([{episode}]->[environment]->[windows])
                              ([{episode}]->[symptom]->[link-error])
                              ([{episode}]->[decision]->([{action}]->[{tool}]))
                              ([{episode}]->[outcome]->[{outcome}])"
@@ -369,11 +366,11 @@ fn ask_outcome_decisions(pangine: &mut Pangine, role: &str, outcome: &str) {
     must_ref(
         pangine,
         &format!(
-            "['episodes'] @
-               (['{role}-episode']->[environment]->$['environment-input'])
-               (['{role}-episode']->[symptom]->$['symptom-input'])
-               (['{role}-episode']->[decision]->['{role}-decision'])
-               (['{role}-episode']->[outcome]->[{outcome}])"
+            "{{episodes}} @
+               ({{{role}-episode}}->[environment]->${{environment-input}})
+               ({{{role}-episode}}->[symptom]->${{symptom-input}})
+               ({{{role}-episode}}->[decision]->{{{role}-decision}})
+               ({{{role}-episode}}->[outcome]->[{outcome}])"
         ),
     );
 }

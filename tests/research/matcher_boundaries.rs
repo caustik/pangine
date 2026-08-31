@@ -7,14 +7,14 @@ use pangine::{ConceptId, Pangine};
 fn explicit_ordered_nesting_currently_changes_question_matches() {
     let mut pangine = Pangine::new();
 
-    must_ref(&mut pangine, "['left'] ~= ([cat]->[eats])->[food]");
-    must_ref(&mut pangine, "['right'] ~= [cat]->([eats]->[food])");
+    must_ref(&mut pangine, "{left} ~= ([cat]->[eats])->[food]");
+    must_ref(&mut pangine, "{right} ~= [cat]->([eats]->[food])");
 
-    ask(&mut pangine, "['left'] @ ['left-answer']->[eats]");
-    assert_eq!(must_ref(&mut pangine, "$['left-answer']"), must_ref(&mut pangine, "[cat]"));
+    ask(&mut pangine, "{left} @ {left-answer}->[eats]");
+    assert_eq!(must_ref(&mut pangine, "${left-answer}"), must_ref(&mut pangine, "[cat]"));
 
-    ask(&mut pangine, "['right'] @ ['right-answer']->[eats]");
-    assert!(pangine.reference_concept("$['right-answer']").unwrap().is_none());
+    ask(&mut pangine, "{right} @ {right-answer}->[eats]");
+    assert!(pangine.reference_concept("${right-answer}").unwrap().is_none());
 }
 
 #[test]
@@ -22,17 +22,13 @@ fn explicit_ordered_nesting_currently_changes_question_matches() {
 fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evaluation() {
     let mut pangine = Pangine::new();
 
-    let answer = must_ref(&mut pangine, "[Alice] @ ['answer']");
+    let answer = must_ref(&mut pangine, "[Alice] @ {answer}");
     assert_eq!(pangine.format_concept(&answer, false), "[Alice]");
-    assert_eq!(must_ref(&mut pangine, "$['answer']"), answer);
-    assert!(pangine.reference_concept("['*'] @ ['global-answer']").is_ok(), "the read-only global Percept follows the ordinary Percept selector path");
+    assert_eq!(must_ref(&mut pangine, "${answer}"), answer);
+    assert!(pangine.reference_concept("{*} @ {global-answer}").is_ok(), "the read-only global Percept follows the ordinary Percept selector path");
 
-    for invalid in [
-        "x2['Alice'] @ ['invalid-answer']",
-        "['Alice']['Alice'] @ ['invalid-answer']",
-        "!['Alice'] @ ['invalid-answer']",
-        "['Alice']->[context] @ ['invalid-answer']",
-    ] {
+    for invalid in ["x2{Alice} @ {invalid-answer}", "{Alice}{Alice} @ {invalid-answer}", "!{Alice} @ {invalid-answer}", "{Alice}->[context] @ {invalid-answer}"]
+    {
         assert!(pangine.reference_concept(invalid).is_err(), "expected invalid selector: {invalid}");
     }
 }
@@ -41,7 +37,7 @@ fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evalua
 #[ignore = "warning: an enclosing ordered entry and a separately asked nested descendant are not yet correlated"]
 fn enclosing_ordered_entries_do_not_yet_constrain_descendant_group_matches() {
     let mut pangine = Pangine::new();
-    let question = must_ref(&mut pangine, "([row]->['selected-group'])([left]->['selected-left'])");
+    let question = must_ref(&mut pangine, "([row]->{selected-group})([left]->{selected-left})");
     let subject = must_ref(&mut pangine, "([row]->(([left]->[A])([right]->[B]))) ([row]->(([left]->[B])([right]->[A])))");
 
     let result = pangine.complete_subject(&subject, &question).unwrap();

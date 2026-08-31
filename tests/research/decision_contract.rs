@@ -19,8 +19,8 @@ fn additive_and_factor_product_adapters_can_choose_different_answers() {
     assert_eq!(
         inventory,
         BTreeMap::from([
-            ("[A]".to_owned(), BTreeMap::from([("['left-source']".to_owned(), Relevance::new(9)), ("['right-source']".to_owned(), Relevance::DEFAULT),]),),
-            ("[B]".to_owned(), BTreeMap::from([("['left-source']".to_owned(), Relevance::new(5)), ("['right-source']".to_owned(), Relevance::new(3)),]),),
+            ("[A]".to_owned(), BTreeMap::from([("{left-source}".to_owned(), Relevance::new(9)), ("{right-source}".to_owned(), Relevance::DEFAULT),]),),
+            ("[B]".to_owned(), BTreeMap::from([("{left-source}".to_owned(), Relevance::new(5)), ("{right-source}".to_owned(), Relevance::new(3)),]),),
         ])
     );
 
@@ -85,19 +85,19 @@ fn an_adapter_can_leave_two_complete_tied_answers_unselected() {
 fn one_repeated_source_and_two_equal_sources_remain_distinguishable() {
     let mut repeated = Pangine::new();
     experience(&mut repeated, "repeated-source", "[signal]->[A]", 2);
-    let repeated_proofs = proof_sources(&mut repeated, &["repeated-source"], "[signal]->['choice']");
+    let repeated_proofs = proof_sources(&mut repeated, &["repeated-source"], "[signal]->{choice}");
 
     let mut separate = Pangine::new();
     experience(&mut separate, "left-source", "[signal]->[A]", 1);
     experience(&mut separate, "right-source", "[signal]->[A]", 1);
-    let separate_proofs = proof_sources(&mut separate, &["left-source", "right-source"], "[signal]->['choice']");
+    let separate_proofs = proof_sources(&mut separate, &["left-source", "right-source"], "[signal]->{choice}");
 
-    assert_eq!(repeated_proofs, BTreeSet::from([BTreeMap::from([("['repeated-source']".to_owned(), Relevance::new(2))])]));
+    assert_eq!(repeated_proofs, BTreeSet::from([BTreeMap::from([("{repeated-source}".to_owned(), Relevance::new(2))])]));
     assert_eq!(
         separate_proofs,
         BTreeSet::from([
-            BTreeMap::from([("['left-source']".to_owned(), Relevance::DEFAULT)]),
-            BTreeMap::from([("['right-source']".to_owned(), Relevance::DEFAULT)]),
+            BTreeMap::from([("{left-source}".to_owned(), Relevance::DEFAULT)]),
+            BTreeMap::from([("{right-source}".to_owned(), Relevance::DEFAULT)]),
         ])
     );
     assert_eq!(proof_total(&repeated_proofs), Relevance::new(2));
@@ -114,7 +114,7 @@ fn one_declared_factor_can_supply_two_question_clauses_without_becoming_two_fact
     experience(&mut pangine, "tag-source", "[tag]->[A]", 5);
     experience(&mut pangine, "tag-source", "[tag]->[B]", 3);
 
-    let question = must_ref(&mut pangine, "(['start']->[r]->['middle'])(['middle']->[s]->['choice'])([tag]->['choice'])");
+    let question = must_ref(&mut pangine, "({start}->[r]->{middle})({middle}->[s]->{choice})([tag]->{choice})");
     let choice = pangine.reference_percept("choice");
     let path_source = pangine.reference_percept("path-source");
     let sources = [path_source.clone(), pangine.reference_percept("tag-source")];
@@ -168,7 +168,7 @@ fn factor_inventory(factor_names: &[&str], relation_names: &[&str], candidates: 
         }
     }
 
-    let question_text = relation_names.iter().map(|relation| format!("([{relation}]->['choice'])")).collect::<String>();
+    let question_text = relation_names.iter().map(|relation| format!("([{relation}]->{{choice}})")).collect::<String>();
     let question = must_ref(&mut pangine, &question_text);
     let choice = pangine.reference_percept("choice");
     let sources = factor_names.iter().map(|name| pangine.reference_percept(name)).collect::<Vec<_>>();
@@ -265,7 +265,7 @@ fn score_map(entries: &[(&str, i64)]) -> Scores {
 
 fn experience(pangine: &mut Pangine, percept: &str, concept: &str, repetitions: usize) {
     for _ in 0..repetitions {
-        must_ref(pangine, &format!("['{percept}'] ~= {concept}"));
+        must_ref(pangine, &format!("{{{percept}}} ~= {concept}"));
     }
 }
 

@@ -10,11 +10,11 @@ use pangine::{ConceptId, Pangine};
 #[ignore = "warning: additive source relevance is not the final Relevance model"]
 fn one_source_witness_is_not_counted_again_when_projection_hides_distinct_rows() {
     let mut pangine = Pangine::new();
-    must_ref(&mut pangine, "['memory'] ~= ([one]->[animal]->[cat])([one]->[food]->[fish])([two]->[animal]->[cat])([two]->[food]->[milk])");
-    must_ref(&mut pangine, "['memory'] @ (['case']->[animal]->['animal'])(['case']->[food]->['food'])");
+    must_ref(&mut pangine, "{memory} ~= ([one]->[animal]->[cat])([one]->[food]->[fish])([two]->[animal]->[cat])([two]->[food]->[milk])");
+    must_ref(&mut pangine, "{memory} @ ({case}->[animal]->{animal})({case}->[food]->{food})");
 
-    assert_eq!(must_ref(&mut pangine, "$['animal']"), must_ref(&mut pangine, "[cat]"));
-    assert_eq!(must_ref(&mut pangine, "$(['animal']->['food'])"), must_ref(&mut pangine, "{[cat]->[fish]}{[cat]->[milk]}"));
+    assert_eq!(must_ref(&mut pangine, "${animal}"), must_ref(&mut pangine, "[cat]"));
+    assert_eq!(must_ref(&mut pangine, "$({animal}->{food})"), must_ref(&mut pangine, "([cat]->[fish])([cat]->[milk])"));
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

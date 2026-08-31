@@ -85,7 +85,7 @@ fn coefficient_prefixes_bind_one_complete_operand() {
     test.assert_equivalent(pairs! {
         "x2[A]x3[B]" => "[A][A][B][B][B]",
         "(x2[A]x3[B])" => "x2[A]x3[B]",
-        "x2{[A]->[B]}" => "{[A]->[B]}{[A]->[B]}",
+        "x2([A]->[B])" => "([A]->[B])([A]->[B])",
     });
     test.assert_distinct(pairs! {
         "x2[A][B]" => "x2([A][B])",

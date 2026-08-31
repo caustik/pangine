@@ -1,6 +1,6 @@
 mod support;
 
-use pangine::{ConceptConstructionError, Pangine, Relevance};
+use pangine::{ConceptConstructionError, Pangine, ParseError, Relevance};
 use support::{pairs, PangineTest};
 
 #[test]
@@ -28,16 +28,16 @@ fn references_names_and_parentheses() {
         "[A]" => "[LONGER_NAME]",
         "[LONGER_NAME]" => "[LONGER-NAME]",
         "[LONGER-NAME]" => "[EVEN LONGER NAME]",
-        "['A']" => "['B']",
-        "[A]" => "['A']",
+        "{A}" => "{B}",
+        "[A]" => "{A}",
     });
     test.assert_equivalent(pairs! {
         "     [A]" => "[A]",
         " \t\r\n[B]" => "[B]",
         "([A])" => "[A]",
         "(([A]))" => "[A]",
-        "(['A'])" => "['A']",
-        "((['A']))" => "['A']",
+        "({A})" => "{A}",
+        "(({A}))" => "{A}",
     });
     test.assert_invalid(["[?]", "[?A]", "[&A]", "[%]"]);
 
@@ -46,11 +46,84 @@ fn references_names_and_parentheses() {
 }
 
 #[test]
+fn escaped_named_text_is_lossless_and_distinct_from_no_concept() {
+    let mut pangine = Pangine::new();
+
+    for (expected, source) in [
+        ("", r#"[""]"#),
+        (r"C:\Library\Track 01.wav", r#"["C:\\Library\\Track 01.wav"]"#),
+        (r#"{"revision":2}"#, r#"["{\"revision\":2}"]"#),
+        ("left]right", r#"["left]right"]"#),
+        ("semi; // text /* text */ # text", r#"["semi; // text /* text */ # text"]"#),
+        ("\0\u{0008}\t\n\u{000c}\r\u{001f}", r#"["\0\b\t\n\f\r\u{1f}"]"#),
+    ] {
+        let direct = pangine.reference_name(expected);
+        let parsed = pangine.reference_concept(source).unwrap().unwrap();
+
+        assert_eq!(parsed, direct);
+        assert_eq!(pangine.get_name(&parsed), Some(expected));
+        assert_eq!(pangine.format_concept(&parsed, false), source);
+    }
+
+    let unicode = "cafe\u{301}";
+    let unicode_source = format!("[\"{unicode}\"]");
+    let unicode_concept = pangine.reference_name(unicode);
+    assert_eq!(pangine.reference_concept(&unicode_source).unwrap(), Some(unicode_concept.clone()));
+    assert_eq!(pangine.format_concept(&unicode_concept, false), unicode_source);
+
+    let bare = pangine.reference_concept("[cat]").unwrap().unwrap();
+    let escaped = pangine.reference_concept(r#"["cat"]"#).unwrap().unwrap();
+    assert_eq!(bare, escaped);
+    assert_eq!(pangine.reference_name("cat"), bare);
+    assert_eq!(pangine.format_concept(&escaped, false), "[cat]");
+
+    assert_eq!(pangine.reference_concept("[]").unwrap(), None);
+    assert!(pangine.reference_concept(r#"[""]"#).unwrap().is_some());
+
+    for invalid in [r#"["unterminated]"#, r#"["bad\q"]"#, r#"["\u{}"]"#, r#"["\u{110000}"]"#, r#"["\u{d800}"]"#] {
+        assert!(matches!(pangine.reference_concept(invalid), Err(ParseError::InvalidSyntax)), "expected invalid escaped text: {invalid:?}");
+    }
+    assert!(matches!(pangine.reference_concept("[\"line\nbreak\"]"), Err(ParseError::InvalidSyntax)));
+}
+
+#[test]
+fn concept_and_percept_names_accept_bare_or_escaped_text() {
+    let mut pangine = Pangine::new();
+
+    let bare_concept = pangine.reference_concept("[cat]").unwrap().unwrap();
+    let escaped_concept = pangine.reference_concept(r#"["cat"]"#).unwrap().unwrap();
+    assert_eq!(bare_concept, escaped_concept);
+    assert_eq!(pangine.format_concept(&escaped_concept, false), "[cat]");
+
+    let bare_percept = pangine.reference_concept("{memory}").unwrap().unwrap();
+    let escaped_percept = pangine.reference_concept(r#"{"memory"}"#).unwrap().unwrap();
+    assert_eq!(bare_percept, escaped_percept);
+    assert_eq!(pangine.format_concept(&escaped_percept, false), "{memory}");
+
+    for (expected, source) in
+        [("left}right", r#"{"left}right"}"#), (r#"{"revision":2}"#, r#"{"{\"revision\":2}"}"#), ("line one\nline two", r#"{"line one\nline two"}"#)]
+    {
+        let percept = pangine.reference_concept(source).unwrap().unwrap();
+        assert!(matches!(pangine.concept_kind(&percept), Some(pangine::ConceptKind::Percept { name }) if name == expected));
+        assert_eq!(pangine.format_concept(&percept, false), source);
+    }
+
+    let empty_concept = pangine.reference_concept(r#"[""]"#).unwrap().unwrap();
+    let empty_percept = pangine.reference_concept(r#"{""}"#).unwrap().unwrap();
+    assert_eq!(pangine.get_name(&empty_concept), Some(""));
+    assert!(matches!(pangine.concept_kind(&empty_percept), Some(pangine::ConceptKind::Percept { name }) if name.is_empty()));
+    assert_eq!(pangine.format_concept(&empty_concept, false), r#"[""]"#);
+    assert_eq!(pangine.format_concept(&empty_percept, false), r#"{""}"#);
+    assert_ne!(empty_concept, empty_percept);
+    assert_eq!(pangine.reference_concept("[]").unwrap(), None);
+}
+
+#[test]
 fn public_api_mutations_update_the_unified_percept_state() {
     let mut test = PangineTest::new();
 
     let percept = test.engine_mut().reference_percept("direct");
-    assert_eq!(test.reference("['direct']"), Some(percept.clone()));
+    assert_eq!(test.reference("{direct}"), Some(percept.clone()));
     assert_eq!(test.engine().get_percept(&percept), Some(percept.clone()));
     assert_eq!(test.engine().get_value(&percept), None);
     assert_eq!(test.engine().get_relevance_map(&percept), Vec::new());
@@ -60,7 +133,7 @@ fn public_api_mutations_update_the_unified_percept_state() {
     assert!(test.engine_mut().set_percept_value(&percept, Some(a.clone())));
     assert_eq!(test.engine().get_value(&percept), Some(a.clone()));
     assert_eq!(test.engine().get_relevance_map(&percept), vec![(Relevance::DEFAULT, a.clone())]);
-    assert_eq!(test.engine().recurse(&percept, false), "['direct']");
+    assert_eq!(test.engine().recurse(&percept, false), "{direct}");
     assert_eq!(test.engine().recurse(&percept, true), "[A]");
 
     let merged = test.engine_mut().perform_merge(&percept, Some(&b));
@@ -78,7 +151,7 @@ fn public_api_mutations_update_the_unified_percept_state() {
     assert_eq!(merged, test.reference("[A][B][C][D]"));
 
     let memory = test.engine_mut().reference_percept("memory");
-    let experience = test.concept("{[A]->[B]}");
+    let experience = test.concept("[A]->[B]");
     let experienced = test.engine_mut().perform_experience(&memory, Some(&experience));
     assert_eq!(experienced, Some(experience.clone()));
     assert_eq!(test.engine().get_value(&memory), Some(experience.clone()));
@@ -86,7 +159,7 @@ fn public_api_mutations_update_the_unified_percept_state() {
 
     let left = test.engine_mut().reference_percept("left");
     let right = test.engine_mut().reference_percept("right");
-    let ordered = test.concept("{['left']->['right']}");
+    let ordered = test.concept("{left}->{right}");
     assert_eq!(test.engine().get_ordered_components(&ordered), Some(vec![left, right]));
 }
 
@@ -95,14 +168,14 @@ fn ordered_and_unordered_compositions_are_canonical() {
     let mut test = PangineTest::new();
 
     let a = test.concept("[A]");
-    let b_percept = test.concept("['B']");
-    let ordered = test.concept("{[A]->['B']}");
+    let b_percept = test.concept("{B}");
+    let ordered = test.concept("[A]->{B}");
     assert_eq!(test.engine().get_ordered_components(&ordered), Some(vec![a, b_percept]));
 
-    let nested = test.concept("{{[A]->['B']}->{[Q]->[D]}}");
-    let question_to_d = test.concept("{[Q]->[D]}");
+    let nested = test.concept("([A]->{B})->([Q]->[D])");
+    let question_to_d = test.concept("[Q]->[D]");
     assert_eq!(test.engine().get_ordered_components(&nested), Some(vec![ordered, question_to_d]));
-    test.exec(["{{[A]->[B]}->[C]}", "{[C]->{[A]->[B]}}"]);
+    test.exec(["([A]->[B])->[C]", "[C]->([A]->[B])"]);
 
     test.assert_distinct(pairs! {
         "x2[A]x2[B]" => "x3[A]x3[B]",
@@ -110,9 +183,9 @@ fn ordered_and_unordered_compositions_are_canonical() {
     });
     test.assert_equivalent(pairs! {
         "x2[A]x2[B]x3[B]" => "x2[A]x5[B]",
-        "x2([A]*[B])x3([B]*[A])x2{[C]->[D]}" => "x5([A][B])x2{[C]->[D]}",
+        "x2([A]*[B])x3([B]*[A])x2([C]->[D])" => "x5([A][B])x2([C]->[D])",
     });
-    test.exec(["{x2[A]x2[B]->[C]}"]);
+    test.exec(["x2[A]x2[B]->[C]"]);
 }
 
 #[test]
@@ -189,7 +262,7 @@ fn direct_construction_rejects_foreign_handles_and_does_not_evaluate_percepts() 
     assert!(second.set_percept_value(&percept, Some(local.clone())));
     let parent = second.compose_ordered(&[percept.clone(), local.clone()]).unwrap().unwrap();
     assert_eq!(second.get_ordered_components(&parent), Some(vec![percept, local]));
-    assert_eq!(second.format_concept(&parent, false), "{['live-child']->[local]}");
+    assert_eq!(second.format_concept(&parent, false), "{live-child}->[local]");
 }
 
 #[test]
@@ -245,7 +318,7 @@ fn unordered_identity_inversion_and_explicit_merge_are_canonical() {
 #[test]
 fn formatting_round_trips_and_relevance_entries_are_ordered() {
     let mut test = PangineTest::new();
-    let concept = test.concept("{[test]->[okay]}");
+    let concept = test.concept("[test]->[okay]");
     let printed = test.engine().format_concept(&concept, false);
     let reparsed = test.concept(&printed);
     assert_eq!(concept, reparsed);

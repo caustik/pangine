@@ -9,9 +9,9 @@ use pangine::{ConceptId, Pangine, Relevance};
 use std::collections::{BTreeMap, VecDeque};
 
 const DECISION_PROGRAM: &str = "
-    ['lived-experience'] @
-      [observation]->[context]->$['rust-context-input']->[reading]->['decision-candidate']->[result]->$['rust-result-input'];
-    ['decision-output'] = ^['decision-candidate']
+    {lived-experience} @
+      [observation]->[context]->${rust-context-input}->[reading]->{decision-candidate}->[result]->${rust-result-input};
+    {decision-output} = ^{decision-candidate}
 ";
 
 #[derive(Clone, Copy)]
@@ -35,8 +35,8 @@ impl RustPerceptBridge {
     fn new(pangine: &mut Pangine) -> Self {
         must_run(
             pangine,
-            "['rust-experience-template'] =
-               [observation]->[context]->['rust-context-input']->[reading]->['rust-reading-input']->[result]->['rust-result-input']",
+            "{rust-experience-template} =
+               [observation]->[context]->{rust-context-input}->[reading]->{rust-reading-input}->[result]->{rust-result-input}",
         );
         Self {
             context_input: pangine.reference_percept("rust-context-input"),
@@ -129,19 +129,19 @@ fn experience_capture_freezes_input_values_while_assignment_can_keep_a_live_temp
     let assigned_live_template = pangine.reference_percept("assigned-live-template");
     assert!(pangine.set_percept_value(&assigned_live_template, Some(live_template)));
     let grounded = bridge.capture_current_inputs(&mut pangine).expect("complete Rust frame");
-    assert_eq!(pangine.format_concept(&grounded, false), "{[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]}");
+    assert_eq!(pangine.format_concept(&grounded, false), "[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]");
 
     set_named_input(&mut pangine, &bridge.reading_input, Some("violet"));
-    let grounded_history = must_ref(&mut pangine, "$['lived-experience']");
-    let reinterpreted_live_template = must_ref(&mut pangine, "$['assigned-live-template']");
+    let grounded_history = must_ref(&mut pangine, "${lived-experience}");
+    let reinterpreted_live_template = must_ref(&mut pangine, "${assigned-live-template}");
     assert_eq!(
         pangine.format_concept(&grounded_history, false),
-        "{[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]}",
+        "[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]",
         "capture-time evaluation keeps the reading that Rust supplied for that experience"
     );
     assert_eq!(
         pangine.format_concept(&reinterpreted_live_template, false),
-        "{[observation]->[context]->[opal]->[reading]->[violet]->[result]->[pearl]}",
+        "[observation]->[context]->[opal]->[reading]->[violet]->[result]->[pearl]",
         "ordinary assignment can deliberately retain a template that follows current input"
     );
 }
@@ -160,7 +160,7 @@ fn separate_input_callbacks_can_mix_moments_while_one_complete_frame_stays_coher
     let mixed = mixed_bridge.capture_current_inputs(&mut mixed_pangine).expect("all three separately read inputs are present");
     assert_eq!(
         mixed_pangine.format_concept(&mixed, false),
-        "{[observation]->[context]->[opal]->[reading]->[violet]->[result]->[onyx]}",
+        "[observation]->[context]->[opal]->[reading]->[violet]->[result]->[onyx]",
         "separate callbacks can form an observation that was never one application frame"
     );
 
@@ -169,7 +169,7 @@ fn separate_input_callbacks_can_mix_moments_while_one_complete_frame_stays_coher
     let coherent = coherent_bridge.capture_frame(&mut coherent_pangine, first).expect("complete application frame");
     assert_eq!(
         coherent_pangine.format_concept(&coherent, false),
-        "{[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]}",
+        "[observation]->[context]->[opal]->[reading]->[cedar]->[result]->[pearl]",
         "one supplied frame keeps all input values from the same application moment"
     );
 }

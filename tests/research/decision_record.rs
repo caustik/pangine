@@ -17,12 +17,12 @@ struct DecisionState {
 #[ignore = "warning: current snapshot shapes preserve different parts of a decision-time record"]
 fn net_totals_rows_and_source_values_have_distinct_record_capabilities() {
     let mut pangine = decision_fixture();
-    run_stance_program(&mut pangine, "['archive']['decision-stance']", "live");
+    run_stance_program(&mut pangine, "{archive}{decision-stance}", "live");
     assert_eq!(decision_state(&mut pangine, "live-net"), state(&[("[A]", 1), ("[B]", -2)], Some("[A]")));
 
     capture_separate_records(&mut pangine);
     experience(&mut pangine, "archive", "[later-amber-b]->[amber]->[B]", 10);
-    run_stance_program(&mut pangine, "['archive']['decision-stance']", "live");
+    run_stance_program(&mut pangine, "{archive}{decision-stance}", "live");
     assert_eq!(decision_state(&mut pangine, "live-net"), state(&[("[A]", 1), ("[B]", 8)], Some("[B]")));
 
     assert_eq!(decision_state(&mut pangine, "net-record"), state(&[("[A]", 1), ("[B]", -2)], Some("[A]")));
@@ -35,7 +35,7 @@ fn net_totals_rows_and_source_values_have_distinct_record_capabilities() {
     let row_histories = history_completions(&mut pangine, &["row-record"]);
     assert_eq!(row_histories.keys().cloned().collect::<BTreeSet<_>>(), original_events());
     assert!(row_histories.values().all(|history| history.source_relevance == Relevance::DEFAULT && history.coefficient.is_none()));
-    run_stance_program(&mut pangine, "['row-record']", "rows");
+    run_stance_program(&mut pangine, "{row-record}", "rows");
     assert_eq!(decision_state(&mut pangine, "rows-positive"), state(&[("[A]", 1), ("[B]", 1)], Some("[A]")));
     assert_eq!(decision_state(&mut pangine, "rows-negative"), state(&[("[A]", 1), ("[B]", 1)], Some("[A]")));
     assert_eq!(decision_state(&mut pangine, "rows-net"), state(&[], None));
@@ -47,12 +47,12 @@ fn net_totals_rows_and_source_values_have_distinct_record_capabilities() {
         source_coefficients()
     );
     assert!(source_histories.values().all(|history| history.source_relevance == Relevance::DEFAULT));
-    run_stance_program(&mut pangine, "['source-record']['stance-record']", "source");
+    run_stance_program(&mut pangine, "{source-record}{stance-record}", "source");
     assert_eq!(decision_state(&mut pangine, "source-positive"), state(&[("[A]", 1), ("[B]", 1)], Some("[A]")));
     assert_eq!(decision_state(&mut pangine, "source-negative"), state(&[("[A]", 1), ("[B]", 1)], Some("[A]")));
     assert_eq!(decision_state(&mut pangine, "source-net"), state(&[], None));
 
-    let known_count_question = must_ref(&mut pangine, "x4(['known-event']->['known-relation']->['known-choice'])");
+    let known_count_question = must_ref(&mut pangine, "x4({known-event}->{known-relation}->{known-choice})");
     let source_record = pangine.reference_percept("source-record");
     let known_count =
         pangine.complete_question(std::slice::from_ref(&source_record), &known_count_question).expect("valid exact snapshot coefficient question");
@@ -69,12 +69,12 @@ fn net_totals_rows_and_source_values_have_distinct_record_capabilities() {
 #[ignore = "warning: the combined record is useful but has no generic Pangine binding for an unknown source coefficient"]
 fn one_combined_record_replays_and_rejoins_without_becoming_a_complete_explanation_format() {
     let mut pangine = decision_fixture();
-    run_stance_program(&mut pangine, "['archive']['decision-stance']", "live");
+    run_stance_program(&mut pangine, "{archive}{decision-stance}", "live");
     capture_separate_records(&mut pangine);
     capture_combined_record(&mut pangine);
 
     experience(&mut pangine, "archive", "[later-amber-b]->[amber]->[B]", 10);
-    run_stance_program(&mut pangine, "['archive']['decision-stance']", "live");
+    run_stance_program(&mut pangine, "{archive}{decision-stance}", "live");
     assert_eq!(decision_state(&mut pangine, "live-net"), state(&[("[A]", 1), ("[B]", 8)], Some("[B]")));
 
     for (label, output) in [
@@ -109,7 +109,7 @@ fn one_combined_record_replays_and_rejoins_without_becoming_a_complete_explanati
         saved_source.iter().map(|(event, history)| (event.clone(), history.coefficient.expect("combined source coefficient"))).collect::<BTreeMap<_, _>>(),
         source_coefficients()
     );
-    run_stance_program(&mut pangine, "['saved-source']['saved-stance']", "combined-source");
+    run_stance_program(&mut pangine, "{saved-source}{saved-stance}", "combined-source");
     assert_eq!(decision_state(&mut pangine, "combined-source-net"), state(&[], None));
 }
 
@@ -117,18 +117,18 @@ fn one_combined_record_replays_and_rejoins_without_becoming_a_complete_explanati
 #[ignore = "warning: a record can select one unchanged source reference through the current decision placeholder"]
 fn an_unchanged_source_version_preserves_exact_history_and_can_be_selected_through_a_record() {
     let mut pangine = decision_fixture();
-    run_stance_program(&mut pangine, "['archive']['decision-stance']", "decision");
+    run_stance_program(&mut pangine, "{archive}{decision-stance}", "decision");
     assert_eq!(decision_state(&mut pangine, "decision-net"), state(&[("[A]", 1), ("[B]", -2)], Some("[A]")));
 
-    must_ref(&mut pangine, "['source-pointer-record'] = ([decision]->[source]->['archive'])([decision]->[stance]->['decision-stance'])");
-    must_ref(&mut pangine, "['source-pointer-record'] @ [decision]->[source]->['record-source']");
-    must_ref(&mut pangine, "['source-pointer-record'] @ [decision]->[stance]->['record-stance']");
+    must_ref(&mut pangine, "{source-pointer-record} = ([decision]->[source]->{archive})([decision]->[stance]->{decision-stance})");
+    must_ref(&mut pangine, "{source-pointer-record} @ [decision]->[source]->{record-source}");
+    must_ref(&mut pangine, "{source-pointer-record} @ [decision]->[stance]->{record-stance}");
 
     experience(&mut pangine, "later-archive", "[later-amber-b]->[amber]->[B]", 10);
-    run_stance_program(&mut pangine, "['archive']['later-archive']['decision-stance']", "current");
+    run_stance_program(&mut pangine, "{archive}{later-archive}{decision-stance}", "current");
     assert_eq!(decision_state(&mut pangine, "current-net"), state(&[("[A]", 1), ("[B]", 8)], Some("[B]")));
 
-    run_stance_program(&mut pangine, "['archive']['decision-stance']", "version-replay");
+    run_stance_program(&mut pangine, "{archive}{decision-stance}", "version-replay");
     assert_eq!(decision_state(&mut pangine, "version-replay-net"), state(&[("[A]", 1), ("[B]", -2)], Some("[A]")));
     let version_histories = history_completions(&mut pangine, &["archive", "decision-stance"]);
     assert_eq!(version_histories.keys().cloned().collect::<BTreeSet<_>>(), original_events());
@@ -139,22 +139,22 @@ fn an_unchanged_source_version_preserves_exact_history_and_can_be_selected_throu
     assert_eq!(percept_value(&mut pangine, "record-source"), Some(archive));
     let decision_stance = pangine.reference_percept("decision-stance");
     assert_eq!(percept_value(&mut pangine, "record-stance"), Some(decision_stance));
-    run_stance_program(&mut pangine, "['record-source']['record-stance']", "indirect");
+    run_stance_program(&mut pangine, "{record-source}{record-stance}", "indirect");
     assert_eq!(decision_state(&mut pangine, "indirect-positive"), state(&[], None));
     assert_eq!(decision_state(&mut pangine, "indirect-negative"), state(&[], None));
     assert_eq!(decision_state(&mut pangine, "indirect-net"), state(&[], None));
 
-    must_ref(&mut pangine, "['record-source-choice-input'] = $['record-source']; ['record-stance-choice-input'] = $['record-stance']");
-    run_stance_program(&mut pangine, "^['record-source-choice-input']^['record-stance-choice-input']", "record-selected");
+    must_ref(&mut pangine, "{record-source-choice-input} = ${record-source}; {record-stance-choice-input} = ${record-stance}");
+    run_stance_program(&mut pangine, "^{record-source-choice-input}^{record-stance-choice-input}", "record-selected");
     assert_eq!(decision_state(&mut pangine, "record-selected-net"), state(&[("[A]", 1), ("[B]", -2)], Some("[A]")));
 
-    must_ref(&mut pangine, "($['record-source']) @ ['evaluated-event']->['evaluated-relation']->['evaluated-choice']");
+    must_ref(&mut pangine, "(${record-source}) @ {evaluated-event}->{evaluated-relation}->{evaluated-choice}");
     assert_eq!(
         decision_state(&mut pangine, "evaluated-choice"),
         state(&[("[A]", 7), ("[B]", 8)], Some("[B]")),
         "the linked output keeps the selected live source reference, whose current experience then supplies the answer amounts"
     );
-    run_stance_program(&mut pangine, "($['record-source'])($['record-stance'])", "evaluated-pointer");
+    run_stance_program(&mut pangine, "(${record-source})(${record-stance})", "evaluated-pointer");
     assert_eq!(decision_state(&mut pangine, "evaluated-pointer-positive"), state(&[("[A]", 4), ("[B]", 3)], Some("[A]")));
     assert_eq!(decision_state(&mut pangine, "evaluated-pointer-negative"), state(&[("[A]", 3), ("[B]", 5)], Some("[B]")));
     assert_eq!(
@@ -178,7 +178,7 @@ fn decision_fixture() -> Pangine {
     experience(&mut pangine, "archive", "[amber-b]->[amber]->[B]", 3);
     experience(&mut pangine, "archive", "[violet-a]->[violet]->[A]", 3);
     experience(&mut pangine, "archive", "[violet-b]->[violet]->[B]", 5);
-    must_ref(&mut pangine, "['decision-stance'] = ([amber]->[role]->[positive])([violet]->[role]->[negative])");
+    must_ref(&mut pangine, "{decision-stance} = ([amber]->[role]->[positive])([violet]->[role]->[negative])");
     pangine
 }
 
@@ -187,43 +187,43 @@ fn run_stance_program(pangine: &mut Pangine, selector: &str, prefix: &str) {
     let negative = format!("{prefix}-negative");
     let net = format!("{prefix}-net");
     let input = format!(
-        "{selector} @ (['{prefix}-positive-event']->['{prefix}-positive-relation']->['{positive}'])(['{prefix}-positive-relation']->[role]->[positive]);
-         {selector} @ (['{prefix}-negative-event']->['{prefix}-negative-relation']->['{negative}'])(['{prefix}-negative-relation']->[role]->[negative]);
-         ['{net}'] = $['{positive}'];
-         ['{net}'] /= $['{negative}']"
+        "{selector} @ ({{{prefix}-positive-event}}->{{{prefix}-positive-relation}}->{{{positive}}})({{{prefix}-positive-relation}}->[role]->[positive]);
+         {selector} @ ({{{prefix}-negative-event}}->{{{prefix}-negative-relation}}->{{{negative}}})({{{prefix}-negative-relation}}->[role]->[negative]);
+         {{{net}}} = ${{{positive}}};
+         {{{net}}} /= ${{{negative}}}"
     );
     pangine.reference_concept(&input).unwrap_or_else(|error| panic!("failed to run represented stance program: {error}"));
 }
 
 fn capture_separate_records(pangine: &mut Pangine) {
-    must_ref(pangine, "['net-record'] = $['live-net']");
-    must_ref(pangine, "['positive-record'] = $['live-positive']");
-    must_ref(pangine, "['negative-record'] = $['live-negative']");
-    must_ref(pangine, "['source-record'] = $['archive']");
-    must_ref(pangine, "['stance-record'] = $['decision-stance']");
-    let history_question = "(['record-event']->['record-relation']->['record-choice'])(['record-relation']->[role]->['record-role'])";
-    must_ref(pangine, &format!("['row-record'] = ['archive']['decision-stance'] @ {history_question}"));
+    must_ref(pangine, "{net-record} = ${live-net}");
+    must_ref(pangine, "{positive-record} = ${live-positive}");
+    must_ref(pangine, "{negative-record} = ${live-negative}");
+    must_ref(pangine, "{source-record} = ${archive}");
+    must_ref(pangine, "{stance-record} = ${decision-stance}");
+    let history_question = "({record-event}->{record-relation}->{record-choice})({record-relation}->[role]->{record-role})";
+    must_ref(pangine, &format!("{{row-record}} = {{archive}}{{decision-stance}} @ {history_question}"));
 }
 
 fn capture_combined_record(pangine: &mut Pangine) {
     must_ref(
         pangine,
-        "['decision-record'] =
-           ([decision]->[positive]->$['positive-record'])
-           ([decision]->[negative]->$['negative-record'])
-           ([decision]->[net]->$['net-record'])
-           ([decision]->[rows]->$['row-record'])
-           ([decision]->[source]->$['source-record'])
-           ([decision]->[stance]->$['stance-record'])",
+        "{decision-record} =
+           ([decision]->[positive]->${positive-record})
+           ([decision]->[negative]->${negative-record})
+           ([decision]->[net]->${net-record})
+           ([decision]->[rows]->${row-record})
+           ([decision]->[source]->${source-record})
+           ([decision]->[stance]->${stance-record})",
     );
 }
 
 fn extract_record_member(pangine: &mut Pangine, label: &str, output: &str) {
-    must_ref(pangine, &format!("['decision-record'] @ [decision]->[{label}]->['{output}']"));
+    must_ref(pangine, &format!("{{decision-record}} @ [decision]->[{label}]->{{{output}}}"));
 }
 
 fn replay_totals(pangine: &mut Pangine, positive: &str, negative: &str, output: &str) {
-    let input = format!("['{output}'] = $['{positive}']; ['{output}'] /= $['{negative}']");
+    let input = format!("{{{output}}} = ${{{positive}}}; {{{output}}} /= ${{{negative}}}");
     pangine.reference_concept(&input).unwrap_or_else(|error| panic!("failed to replay saved totals: {error}"));
 }
 
@@ -232,7 +232,7 @@ fn history_completions(pangine: &mut Pangine, source_names: &[&str]) -> BTreeMap
     let event = pangine.reference_percept("history-event");
     let choice = pangine.reference_percept("history-choice");
     let role = pangine.reference_percept("history-role");
-    let question = must_ref(pangine, "(['history-event']->['history-relation']->['history-choice'])(['history-relation']->[role]->['history-role'])");
+    let question = must_ref(pangine, "({history-event}->{history-relation}->{history-choice})({history-relation}->[role]->{history-role})");
     pangine
         .complete_question(&sources, &question)
         .expect("valid decision-record history question")
@@ -284,7 +284,7 @@ fn source_coefficients() -> BTreeMap<String, Relevance> {
 }
 
 fn decision_state(pangine: &mut Pangine, name: &str) -> DecisionState {
-    let value = pangine.reference_concept(&format!("$['{name}']")).expect("valid decision-record read");
+    let value = pangine.reference_concept(&format!("${{{name}}}")).expect("valid decision-record read");
     let candidates = value
         .iter()
         .flat_map(|value| pangine.get_relevance_map(value))
@@ -295,7 +295,7 @@ fn decision_state(pangine: &mut Pangine, name: &str) -> DecisionState {
     let probe = pangine.reference_percept("decision-record-choice-probe");
     assert!(pangine.set_percept_value(&probe, value));
     let selected = pangine
-        .reference_concept("^['decision-record-choice-probe']")
+        .reference_concept("^{decision-record-choice-probe}")
         .expect("valid decision-record choice")
         .map(|candidate| pangine.format_concept(&candidate, false));
     DecisionState { candidates, selected }
@@ -315,7 +315,7 @@ fn state(entries: &[(&str, i64)], selected: Option<&str>) -> DecisionState {
 
 fn experience(pangine: &mut Pangine, percept: &str, concept: &str, repetitions: usize) {
     for _ in 0..repetitions {
-        let input = format!("['{percept}'] ~= {concept}");
+        let input = format!("{{{percept}}} ~= {concept}");
         pangine
             .reference_concept(&input)
             .unwrap_or_else(|error| panic!("failed to parse {input:?}: {error}"))

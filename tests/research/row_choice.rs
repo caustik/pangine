@@ -33,9 +33,9 @@ fn application_context_must_be_filtered_before_candidate_totals_are_collapsed() 
     assert_eq!(
         rows,
         BTreeSet::from([
-            ChoiceRow { source: "['memory']".to_owned(), context: "[north]".to_owned(), candidate: "[A]".to_owned(), relevance: Relevance::DEFAULT },
-            ChoiceRow { source: "['memory']".to_owned(), context: "[north]".to_owned(), candidate: "[B]".to_owned(), relevance: Relevance::new(5) },
-            ChoiceRow { source: "['memory']".to_owned(), context: "[south]".to_owned(), candidate: "[A]".to_owned(), relevance: Relevance::new(10) },
+            ChoiceRow { source: "{memory}".to_owned(), context: "[north]".to_owned(), candidate: "[A]".to_owned(), relevance: Relevance::DEFAULT },
+            ChoiceRow { source: "{memory}".to_owned(), context: "[north]".to_owned(), candidate: "[B]".to_owned(), relevance: Relevance::new(5) },
+            ChoiceRow { source: "{memory}".to_owned(), context: "[south]".to_owned(), candidate: "[A]".to_owned(), relevance: Relevance::new(10) },
         ])
     );
 
@@ -74,8 +74,7 @@ fn every_pairwise_total_can_match_while_complete_rows_choose_differently() {
         &["source-one", "source-two"],
     );
 
-    let candidate_source =
-        pair_score_map(&[("[A]", "['source-one']", 6), ("[A]", "['source-two']", 6), ("[B]", "['source-one']", 4), ("[B]", "['source-two']", 4)]);
+    let candidate_source = pair_score_map(&[("[A]", "{source-one}", 6), ("[A]", "{source-two}", 6), ("[B]", "{source-one}", 4), ("[B]", "{source-two}", 4)]);
     assert_eq!(pair_totals(&first, |row| (row.candidate.clone(), row.source.clone())), candidate_source);
     assert_eq!(pair_totals(&second, |row| (row.candidate.clone(), row.source.clone())), candidate_source);
 
@@ -83,12 +82,8 @@ fn every_pairwise_total_can_match_while_complete_rows_choose_differently() {
     assert_eq!(pair_totals(&first, |row| (row.candidate.clone(), row.context.clone())), candidate_context);
     assert_eq!(pair_totals(&second, |row| (row.candidate.clone(), row.context.clone())), candidate_context);
 
-    let source_context = pair_score_map(&[
-        ("['source-one']", "[north]", 5),
-        ("['source-one']", "[south]", 5),
-        ("['source-two']", "[north]", 5),
-        ("['source-two']", "[south]", 5),
-    ]);
+    let source_context =
+        pair_score_map(&[("{source-one}", "[north]", 5), ("{source-one}", "[south]", 5), ("{source-two}", "[north]", 5), ("{source-two}", "[south]", 5)]);
     assert_eq!(pair_totals(&first, |row| (row.source.clone(), row.context.clone())), source_context);
     assert_eq!(pair_totals(&second, |row| (row.source.clone(), row.context.clone())), source_context);
 
@@ -98,7 +93,7 @@ fn every_pairwise_total_can_match_while_complete_rows_choose_differently() {
     assert_eq!(second_totals, first_totals);
     assert_eq!(only_greatest(&first_totals), Some("[A]".to_owned()));
 
-    let eligible_contexts = BTreeMap::from([("['source-one']".to_owned(), "[north]".to_owned()), ("['source-two']".to_owned(), "[south]".to_owned())]);
+    let eligible_contexts = BTreeMap::from([("{source-one}".to_owned(), "[north]".to_owned()), ("{source-two}".to_owned(), "[south]".to_owned())]);
     let first_eligible = eligible_totals(&first, &eligible_contexts);
     let second_eligible = eligible_totals(&second, &eligible_contexts);
     assert_eq!(first_eligible, score_map(&[("[A]", 10)]));
@@ -119,7 +114,7 @@ fn complete_choice_rows(pangine: &mut Pangine, source_names: &[&str]) -> BTreeSe
     let case = pangine.reference_percept("case");
     let context = pangine.reference_percept("context");
     let choice = pangine.reference_percept("choice");
-    let question = must_ref(pangine, "(['case']->[route]->['context'])(['case']->[answer]->['choice'])");
+    let question = must_ref(pangine, "({case}->[route]->{context})({case}->[answer]->{choice})");
     let sources = source_names.iter().map(|name| pangine.reference_percept(name)).collect::<Vec<_>>();
     let result = pangine.complete_question(&sources, &question).expect("valid contextual choice question");
 
@@ -189,7 +184,7 @@ fn pair_score_map(entries: &[(&str, &str, i64)]) -> PairScores {
 
 fn experience(pangine: &mut Pangine, percept: &str, concept: &str, repetitions: usize) {
     for _ in 0..repetitions {
-        must_ref(pangine, &format!("['{percept}'] ~= {concept}"));
+        must_ref(pangine, &format!("{{{percept}}} ~= {concept}"));
     }
 }
 

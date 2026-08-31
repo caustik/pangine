@@ -6,8 +6,8 @@
 //! member identities, and a second questions the records through the existing
 //! multi-Percept API. Pangine does not enforce logical keys, persist the state,
 //! or roll back failed application operations.
-//! Category, key, value, and version are ordinary parser-safe names. This test
-//! does not establish arbitrary scalar or missing-value representation.
+//! Category, key, value, and version are ordinary compact names. This test does
+//! not establish scalar typing or optional-field query behavior.
 
 use pangine::{CompletionResult, ConceptId, Pangine};
 use std::collections::BTreeSet;
@@ -22,7 +22,7 @@ struct CurrentRecord {
 }
 
 #[test]
-#[ignore = "warning: represented membership discovers current records, but logical keys, arbitrary values, persistence, and transaction rollback remain unresolved"]
+#[ignore = "warning: represented membership discovers current records, but logical keys, scalar semantics, persistence, and transaction rollback remain unresolved"]
 fn represented_members_support_complete_query_filter_replace_and_clear() {
     let mut pangine = Pangine::new();
     let collection = pangine.reference_percept("current-record-collection");
@@ -157,7 +157,7 @@ fn collection_membership(pangine: &mut Pangine, relationship: &str, members: &[C
 
 fn discover_members(pangine: &mut Pangine, collection: &ConceptId, relationship: &str) -> BTreeSet<ConceptId> {
     let member = pangine.reference_percept("discovered-member");
-    let question = must_ref(pangine, &format!("[{relationship}]->['discovered-member']"));
+    let question = must_ref(pangine, &format!("[{relationship}]->{{discovered-member}}"));
     let result = pangine.complete_question(std::slice::from_ref(collection), &question).expect("valid represented membership question");
 
     assert!(
@@ -184,10 +184,10 @@ fn query_records(pangine: &mut Pangine, collection: &ConceptId) -> BTreeSet<Curr
 
     let question = must_ref(
         pangine,
-        "(['record']->[collection-category]->['category'])
-         (['record']->[collection-key]->['key'])
-         (['record']->[collection-value]->['value'])
-         (['record']->[collection-version]->['version'])",
+        "({record}->[collection-category]->{category})
+         ({record}->[collection-key]->{key})
+         ({record}->[collection-value]->{value})
+         ({record}->[collection-version]->{version})",
     );
     let result = pangine.complete_question(&members, &question).expect("valid complete collection question");
     let records = records(pangine, &result);
@@ -231,9 +231,9 @@ fn query_values_in_category(pangine: &mut Pangine, collection: &ConceptId, categ
     let question = must_ref(
         pangine,
         &format!(
-            "(['record']->[collection-category]->[{category}])
-             (['record']->[collection-key]->['key'])
-             (['record']->[collection-value]->['value'])"
+            "({{record}}->[collection-category]->[{category}])
+             ({{record}}->[collection-key]->{{key}})
+             ({{record}}->[collection-value]->{{value}})"
         ),
     );
     let result = pangine.complete_question(&members, &question).expect("valid exact category filter");

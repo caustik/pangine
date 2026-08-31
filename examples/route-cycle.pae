@@ -1,72 +1,72 @@
 // Three possible two-step routes.
-['moves'] ~= [A]->[north]->[B]
-['moves'] ~= [B]->[east]->[D]
-['moves'] ~= [A]->[east]->[C]
-['moves'] ~= [C]->[north]->[D]
-['moves'] ~= [A]->[west]->[E]
-['moves'] ~= [E]->[south]->[D]
+{moves} ~= [A]->[north]->[B]
+{moves} ~= [B]->[east]->[D]
+{moves} ~= [A]->[east]->[C]
+{moves} ~= [C]->[north]->[D]
+{moves} ~= [A]->[west]->[E]
+{moves} ~= [E]->[south]->[D]
 
 // Earlier outcomes keep each complete route tied to its result.
-['episodes'] ~= ([east-success]->[from]->[A])([east-success]->[to]->[D])([east-success]->[route]->([east]->[C]->[north]))([east-success]->[outcome]->[success])
-['episodes'] ~= ([west-diverged]->[from]->[A])([west-diverged]->[to]->[D])([west-diverged]->[route]->([west]->[E]->[south]))([west-diverged]->[outcome]->[diverged])
+{episodes} ~= ([east-success]->[from]->[A])([east-success]->[to]->[D])([east-success]->[route]->([east]->[C]->[north]))([east-success]->[outcome]->[success])
+{episodes} ~= ([west-diverged]->[from]->[A])([west-diverged]->[to]->[D])([west-diverged]->[route]->([west]->[E]->[south]))([west-diverged]->[outcome]->[diverged])
 
 // These are the current inputs and result values used as filters below.
-['current-input'] = [A]
-['goal-input'] = [D]
-['positive-result'] = [success]
-['negative-result'] = [diverged]
+{current-input} = [A]
+{goal-input} = [D]
+{positive-result} = [success]
+{negative-result} = [diverged]
 
 // Form the complete routes and adjust that linked answer with recorded outcomes.
-['moves'] @ ($['current-input']->['base-first-action']->['base-middle'])(['base-middle']->['base-second-action']->$['goal-input'])
-['episodes'] @ (['positive-episode']->[from]->$['current-input'])(['positive-episode']->[to]->$['goal-input'])(['positive-episode']->[route]->(['positive-route']))(['positive-episode']->[outcome]->$['positive-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @+= ['positive-route']
-['episodes'] @ (['negative-episode']->[from]->$['current-input'])(['negative-episode']->[to]->$['goal-input'])(['negative-episode']->[route]->(['negative-route']))(['negative-episode']->[outcome]->$['negative-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']
-['selected-route'] = ^(['base-first-action']->['base-middle']->['base-second-action'])
-['cycle-3-route'] = $['selected-route']
+{moves} @ (${current-input}->{base-first-action}->{base-middle})({base-middle}->{base-second-action}->${goal-input})
+{episodes} @ ({positive-episode}->[from]->${current-input})({positive-episode}->[to]->${goal-input})({positive-episode}->[route]->({positive-route}))({positive-episode}->[outcome]->${positive-result})
+{base-first-action}->{base-middle}->{base-second-action} @+= {positive-route}
+{episodes} @ ({negative-episode}->[from]->${current-input})({negative-episode}->[to]->${goal-input})({negative-episode}->[route]->({negative-route}))({negative-episode}->[outcome]->${negative-result})
+{base-first-action}->{base-middle}->{base-second-action} @-= {negative-route}
+{selected-route} = ^({base-first-action}->{base-middle}->{base-second-action})
+{cycle-3-route} = ${selected-route}
 
 // The application reports that cycle 3 diverged.
-['episode-id-input'] = [cycle-3]
-['result-input'] = [diverged]
-['episodes'] ~= (['episode-id-input']->[from]->['current-input'])(['episode-id-input']->[to]->['goal-input'])(['episode-id-input']->[route]->(['selected-route']))(['episode-id-input']->[outcome]->['result-input'])
+{episode-id-input} = [cycle-3]
+{result-input} = [diverged]
+{episodes} ~= ({episode-id-input}->[from]->{current-input})({episode-id-input}->[to]->{goal-input})({episode-id-input}->[route]->({selected-route}))({episode-id-input}->[outcome]->{result-input})
 
 // One failure leaves the first two routes tied, so the current tie rule keeps east.
-['moves'] @ ($['current-input']->['base-first-action']->['base-middle'])(['base-middle']->['base-second-action']->$['goal-input'])
-['episodes'] @ (['positive-episode']->[from]->$['current-input'])(['positive-episode']->[to]->$['goal-input'])(['positive-episode']->[route]->(['positive-route']))(['positive-episode']->[outcome]->$['positive-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @+= ['positive-route']
-['episodes'] @ (['negative-episode']->[from]->$['current-input'])(['negative-episode']->[to]->$['goal-input'])(['negative-episode']->[route]->(['negative-route']))(['negative-episode']->[outcome]->$['negative-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']
-['selected-route'] = ^(['base-first-action']->['base-middle']->['base-second-action'])
-['cycle-4-route'] = $['selected-route']
+{moves} @ (${current-input}->{base-first-action}->{base-middle})({base-middle}->{base-second-action}->${goal-input})
+{episodes} @ ({positive-episode}->[from]->${current-input})({positive-episode}->[to]->${goal-input})({positive-episode}->[route]->({positive-route}))({positive-episode}->[outcome]->${positive-result})
+{base-first-action}->{base-middle}->{base-second-action} @+= {positive-route}
+{episodes} @ ({negative-episode}->[from]->${current-input})({negative-episode}->[to]->${goal-input})({negative-episode}->[route]->({negative-route}))({negative-episode}->[outcome]->${negative-result})
+{base-first-action}->{base-middle}->{base-second-action} @-= {negative-route}
+{selected-route} = ^({base-first-action}->{base-middle}->{base-second-action})
+{cycle-4-route} = ${selected-route}
 
 // A second reported failure makes north the stronger complete route.
-['episode-id-input'] = [cycle-4]
-['result-input'] = [diverged]
-['episodes'] ~= (['episode-id-input']->[from]->['current-input'])(['episode-id-input']->[to]->['goal-input'])(['episode-id-input']->[route]->(['selected-route']))(['episode-id-input']->[outcome]->['result-input'])
-['moves'] @ ($['current-input']->['base-first-action']->['base-middle'])(['base-middle']->['base-second-action']->$['goal-input'])
-['episodes'] @ (['positive-episode']->[from]->$['current-input'])(['positive-episode']->[to]->$['goal-input'])(['positive-episode']->[route]->(['positive-route']))(['positive-episode']->[outcome]->$['positive-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @+= ['positive-route']
-['episodes'] @ (['negative-episode']->[from]->$['current-input'])(['negative-episode']->[to]->$['goal-input'])(['negative-episode']->[route]->(['negative-route']))(['negative-episode']->[outcome]->$['negative-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']
-['selected-route'] = ^(['base-first-action']->['base-middle']->['base-second-action'])
-['cycle-5-route'] = $['selected-route']
+{episode-id-input} = [cycle-4]
+{result-input} = [diverged]
+{episodes} ~= ({episode-id-input}->[from]->{current-input})({episode-id-input}->[to]->{goal-input})({episode-id-input}->[route]->({selected-route}))({episode-id-input}->[outcome]->{result-input})
+{moves} @ (${current-input}->{base-first-action}->{base-middle})({base-middle}->{base-second-action}->${goal-input})
+{episodes} @ ({positive-episode}->[from]->${current-input})({positive-episode}->[to]->${goal-input})({positive-episode}->[route]->({positive-route}))({positive-episode}->[outcome]->${positive-result})
+{base-first-action}->{base-middle}->{base-second-action} @+= {positive-route}
+{episodes} @ ({negative-episode}->[from]->${current-input})({negative-episode}->[to]->${goal-input})({negative-episode}->[route]->({negative-route}))({negative-episode}->[outcome]->${negative-result})
+{base-first-action}->{base-middle}->{base-second-action} @-= {negative-route}
+{selected-route} = ^({base-first-action}->{base-middle}->{base-second-action})
+{cycle-5-route} = ${selected-route}
 
 // A reported success strengthens north for the next cycle.
-['episode-id-input'] = [cycle-5]
-['result-input'] = [success]
-['episodes'] ~= (['episode-id-input']->[from]->['current-input'])(['episode-id-input']->[to]->['goal-input'])(['episode-id-input']->[route]->(['selected-route']))(['episode-id-input']->[outcome]->['result-input'])
-['moves'] @ ($['current-input']->['base-first-action']->['base-middle'])(['base-middle']->['base-second-action']->$['goal-input'])
-['episodes'] @ (['positive-episode']->[from]->$['current-input'])(['positive-episode']->[to]->$['goal-input'])(['positive-episode']->[route]->(['positive-route']))(['positive-episode']->[outcome]->$['positive-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @+= ['positive-route']
-['episodes'] @ (['negative-episode']->[from]->$['current-input'])(['negative-episode']->[to]->$['goal-input'])(['negative-episode']->[route]->(['negative-route']))(['negative-episode']->[outcome]->$['negative-result'])
-['base-first-action']->['base-middle']->['base-second-action'] @-= ['negative-route']
-['selected-route'] = ^(['base-first-action']->['base-middle']->['base-second-action'])
-['cycle-6-route'] = $['selected-route']
+{episode-id-input} = [cycle-5]
+{result-input} = [success]
+{episodes} ~= ({episode-id-input}->[from]->{current-input})({episode-id-input}->[to]->{goal-input})({episode-id-input}->[route]->({selected-route}))({episode-id-input}->[outcome]->{result-input})
+{moves} @ (${current-input}->{base-first-action}->{base-middle})({base-middle}->{base-second-action}->${goal-input})
+{episodes} @ ({positive-episode}->[from]->${current-input})({positive-episode}->[to]->${goal-input})({positive-episode}->[route]->({positive-route}))({positive-episode}->[outcome]->${positive-result})
+{base-first-action}->{base-middle}->{base-second-action} @+= {positive-route}
+{episodes} @ ({negative-episode}->[from]->${current-input})({negative-episode}->[to]->${goal-input})({negative-episode}->[route]->({negative-route}))({negative-episode}->[outcome]->${negative-result})
+{base-first-action}->{base-middle}->{base-second-action} @-= {negative-route}
+{selected-route} = ^({base-first-action}->{base-middle}->{base-second-action})
+{cycle-6-route} = ${selected-route}
 
 // Read the changing choices and one raw result afterward.
-$['cycle-3-route']
-$['cycle-4-route']
-$['cycle-5-route']
-$['cycle-6-route']
-['episodes'] @ [cycle-5]->[outcome]->['recorded-outcome']
-$['recorded-outcome']
+${cycle-3-route}
+${cycle-4-route}
+${cycle-5-route}
+${cycle-6-route}
+{episodes} @ [cycle-5]->[outcome]->{recorded-outcome}
+${recorded-outcome}

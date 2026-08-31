@@ -199,12 +199,23 @@ mod tests {
         let json = session.execute("[cat]->[eats]->[food]").unwrap();
         let view: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(view["canonical"], "{[cat]->[eats]->[food]}");
+        assert_eq!(view["canonical"], "[cat]->[eats]->[food]");
         let ordered = view["nodes"].as_array().unwrap().iter().find(|node| node["kind"] == "ordered").unwrap();
         let ordered_id = ordered["id"].as_u64().unwrap();
         let edges = view["edges"].as_array().unwrap();
         assert_eq!(edges.iter().filter(|edge| edge["role"] == "component" && edge["owner"] == ordered_id).count(), 3);
         assert_eq!(edges.iter().filter(|edge| edge["role"] == "sequence" && edge["owner"] == ordered_id).count(), 2);
+    }
+
+    #[test]
+    fn escaped_text_keeps_its_exact_label_and_canonical_spelling() {
+        let mut session = SessionCore::default();
+        let json = session.execute(r#"["C:\\Library\\Track 01.wav"]"#).unwrap();
+        let view: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(view["canonical"], r#"["C:\\Library\\Track 01.wav"]"#);
+        assert_eq!(view["nodes"][0]["kind"], "named");
+        assert_eq!(view["nodes"][0]["label"], r"C:\Library\Track 01.wav");
     }
 
     #[test]
@@ -236,9 +247,9 @@ mod tests {
     #[test]
     fn percept_state_uses_relevance_bearing_member_edges() {
         let mut session = SessionCore::default();
-        session.execute("['memory'] ~= [cat]").unwrap();
-        session.execute("['memory'] ~= [cat]").unwrap();
-        let json = session.execute("['memory']").unwrap();
+        session.execute("{memory} ~= [cat]").unwrap();
+        session.execute("{memory} ~= [cat]").unwrap();
+        let json = session.execute("{memory}").unwrap();
         let view: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         let percept = view["nodes"].as_array().unwrap().iter().find(|node| node["kind"] == "percept").unwrap();
@@ -251,7 +262,7 @@ mod tests {
     #[test]
     fn reset_returns_to_null() {
         let mut session = SessionCore::default();
-        session.execute("['memory'] = [cat]").unwrap();
+        session.execute("{memory} = [cat]").unwrap();
         session = SessionCore::default();
         let json = session.snapshot().unwrap();
         let view: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -264,7 +275,7 @@ mod tests {
     fn current_output_follows_the_global_live_concept_contract() {
         let mut session = SessionCore::default();
         session.execute("[cat]").unwrap();
-        let json = session.execute("$['*']").unwrap();
+        let json = session.execute("${*}").unwrap();
         let view: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(view["canonical"], "[cat]");
@@ -274,16 +285,16 @@ mod tests {
     #[test]
     fn shared_answers_can_be_revealed_and_extended_in_the_browser_runtime() {
         let mut session = SessionCore::default();
-        session.execute("([cat]->[eats]->[fish])([dog]->[eats]->[bone]) @ ['animal']->[eats]->['food']").unwrap();
-        session.execute("([cat]->[lives-in]->[house])([dog]->[lives-in]->[yard]) @ ['animal']->[lives-in]->['home']").unwrap();
+        session.execute("([cat]->[eats]->[fish])([dog]->[eats]->[bone]) @ {animal}->[eats]->{food}").unwrap();
+        session.execute("([cat]->[lives-in]->[house])([dog]->[lives-in]->[yard]) @ {animal}->[lives-in]->{home}").unwrap();
 
-        let linked: serde_json::Value = serde_json::from_str(&session.execute("&['animal']").unwrap()).unwrap();
-        assert_eq!(linked["consoleLines"], serde_json::json!(["  {['animal']->[eats]->['food']}", "  {['animal']->[lives-in]->['home']}"]));
+        let linked: serde_json::Value = serde_json::from_str(&session.execute("&{animal}").unwrap()).unwrap();
+        assert_eq!(linked["consoleLines"], serde_json::json!(["  {animal}->[eats]->{food}", "  {animal}->[lives-in]->{home}"]));
 
-        let possibilities: serde_json::Value = serde_json::from_str(&session.execute("$(&['animal'])").unwrap()).unwrap();
+        let possibilities: serde_json::Value = serde_json::from_str(&session.execute("$(&{animal})").unwrap()).unwrap();
         assert_eq!(
             possibilities["consoleLines"],
-            serde_json::json!(["  x2({[cat]->[eats]->[fish]}{[cat]->[lives-in]->[house]})", "  x2({[dog]->[eats]->[bone]}{[dog]->[lives-in]->[yard]})"])
+            serde_json::json!(["  x2(([cat]->[eats]->[fish])([cat]->[lives-in]->[house]))", "  x2(([dog]->[eats]->[bone])([dog]->[lives-in]->[yard]))"])
         );
     }
 
@@ -297,7 +308,7 @@ mod tests {
 
         assert!(nodes.iter().any(|node| node["canonical"] == "[dog]"));
         assert!(nodes.iter().any(|node| node["canonical"] == "[runs]"));
-        assert!(nodes.iter().any(|node| node["canonical"] == "{[dog]->[runs]}"));
+        assert!(nodes.iter().any(|node| node["canonical"] == "[dog]->[runs]"));
         assert!(!nodes.iter().any(|node| node["canonical"] == "[cat]"));
         assert!(!nodes.iter().any(|node| node["canonical"] == "[eats]"));
         assert!(!nodes.iter().any(|node| node["canonical"] == "[cat][eats]"));

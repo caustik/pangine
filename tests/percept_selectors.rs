@@ -6,17 +6,17 @@ fn a_percept_selector_keeps_one_meaning_regardless_of_its_value_shape() {
     let container = pangine.reference_percept("container");
     let member = pangine.reference_percept("member");
 
-    must_ref(&mut pangine, "['member'] = [record]->[value]");
-    must_ref(&mut pangine, "['container'] = ['member']");
+    must_ref(&mut pangine, "{member} = [record]->[value]");
+    must_ref(&mut pangine, "{container} = {member}");
 
     assert!(
-        pangine.reference_concept("['container'] @ [record]->['implicit-value']").expect("valid question").is_none(),
+        pangine.reference_concept("{container} @ [record]->{implicit-value}").expect("valid question").is_none(),
         "a Percept must remain its own source instead of implicitly expanding its current value"
     );
     assert_eq!(pangine.get_value(&container), Some(member));
 
-    let explicit = must_ref(&mut pangine, "['member'] @ [record]->['explicit-value']");
-    assert_eq!(pangine.format_concept(&explicit, false), "{[record]->[value]}");
+    let explicit = must_ref(&mut pangine, "{member} @ [record]->{explicit-value}");
+    assert_eq!(pangine.format_concept(&explicit, false), "[record]->[value]");
 }
 
 #[test]
@@ -37,9 +37,9 @@ fn the_global_percept_uses_the_same_source_identity_as_other_percepts() {
 #[test]
 fn the_global_percept_is_an_ordinary_language_question_selector() {
     let mut pangine = Pangine::new();
-    must_ref(&mut pangine, "['memory'] = [known]");
+    must_ref(&mut pangine, "{memory} = [known]");
 
-    let result = must_ref(&mut pangine, "['*'] @ ['answer']");
+    let result = must_ref(&mut pangine, "{*} @ {answer}");
     assert_eq!(pangine.format_concept(&result, false), "[known]");
 }
 

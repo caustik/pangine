@@ -3,7 +3,7 @@ use pangine::{AnswerPublicationError, ConceptId, Pangine, Relevance};
 #[test]
 fn immutable_choice_changes_live_outputs_only_after_publication() {
     let mut pangine = weighted_animals();
-    let pair = must_ref(&mut pangine, "['animal']->['food']");
+    let pair = must_ref(&mut pangine, "{animal}->{food}");
     let animal = pangine.reference_percept("animal");
     let food = pangine.reference_percept("food");
     let base = pangine.answer_view(&pair).expect("animal-food answer");
@@ -12,12 +12,12 @@ fn immutable_choice_changes_live_outputs_only_after_publication() {
 
     assert_eq!(animal_choice.selected(), &must_ref(&mut pangine, "[cat]"));
     assert_eq!(food_choice.selected(), &must_ref(&mut pangine, "[fish]"));
-    assert_eq!(must_ref(&mut pangine, "$['animal']"), must_ref(&mut pangine, "x8[cat]x7[dog]"));
+    assert_eq!(must_ref(&mut pangine, "${animal}"), must_ref(&mut pangine, "x8[cat]x7[dog]"));
 
     let publication = animal_choice.view().answer().publish(&mut pangine).expect("current answer revision");
     assert_ne!(publication.revision(), publication.prior_revision());
-    assert_eq!(must_ref(&mut pangine, "$['animal']"), must_ref(&mut pangine, "x8[cat]"));
-    assert_eq!(must_ref(&mut pangine, "$['food']"), must_ref(&mut pangine, "x5[milk]x3[fish]"));
+    assert_eq!(must_ref(&mut pangine, "${animal}"), must_ref(&mut pangine, "x8[cat]"));
+    assert_eq!(must_ref(&mut pangine, "${food}"), must_ref(&mut pangine, "x5[milk]x3[fish]"));
     assert_eq!(food_choice.view().answer().publish(&mut pangine).err(), Some(AnswerPublicationError::Stale));
 }
 
@@ -57,8 +57,8 @@ fn answer_adjustment_composes_through_reliability_outcomes_and_candidates() {
     let choice = adjusted.choose(&mut pangine).expect("positive final choice");
     assert_eq!(choice.selected(), &must_ref(&mut pangine, "[B]"));
     choice.view().answer().publish(&mut pangine).expect("current candidate revision");
-    assert_eq!(must_ref(&mut pangine, "$['candidate']"), must_ref(&mut pangine, "x3[choice-b]"));
-    assert_eq!(must_ref(&mut pangine, "$['decision']"), must_ref(&mut pangine, "x3[B]"));
+    assert_eq!(must_ref(&mut pangine, "${candidate}"), must_ref(&mut pangine, "x3[choice-b]"));
+    assert_eq!(must_ref(&mut pangine, "${decision}"), must_ref(&mut pangine, "x3[B]"));
 }
 
 #[test]
@@ -107,8 +107,8 @@ fn deep_adjustment_keeps_binding_context_linear() {
     let mut views = Vec::new();
     let mut outputs = Vec::new();
     for index in 0..DEPTH {
-        must_ref(&mut pangine, &format!("['memory-{index}'] ~= [record-{index}]->[value]->[A]"));
-        must_ref(&mut pangine, &format!("['memory-{index}'] @ ['row-{index}']->[value]->['layer-{index}']"));
+        must_ref(&mut pangine, &format!("{{memory-{index}}} ~= [record-{index}]->[value]->[A]"));
+        must_ref(&mut pangine, &format!("{{memory-{index}}} @ {{row-{index}}}->[value]->{{layer-{index}}}"));
         let layer = pangine.reference_percept(&format!("layer-{index}"));
         views.push(pangine.answer_view(&layer).expect("layer answer"));
         outputs.push(pangine.reference_percept(&format!("row-{index}")));
@@ -133,7 +133,7 @@ fn deep_adjustment_keeps_binding_context_linear() {
 #[test]
 fn detaching_one_output_stales_the_complete_snapshot() {
     let mut pangine = weighted_animals();
-    let pair = must_ref(&mut pangine, "['animal']->['food']");
+    let pair = must_ref(&mut pangine, "{animal}->{food}");
     let animal = pangine.reference_percept("animal");
     let food = pangine.reference_percept("food");
     let snapshot = pangine.answer_view(&pair).expect("complete answer");
@@ -150,23 +150,23 @@ fn weighted_animals() -> Pangine {
     let mut pangine = Pangine::new();
     for (row, amount) in [("[cat]->[fish]", 3), ("[cat]->[milk]", 5), ("[dog]->[fish]", 7)] {
         for _ in 0..amount {
-            must_ref(&mut pangine, &format!("['memory'] ~= {row}"));
+            must_ref(&mut pangine, &format!("{{memory}} ~= {row}"));
         }
     }
-    must_ref(&mut pangine, "['memory'] @ ['animal']->['food']");
+    must_ref(&mut pangine, "{memory} @ {animal}->{food}");
     pangine
 }
 
 fn layered_decisions() -> Pangine {
     let mut pangine = Pangine::new();
-    must_ref(&mut pangine, "['choices'] ~= [choice-a]->[decision]->[A]");
-    must_ref(&mut pangine, "['choices'] ~= [choice-b]->[decision]->[B]");
-    must_ref(&mut pangine, "['outcomes'] ~= ([episode-a]->[decision]->[A])([episode-a]->[outcome]->[helpful])");
-    must_ref(&mut pangine, "['outcomes'] ~= ([episode-b]->[decision]->[B])([episode-b]->[outcome]->[helpful])");
-    must_ref(&mut pangine, "['reliability'] ~= ([review-b]->[episode]->[episode-b])([review-b]->[assessment]->[trusted])");
-    must_ref(&mut pangine, "['choices'] @ ['candidate']->[decision]->['decision']");
-    must_ref(&mut pangine, "['outcomes'] @ (['episode']->[decision]->['episode-decision'])(['episode']->[outcome]->[helpful])");
-    must_ref(&mut pangine, "['reliability'] @ (['review']->[episode]->['trusted-episode'])(['review']->[assessment]->[trusted])");
+    must_ref(&mut pangine, "{choices} ~= [choice-a]->[decision]->[A]");
+    must_ref(&mut pangine, "{choices} ~= [choice-b]->[decision]->[B]");
+    must_ref(&mut pangine, "{outcomes} ~= ([episode-a]->[decision]->[A])([episode-a]->[outcome]->[helpful])");
+    must_ref(&mut pangine, "{outcomes} ~= ([episode-b]->[decision]->[B])([episode-b]->[outcome]->[helpful])");
+    must_ref(&mut pangine, "{reliability} ~= ([review-b]->[episode]->[episode-b])([review-b]->[assessment]->[trusted])");
+    must_ref(&mut pangine, "{choices} @ {candidate}->[decision]->{decision}");
+    must_ref(&mut pangine, "{outcomes} @ ({episode}->[decision]->{episode-decision})({episode}->[outcome]->[helpful])");
+    must_ref(&mut pangine, "{reliability} @ ({review}->[episode]->{trusted-episode})({review}->[assessment]->[trusted])");
     pangine
 }
 

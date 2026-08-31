@@ -6,18 +6,18 @@ use std::time::Instant;
 const DEFAULT_ANSWER_CYCLE_SIZES: &str = "10,100,1000";
 
 const DECISION_QUESTION: &str = "
-    (['candidate']->[action]->['action'])
-    (['candidate']->[tool]->['tool'])";
+    ({candidate}->[action]->{action})
+    ({candidate}->[tool]->{tool})";
 
 const HELPFUL_QUESTION: &str = "
-    (['helpful-episode']->[action]->['helpful-action'])
-    (['helpful-episode']->[tool]->['helpful-tool'])
-    (['helpful-episode']->[outcome]->[helpful])";
+    ({helpful-episode}->[action]->{helpful-action})
+    ({helpful-episode}->[tool]->{helpful-tool})
+    ({helpful-episode}->[outcome]->[helpful])";
 
 const FAILED_QUESTION: &str = "
-    (['failed-episode']->[action]->['failed-action'])
-    (['failed-episode']->[tool]->['failed-tool'])
-    (['failed-episode']->[outcome]->[failed])";
+    ({failed-episode}->[action]->{failed-action})
+    ({failed-episode}->[tool]->{failed-tool})
+    ({failed-episode}->[outcome]->[failed])";
 
 const CANDIDATES: [(&str, &str); 3] = [("inspect-symbols", "dumpbin"), ("inspect-symbols", "link-map"), ("reconfigure", "cmake")];
 
@@ -130,27 +130,27 @@ fn remember_cycle_outcome(pangine: &mut Pangine, cycle: usize) {
 }
 
 fn remember_candidate(pangine: &mut Pangine, index: usize, action: &str, tool: &str) {
-    must_ref(pangine, &format!("['candidates'] ~= ([candidate-{index}]->[action]->[{action}])([candidate-{index}]->[tool]->[{tool}])"));
+    must_ref(pangine, &format!("{{candidates}} ~= ([candidate-{index}]->[action]->[{action}])([candidate-{index}]->[tool]->[{tool}])"));
 }
 
 fn remember_outcome(pangine: &mut Pangine, episode: &str, (action, tool): (&str, &str), outcome: &str) {
-    must_ref(pangine, &format!("['episodes'] ~= ([{episode}]->[action]->[{action}])([{episode}]->[tool]->[{tool}])([{episode}]->[outcome]->[{outcome}])"));
+    must_ref(pangine, &format!("{{episodes}} ~= ([{episode}]->[action]->[{action}])([{episode}]->[tool]->[{tool}])([{episode}]->[outcome]->[{outcome}])"));
 }
 
 fn ask_and_adjust(pangine: &mut Pangine) {
-    must_ref(pangine, &format!("['candidates'] @ {DECISION_QUESTION}"));
-    must_ref(pangine, &format!("['episodes'] @ {HELPFUL_QUESTION}"));
-    must_ref(pangine, &format!("['episodes'] @ {FAILED_QUESTION}"));
-    must_ref(pangine, "['action']->['tool'] @+= ['helpful-action']->['helpful-tool']");
-    must_ref(pangine, "['action']->['tool'] @-= ['failed-action']->['failed-tool']");
+    must_ref(pangine, &format!("{{candidates}} @ {DECISION_QUESTION}"));
+    must_ref(pangine, &format!("{{episodes}} @ {HELPFUL_QUESTION}"));
+    must_ref(pangine, &format!("{{episodes}} @ {FAILED_QUESTION}"));
+    must_ref(pangine, "{action}->{tool} @+= {helpful-action}->{helpful-tool}");
+    must_ref(pangine, "{action}->{tool} @-= {failed-action}->{failed-tool}");
 }
 
 fn choose(pangine: &mut Pangine) {
-    must_ref(pangine, "^(['action']->['tool'])");
+    must_ref(pangine, "^({action}->{tool})");
 }
 
 fn measure_answer(pangine: &mut Pangine) -> AnswerMetrics {
-    let shape = must_ref(pangine, "['action']->['tool']");
+    let shape = must_ref(pangine, "{action}->{tool}");
     let value = pangine.linked_answer_value(&shape).expect("linked answer value");
     let live = LiveConceptAnswer::decode(pangine, &value).expect("encoded live answer");
     let answer = pangine.answer_snapshot(&shape).expect("answer snapshot");
@@ -170,7 +170,7 @@ fn measure_answer(pangine: &mut Pangine) -> AnswerMetrics {
         })
         .sum();
     let encoded = pangine.format_concept(&value, false);
-    let inspection = pangine.debug_answer_inspection_lines("['action']->['tool']").expect("inspectable answer");
+    let inspection = pangine.debug_answer_inspection_lines("{action}->{tool}").expect("inspectable answer");
     let (nodes, edges) = reachable_shape(&value);
 
     AnswerMetrics {

@@ -9,9 +9,9 @@ fn semicolon_separated_input_returns_the_last_statement() {
 
     test.assert_equivalent(pairs! {
         "[A][B];[C][D]" => "[C][D]",
-        "['A'] = [A][B];[C][D];$['A']" => "[A][B]",
+        "{A} = [A][B];[C][D];${A}" => "[A][B]",
     });
-    test.assert_null(["[];", "['A'] = [];[C][D];$['A']"]);
+    test.assert_null(["[];", "{A} = [];[C][D];${A}"]);
 }
 
 #[test]
@@ -51,9 +51,9 @@ fn ordered_compositions_are_flat_canonical_and_explicitly_nestable() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
-        "[A]->[B]" => "{[A]->[B]}",
-        "[A]->[B]->[C]" => "{[A]->[B]->[C]}",
-        "[A]->[B][C]->[D]" => "{[A]->[B][C]->[D]}",
+        "[A]->[B]" => "[A]->[B]",
+        "[A]->[B]->[C]" => "[A]->[B]->[C]",
+        "[A]->[B][C]->[D]" => "[A]->[B][C]->[D]",
     });
     test.assert_distinct(pairs! {
         "[A]->[B]->[C]" => "([A]->[B])->[C]",
@@ -62,13 +62,13 @@ fn ordered_compositions_are_flat_canonical_and_explicitly_nestable() {
         "[A]->[B]->[A]" => "[A]->[B]",
     });
     test.assert_formats(pairs! {
-        "[A]->[B]" => "{[A]->[B]}",
-        "[A]->[B]->[C]" => "{[A]->[B]->[C]}",
-        "{[a]->[b][c][d]}" => "{[a]->[b][c][d]}",
-        "([A][B])->[target]" => "{[A][B]->[target]}",
-        "x2([A][B])->[target]" => "{x2([A][B])->[target]}",
-        "([A]->[B])->[C]" => "{{[A]->[B]}->[C]}",
-        "[A]->([B]->[C])" => "{[A]->{[B]->[C]}}",
+        "[A]->[B]" => "[A]->[B]",
+        "[A]->[B]->[C]" => "[A]->[B]->[C]",
+        "[a]->[b][c][d]" => "[a]->[b][c][d]",
+        "([A][B])->[target]" => "[A][B]->[target]",
+        "x2([A][B])->[target]" => "x2([A][B])->[target]",
+        "([A]->[B])->[C]" => "([A]->[B])->[C]",
+        "[A]->([B]->[C])" => "[A]->([B]->[C])",
     });
 
     let semantic = test.concept("[A]->[B]");
@@ -82,10 +82,10 @@ fn canonical_formatting_orders_relevance_shape_and_name_collisions() {
     let mut test = PangineTest::new();
 
     test.assert_formats(pairs! {
-        "([a]->x2[b])*([a]->x3[c])" => "{[a]->x3[c]}{[a]->x2[b]}",
-        "([a]->[b])*([a]->[b][c])" => "{[a]->[b]}{[a]->[b][c]}",
-        "['X']([B]->[F])['Y'][X][Y]" => "['X']['Y'][X][Y]{[B]->[F]}",
-        "([a][b])*({[a]->[b]})" => "[a][b]{[a]->[b]}",
+        "([a]->x2[b])*([a]->x3[c])" => "([a]->x3[c])([a]->x2[b])",
+        "([a]->[b])*([a]->[b][c])" => "([a]->[b])([a]->[b][c])",
+        "{X}([B]->[F]){Y}[X][Y]" => "{X}{Y}[X][Y]([B]->[F])",
+        "([a][b])*([a]->[b])" => "[a][b]([a]->[b])",
     });
 }
 
@@ -93,17 +93,25 @@ fn canonical_formatting_orders_relevance_shape_and_name_collisions() {
 fn script_text_accepts_semicolons_and_legacy_line_statements() {
     PangineTest::assert_script_results(pairs! {
         "
-            ['A'] = [A];
-            ['A'] *= [B];
-            $['A'];
+            {A} = [A];
+            {A} *= [B];
+            ${A};
             " => "[A][B]",
         "
-            ['A'] = [A]
-            ['A'] *= [B]
-            $['A']
+            {A} = [A]
+            {A} *= [B]
+            ${A}
             " => "[A][B]",
         "[A]\n[]" => "[A]",
         "[A];[];" => "[]",
+    });
+}
+
+#[test]
+fn script_text_keeps_escaped_names_opaque() {
+    PangineTest::assert_script_results(pairs! {
+        r#"{value} = ["left]right; // text /* text */ # text"]; ${value}"# => r#"["left]right; // text /* text */ # text"]"#,
+        r#"{value} = ["{\"revision\":2}"]; ${value}"# => r#"["{\"revision\":2}"]"#,
     });
 }
 
@@ -112,7 +120,7 @@ fn decision_operator_can_return_a_single_candidate() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
-        "['single'] = [tea]; ^['single']" => "[tea]",
+        "{single} = [tea]; ^{single}" => "[tea]",
     });
 }
 
@@ -134,36 +142,36 @@ fn binary_inverse_merge_inverts_rhs_merge_operands() {
 fn ordinary_percept_mutation_operators_are_explicit() {
     let mut test = PangineTest::new();
 
-    test.assert_invalid(["['A'] + [A]", "['A'] ~ [A]"]);
+    test.assert_invalid(["{A} + [A]", "{A} ~ [A]"]);
     test.assert_equivalent(pairs! {
-        "['A'] += [A]" => "[A]",
-        "['A'] += [B]" => "[A][B]",
-        "['A'] -= [A]" => "[B]",
+        "{A} += [A]" => "[A]",
+        "{A} += [B]" => "[A][B]",
+        "{A} -= [A]" => "[B]",
     });
-    test.assert_null(["['A'] -= [B]"]);
+    test.assert_null(["{A} -= [B]"]);
 }
 
 #[test]
 fn answer_adjustment_is_explicit_and_rejects_unlinked_operands() {
     let mut pangine = Pangine::new();
-    pangine.reference_concept("['base'] ~= [base-row]->[value]->[A]").unwrap();
-    pangine.reference_concept("['evidence'] ~= [evidence-row]->[value]->[A]").unwrap();
-    pangine.reference_concept("['base'] @ ['base-row']->[value]->['target']").unwrap();
-    pangine.reference_concept("['evidence'] @ ['evidence-row']->[value]->['source']").unwrap();
+    pangine.reference_concept("{base} ~= [base-row]->[value]->[A]").unwrap();
+    pangine.reference_concept("{evidence} ~= [evidence-row]->[value]->[A]").unwrap();
+    pangine.reference_concept("{base} @ {base-row}->[value]->{target}").unwrap();
+    pangine.reference_concept("{evidence} @ {evidence-row}->[value]->{source}").unwrap();
 
-    let strengthened = pangine.reference_concept("['target'] @+= ['source']").unwrap().unwrap();
+    let strengthened = pangine.reference_concept("{target} @+= {source}").unwrap().unwrap();
     assert_eq!(pangine.format_concept(&strengthened, false), "x2[A]");
-    let restored = pangine.reference_concept("['target'] @-= ['source']").unwrap().unwrap();
+    let restored = pangine.reference_concept("{target} @-= {source}").unwrap().unwrap();
     assert_eq!(pangine.format_concept(&restored, false), "[A]");
 
-    pangine.reference_concept("['ordinary'] = [A]").unwrap();
-    let ordinary = pangine.reference_concept("['ordinary'] += [B]").unwrap().unwrap();
+    pangine.reference_concept("{ordinary} = [A]").unwrap();
+    let ordinary = pangine.reference_concept("{ordinary} += [B]").unwrap().unwrap();
     assert_eq!(pangine.format_concept(&ordinary, false), "[A][B]");
-    for script in ["['ordinary'] @+= ['source']", "['target'] @+= ['ordinary']", "(['target'])(['ordinary']) @+= ['source']", "['target'] @+="] {
+    for script in ["{ordinary} @+= {source}", "{target} @+= {ordinary}", "({target})({ordinary}) @+= {source}", "{target} @+="] {
         assert!(matches!(pangine.reference_concept(script), Err(ParseError::InvalidSyntax)), "expected invalid syntax: {script}");
     }
-    let target = pangine.reference_concept("$['target']").unwrap().unwrap();
-    let source = pangine.reference_concept("$['source']").unwrap().unwrap();
+    let target = pangine.reference_concept("${target}").unwrap().unwrap();
+    let source = pangine.reference_concept("${source}").unwrap().unwrap();
     assert_eq!(pangine.format_concept(&target, false), "[A]");
     assert_eq!(pangine.format_concept(&source, false), "[A]");
 }
@@ -171,10 +179,10 @@ fn answer_adjustment_is_explicit_and_rejects_unlinked_operands() {
 #[test]
 fn null_merge_adjustments_leave_the_current_value_unchanged() {
     PangineTest::assert_script_results(pairs! {
-        "['value'] = [A]; ['missing'] = []; ['value'] *= $['missing']; $['value']" => "[A]",
-        "['value'] = [A]; ['missing'] = []; ['value'] /= $['missing']; $['value']" => "[A]",
-        "['value'] = [A]; ['left'] = []; ['right'] = []; ['value'] *= $(['left']->['right']); $['value']" => "[A]",
-        "['value'] = [A]; ['left'] = []; ['right'] = []; ['value'] /= $(['left']->['right']); $['value']" => "[A]",
+        "{value} = [A]; {missing} = []; {value} *= ${missing}; ${value}" => "[A]",
+        "{value} = [A]; {missing} = []; {value} /= ${missing}; ${value}" => "[A]",
+        "{value} = [A]; {left} = []; {right} = []; {value} *= $({left}->{right}); ${value}" => "[A]",
+        "{value} = [A]; {left} = []; {right} = []; {value} /= $({left}->{right}); ${value}" => "[A]",
     });
 }
 
@@ -183,49 +191,49 @@ fn experience_evaluates_nested_percepts_at_capture_time() {
     let mut pangine = Pangine::new();
     let first = pangine
         .parse_script_text(
-            "['context-input'] = [opal];
-             ['reading-input'] = [cedar];
-             ['memory'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']",
+            "{context-input} = [opal];
+             {reading-input} = [cedar];
+             {memory} ~= [observation]->[context]->{context-input}->[reading]->{reading-input}",
         )
         .unwrap()
         .unwrap();
-    assert_eq!(pangine.format_concept(&first, false), "{[observation]->[context]->[opal]->[reading]->[cedar]}");
+    assert_eq!(pangine.format_concept(&first, false), "[observation]->[context]->[opal]->[reading]->[cedar]");
 
-    pangine.reference_concept("['reading-input'] = [violet]").unwrap();
+    pangine.reference_concept("{reading-input} = [violet]").unwrap();
     let memory = pangine.reference_percept("memory");
     assert_eq!(
         pangine.format_concept(&pangine.get_value(&memory).unwrap(), false),
-        "{[observation]->[context]->[opal]->[reading]->[cedar]}",
+        "[observation]->[context]->[opal]->[reading]->[cedar]",
         "changing an input does not rewrite an earlier grounded experience"
     );
 
-    pangine.reference_concept("['memory'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']").unwrap();
+    pangine.reference_concept("{memory} ~= [observation]->[context]->{context-input}->[reading]->{reading-input}").unwrap();
     assert_eq!(
         pangine.get_relevance_map(&memory).into_iter().map(|(relevance, concept)| (relevance, pangine.format_concept(&concept, false))).collect::<Vec<_>>(),
         vec![
-            (pangine::Relevance::DEFAULT, "{[observation]->[context]->[opal]->[reading]->[cedar]}".to_owned()),
-            (pangine::Relevance::DEFAULT, "{[observation]->[context]->[opal]->[reading]->[violet]}".to_owned()),
+            (pangine::Relevance::DEFAULT, "[observation]->[context]->[opal]->[reading]->[cedar]".to_owned()),
+            (pangine::Relevance::DEFAULT, "[observation]->[context]->[opal]->[reading]->[violet]".to_owned()),
         ]
     );
 
     let before_missing_input = pangine.get_value(&memory);
-    pangine.reference_concept("['reading-input'] = []").unwrap();
-    assert_eq!(pangine.reference_concept("['memory'] ~= [observation]->[context]->['context-input']->[reading]->['reading-input']").unwrap(), None);
+    pangine.reference_concept("{reading-input} = []").unwrap();
+    assert_eq!(pangine.reference_concept("{memory} ~= [observation]->[context]->{context-input}->[reading]->{reading-input}").unwrap(), None);
     assert_eq!(pangine.get_value(&memory), before_missing_input, "a missing input records no partial experience");
 }
 
 #[test]
 fn experience_preserves_experience_populated_percepts_as_references() {
     let mut pangine = Pangine::new();
-    pangine.reference_concept("['source-memory'] ~= [source-value]").unwrap();
-    let reference_record = pangine.reference_concept("['reference-record'] ~= [source]->['source-memory']").unwrap().unwrap();
+    pangine.reference_concept("{source-memory} ~= [source-value]").unwrap();
+    let reference_record = pangine.reference_concept("{reference-record} ~= [source]->{source-memory}").unwrap().unwrap();
     assert_eq!(
         pangine.format_concept(&reference_record, false),
-        "{[source]->['source-memory']}",
+        "[source]->{source-memory}",
         "a Percept populated by experience remains a represented source reference"
     );
-    let evaluated_reference = pangine.reference_concept("$['reference-record']").unwrap().unwrap();
-    assert_eq!(pangine.format_concept(&evaluated_reference, false), "{[source]->[source-value]}");
+    let evaluated_reference = pangine.reference_concept("${reference-record}").unwrap().unwrap();
+    assert_eq!(pangine.format_concept(&evaluated_reference, false), "[source]->[source-value]");
 }
 
 #[test]
@@ -233,19 +241,19 @@ fn percept_addition_preserves_operands_while_merge_opens_their_members() {
     let mut test = PangineTest::new();
 
     test.assert_equivalent(pairs! {
-        "['A'] += [A][B]" => "[A][B]",
-        "['M'] *= [A][B]" => "[A][B]",
-        "['A'] += [B][C]" => "[A][B]([B][C])",
-        "['M'] *= [B][C]" => "[A][B][B][C]",
-        "['A'] -= [B][C]" => "[A][B]",
-        "['M'] /= [B][C]" => "[A][B]",
-        "['A'] -= [A][B]" => "[A][B]x-1([A][B])",
+        "{A} += [A][B]" => "[A][B]",
+        "{M} *= [A][B]" => "[A][B]",
+        "{A} += [B][C]" => "[A][B]([B][C])",
+        "{M} *= [B][C]" => "[A][B][B][C]",
+        "{A} -= [B][C]" => "[A][B]",
+        "{M} /= [B][C]" => "[A][B]",
+        "{A} -= [A][B]" => "[A][B]x-1([A][B])",
     });
-    test.assert_null(["['M'] /= [A][B]"]);
+    test.assert_null(["{M} /= [A][B]"]);
 
     PangineTest::assert_script_results(pairs! {
-        "['P'] = [A][B]; ['P'] += [C][D]" => "[A][B]([C][D])",
-        "['P'] = [A][B]; ['P'] *= [C][D]" => "[A][B][C][D]",
+        "{P} = [A][B]; {P} += [C][D]" => "[A][B]([C][D])",
+        "{P} = [A][B]; {P} *= [C][D]" => "[A][B][C][D]",
     });
 }
 
@@ -258,7 +266,7 @@ fn null_concepts_and_invalid_syntax_have_distinct_results() {
 
     assert!(matches!(pangine.reference_concept("[A"), Err(ParseError::InvalidSyntax)));
     assert!(matches!(pangine.parse_script_text("[A];[B"), Err(ParseError::InvalidSyntax)));
-    for script in ["!", "[A]*", "[A]/", "[A]->"] {
+    for script in ["!", "[A]*", "[A]/", "[A]->", "{}", "['legacy-percept']", "{[A]->[B]}"] {
         assert!(matches!(pangine.reference_concept(script), Err(ParseError::InvalidSyntax)), "expected invalid syntax: {script}");
     }
 }
