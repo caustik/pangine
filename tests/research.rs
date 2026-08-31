@@ -20,6 +20,8 @@ mod joint_answer_relevance;
 mod matcher_boundaries;
 #[path = "research/outcome_learning.rs"]
 mod outcome_learning;
+#[path = "research/payload_fidelity.rs"]
+mod payload_fidelity;
 #[path = "research/question_support.rs"]
 mod question_support;
 #[path = "research/represented_choice.rs"]

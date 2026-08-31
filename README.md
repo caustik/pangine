@@ -57,13 +57,11 @@ $['conclusion']
 
 The result is `[mortal]`. Pangine does not know that `is-a` is logical. The question asks for two relationships whose middle Concept must agree.
 
-Parentheses preserve a complete unordered member. This keeps alternatives such as `([person]->[Alice])([pet]->[cat])` together. `*` explicitly merges direct members when they are meant to share one pool. The matcher also tracks represented occurrences while a question runs, so equal values in different parts of a longer source do not create unsupported cross-pairings. This temporary bookkeeping is not added to the returned Concept.
+Parentheses preserve a complete unordered member. This keeps alternatives such as `([person]->[Alice])([pet]->[cat])` together. `*` explicitly merges direct members when they are meant to share one pool. Equal values at different positions remain distinct while matching.
 
 ## The global Percept
 
-`['*']` is a read-only computed Percept whose current value contains the ordinary Concepts live in the engine. It does not include standalone Percept references as top-level members. It does include an ordinary Concept whose structure contains a Percept reference. Reading it with `$` follows those nested references in the same way as any other Percept read.
-
-The global Percept follows the ordinary question rule:
+`['*']` is a read-only view of the ordinary Concepts currently live in the engine. It can be read with `$` or used as a question source:
 
 ```text
 command> ['memory'] = [known]
@@ -72,9 +70,7 @@ command> ['*'] @ ['answer']
   [known]
 ```
 
-In this question, `['*']` remains the one selected source. It does not expand into the identities of other Percepts. Its read-only status prevents assignment but does not prevent selection. Rust exposes the same selector rules through `complete_selector`.
-
-Pangine does not inspect a Percept's current value to choose selector semantics. `['source'] @ question` always questions that one Percept, even if its value happens to contain only Percept references. Recovering the changing Percept members of a represented collection without a caller-owned list remains unresolved.
+Here the global view supplies `[known]` to the question. Reading it with `$` also follows any Percept references inside those Concepts.
 
 ## Experience and choice
 
@@ -177,7 +173,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `['memory'] += expression` | Add a value |
 | `['memory'] -= expression` | Subtract a value |
 | `['memory'] ~= expression` | Capture assigned inputs and remember one experience |
-| `subject @ question` | Fill blanks from a Concept or one or more selected Percepts; `['*']` follows the same Percept rule |
+| `subject @ question` | Fill blanks from a Concept or one or more Percepts |
 | `['target'] @+= ['evidence']` | Add matching sources from another linked answer |
 | `['target'] @-= ['evidence']` | Subtract matching sources from another linked answer |
 | `&operand` | Return the shared answer shape |
@@ -191,17 +187,11 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 ## Current scope
 
-The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only computed global Percept, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, a browser-local WebAssembly workbench, ordinary tests, and focused research warnings.
+The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
 
-The current signed integer and deterministic choice rule are useful placeholders. `AnswerView::possibilities` exposes each projected value, its current strength, complete-row count, distinct source contributions, and whether it shares the greatest positive strength. The complete rows and question shape remain available through the Answer itself.
+Questions preserve complete rows and their source contributions. The Rust Answer API can branch, choose, adjust, inspect, and publish those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
-When Pangine remembers or replaces experience, it records the recursively reachable shapes and required fixed names while keeping each complete source intact. A question uses those records to find possible source experiences before running the full matcher. It does not walk every remembered experience unless the question is broad enough to require them. Question parts can work together within one complete experience, while a repeated Percept can join separate experiences. Equal complete answers then combine support without mixing unrelated partial rows.
-
-The Rust Answer API can branch, choose, adjust matching answer views, and explicitly publish a current revision. An adjusted Answer can be projected, chosen, or used to adjust another Answer, so additional layers use the same object and operation. The console exposes live target adjustment through `@+=` and `@-=` and compact source inspection through `inspect`. Naming immutable Answer branches, a language-level source form, additional grammar, logit sampling, probabilities, persistence, automatic callbacks, broad bindings, a general LLM adapter, and a distributed runtime are not the current focus.
-
-The ordinary answer-cycle checks now re-ask a complete action-tool decision after recording new outcomes. Two additional failures change the later choice while leaving every untried possibility and its sources available. The same operations also choose an unordered action-tool-scope shape without any single-Percept rule. This demonstrates the core cycle under one explicit outcome policy; it does not establish that policy as universal.
-
-An LLM could eventually supply explicit structured records and questions or consume selected outputs. Pangine would keep the source boundaries, joins, experience, alternatives, and choice visible. The LLM or application should not silently become Pangine's relevance calculator or final judge.
+The current choice rule uses signed integer support and a deterministic tie break. It remains a placeholder rather than a settled meaning for Relevance. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 
 ## Run Pangine
 

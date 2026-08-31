@@ -34,7 +34,8 @@ Research programs that compare independent views copy a `$` result into a detach
 - `matcher_boundaries.rs` keeps open questions around ordered nesting, valid `@` subjects, and enclosing-entry correlation.
 - `outcome_learning.rs` compares actual transitions with identified episode outcomes, keeps untried routes through repeated regenerated detached choices, and preserves the old literal-adjustment boundary.
 - `question_support.rs` records how direct Percept-member weights currently reach output coefficients.
-- `current_records.rs` keeps complete query, filter, replacement, and clear behind a warning because the caller must still retain and supply every member Percept.
+- `current_records.rs` represents collection membership as ordinary relationships to stable record Percepts. A first question discovers those identities and a thin Rust step supplies them to the existing multi-Percept record question. The fixture keeps logical keys, arbitrary payloads, persistence, and rollback open.
+- `payload_fidelity.rs` shows that parser-safe names and digit sequences round-trip as opaque names while paths, JSON-shaped text, non-ASCII text, delimiters, and explicit absent field values still lack a lossless syntax representation.
 - `represented_choice.rs` keeps focused counterexamples for experience, current state, context, stance, question order, source identity, records, and coefficients without host-side scoring.
 - `row_choice.rs` shows that collapsing complete rows into totals can discard information needed by some decisions.
 - `src/engine/research/source_state_copy.rs` compares value copies, live references, direct source-state copies, and represented version scopes. The behavior is test-only and does not choose a public lifecycle.
