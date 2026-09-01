@@ -77,6 +77,25 @@ fn complete_experiences_keep_question_parts_together() {
 }
 
 #[test]
+fn omitted_relationship_is_absent_instead_of_a_null_value() {
+    let mut pangine = Pangine::new();
+    experience(&mut pangine, "records", "([first]->[required]->[one])", 1);
+    experience(&mut pangine, "records", "([second]->[required]->[two])([second]->[optional]->[present])", 1);
+
+    let required = complete(&mut pangine, &["records"], "{record}->[required]->{required-value}");
+    let records = required.completions().iter().map(|completion| bound_name(&mut pangine, completion, "record")).collect::<BTreeSet<_>>();
+    assert_eq!(records, BTreeSet::from(["first".to_owned(), "second".to_owned()]));
+
+    let optional = complete(&mut pangine, &["records"], "{record}->[optional]->{optional-value}");
+    assert_eq!(optional.completions().len(), 1);
+    assert_eq!(bound_name(&mut pangine, &optional.completions()[0], "record"), "second");
+    assert_eq!(bound_name(&mut pangine, &optional.completions()[0], "optional-value"), "present");
+
+    assert!(pangine.reference_concept("[]").expect("valid no-Concept syntax").is_none());
+    assert!(pangine.reference_concept("[optional]->[]").is_err());
+}
+
+#[test]
 fn partial_experiences_do_not_form_an_unseen_complete_answer() {
     let mut pangine = Pangine::new();
     experience(&mut pangine, "memory", "([C]->[A])*([B]->[D])", 1);
