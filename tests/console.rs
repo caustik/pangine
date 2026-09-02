@@ -38,6 +38,25 @@ fn setting_choice_collapses_three_linked_outputs_as_one_complete_result() {
     assert_eq!(command_results(&stdout, "${recorded-outcome}"), vec!["[accepted]"]);
 }
 
+#[test]
+fn troubleshooting_cycle_changes_its_complete_decision_after_reported_failures() {
+    let stdout = run_example("troubleshooting-cycle.pae");
+
+    assert_eq!(
+        command_results(&stdout, "{decision} @-= {failed-decision}"),
+        vec![
+            "x2([inspect-symbols]->[dumpbin])([inspect-symbols]->[link-map])!([reconfigure]->[cmake])",
+            "([inspect-symbols]->[dumpbin])([inspect-symbols]->[link-map])!([reconfigure]->[cmake])",
+            "([inspect-symbols]->[link-map])!([reconfigure]->[cmake])",
+        ]
+    );
+    assert_eq!(command_results(&stdout, "{round-1-choice} = ^{decision}"), vec!["[inspect-symbols]->[dumpbin]"]);
+    assert_eq!(command_results(&stdout, "{round-2-choice} = ^{decision}"), vec!["[inspect-symbols]->[dumpbin]"]);
+    assert_eq!(command_results(&stdout, "{round-3-choice} = ^{decision}"), vec!["[inspect-symbols]->[link-map]"]);
+    assert_eq!(command_results(&stdout, "${recorded-decision}"), vec!["[inspect-symbols]->[dumpbin]"]);
+    assert_eq!(command_results(&stdout, "${recorded-outcome}"), vec!["[failed]"]);
+}
+
 fn run_example(name: &str) -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join(name);
     let output = Command::new(env!("CARGO_BIN_EXE_pangine-console")).arg(script).output().unwrap_or_else(|error| panic!("run {name}: {error}"));

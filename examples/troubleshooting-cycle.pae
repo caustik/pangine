@@ -1,0 +1,56 @@
+// Three complete decisions for one current environment and symptom.
+{candidates} ~= ([candidate-dumpbin]->[environment]->[windows])([candidate-dumpbin]->[symptom]->[link-error])([candidate-dumpbin]->[decision]->([inspect-symbols]->[dumpbin]))
+{candidates} ~= ([candidate-map]->[environment]->[windows])([candidate-map]->[symptom]->[link-error])([candidate-map]->[decision]->([inspect-symbols]->[link-map]))
+{candidates} ~= ([candidate-reconfigure]->[environment]->[windows])([candidate-reconfigure]->[symptom]->[link-error])([candidate-reconfigure]->[decision]->([reconfigure]->[cmake]))
+
+// Earlier episodes keep the context, complete decision, and outcome together.
+{episodes} ~= ([episode-dumpbin-helpful]->[environment]->[windows])([episode-dumpbin-helpful]->[symptom]->[link-error])([episode-dumpbin-helpful]->[decision]->([inspect-symbols]->[dumpbin]))([episode-dumpbin-helpful]->[outcome]->[helpful])
+{episodes} ~= ([episode-reconfigure-failed-1]->[environment]->[windows])([episode-reconfigure-failed-1]->[symptom]->[link-error])([episode-reconfigure-failed-1]->[decision]->([reconfigure]->[cmake]))([episode-reconfigure-failed-1]->[outcome]->[failed])
+{episodes} ~= ([episode-reconfigure-failed-2]->[environment]->[windows])([episode-reconfigure-failed-2]->[symptom]->[link-error])([episode-reconfigure-failed-2]->[decision]->([reconfigure]->[cmake]))([episode-reconfigure-failed-2]->[outcome]->[failed])
+
+// The application supplies current inputs. The result names and their effects
+// below are explicit parts of this program, not built-in Pangine meanings.
+{environment-input} = [windows]
+{symptom-input} = [link-error]
+{helpful-result} = [helpful]
+{failed-result} = [failed]
+
+// Ask for complete decisions, apply the matching episodes, and choose one.
+{candidates} @ ({candidate}->[environment]->${environment-input})({candidate}->[symptom]->${symptom-input})({candidate}->[decision]->{decision})
+{episodes} @ ({helpful-episode}->[environment]->${environment-input})({helpful-episode}->[symptom]->${symptom-input})({helpful-episode}->[decision]->{helpful-decision})({helpful-episode}->[outcome]->${helpful-result})
+{decision} @+= {helpful-decision}
+{episodes} @ ({failed-episode}->[environment]->${environment-input})({failed-episode}->[symptom]->${symptom-input})({failed-episode}->[decision]->{failed-decision})({failed-episode}->[outcome]->${failed-result})
+{decision} @-= {failed-decision}
+{round-1-choice} = ^{decision}
+
+// The application reports that the first selected decision failed.
+{episode-id-input} = [live-1]
+{result-input} = [failed]
+{episodes} ~= ({episode-id-input}->[environment]->{environment-input})({episode-id-input}->[symptom]->{symptom-input})({episode-id-input}->[decision]->({round-1-choice}))({episode-id-input}->[outcome]->{result-input})
+
+// One failure leaves a tie under the current additive policy.
+{candidates} @ ({candidate}->[environment]->${environment-input})({candidate}->[symptom]->${symptom-input})({candidate}->[decision]->{decision})
+{episodes} @ ({helpful-episode}->[environment]->${environment-input})({helpful-episode}->[symptom]->${symptom-input})({helpful-episode}->[decision]->{helpful-decision})({helpful-episode}->[outcome]->${helpful-result})
+{decision} @+= {helpful-decision}
+{episodes} @ ({failed-episode}->[environment]->${environment-input})({failed-episode}->[symptom]->${symptom-input})({failed-episode}->[decision]->{failed-decision})({failed-episode}->[outcome]->${failed-result})
+{decision} @-= {failed-decision}
+{round-2-choice} = ^{decision}
+
+// A second reported failure changes the later choice.
+{episode-id-input} = [live-2]
+{result-input} = [failed]
+{episodes} ~= ({episode-id-input}->[environment]->{environment-input})({episode-id-input}->[symptom]->{symptom-input})({episode-id-input}->[decision]->({round-2-choice}))({episode-id-input}->[outcome]->{result-input})
+{candidates} @ ({candidate}->[environment]->${environment-input})({candidate}->[symptom]->${symptom-input})({candidate}->[decision]->{decision})
+{episodes} @ ({helpful-episode}->[environment]->${environment-input})({helpful-episode}->[symptom]->${symptom-input})({helpful-episode}->[decision]->{helpful-decision})({helpful-episode}->[outcome]->${helpful-result})
+{decision} @+= {helpful-decision}
+{episodes} @ ({failed-episode}->[environment]->${environment-input})({failed-episode}->[symptom]->${symptom-input})({failed-episode}->[decision]->{failed-decision})({failed-episode}->[outcome]->${failed-result})
+{decision} @-= {failed-decision}
+{round-3-choice} = ^{decision}
+
+// Read the three choices and one raw application-reported outcome afterward.
+${round-1-choice}
+${round-2-choice}
+${round-3-choice}
+{episodes} @ ([live-2]->[decision]->{recorded-decision})([live-2]->[outcome]->{recorded-outcome})
+${recorded-decision}
+${recorded-outcome}
