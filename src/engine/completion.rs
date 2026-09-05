@@ -444,12 +444,13 @@ impl Pangine {
     /// Completes a structural question using the same selector rules as `@`.
     ///
     /// The selector may be one Percept, an unordered default-relevance set of
-    /// distinct Percepts, or one grounded subject Concept. The read-only global
+    /// distinct Percepts, or one structural subject Concept. Embedded Percepts
+    /// in a structural subject remain represented references. The read-only global
     /// Percept supplies its computed view of live ordinary Concepts through the
     /// same Percept path; selector meaning never depends on a Percept's value
     /// shape.
     pub fn complete_selector(&mut self, selector: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
-        let selector = self.question_selector(selector)?;
+        let selector = self.question_selector(selector);
         self.complete_selected_question(selector, question)
     }
 
@@ -484,10 +485,10 @@ impl Pangine {
     ///
     /// The complete subject is treated as one source Concept with default
     /// relevance. It is not split into synthetic experiences, and the
-    /// returned evidence therefore has no source Percept.
+    /// returned evidence therefore has no source Percept. Percepts contained
+    /// in the subject are matched as represented references, not evaluated.
     pub fn complete_subject(&mut self, subject: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
-        let mut contains_percept_cache = BTreeMap::new();
-        if !self.owns(subject) || !self.owns(question) || self.contains_percept(subject, &mut contains_percept_cache) {
+        if !self.owns(subject) || !self.owns(question) {
             return None;
         }
 
@@ -721,7 +722,7 @@ impl Pangine {
         let mut rows = ConceptMap::new();
         for completion in &result.completions {
             let row = self.instantiate_completion_inner(template, &completion.assignment)?;
-            self.add_relevance(&mut rows, row, false, Relevance::DEFAULT)?;
+            self.add_union_concept(&mut rows, row, false, Relevance::DEFAULT)?;
         }
         self.reference_map(&rows)
     }
@@ -738,7 +739,7 @@ impl Pangine {
             // those witnesses in the complete answer leaves room for a different
             // Relevance combination rule later.
             let support = self.question_source_support(&sources)?;
-            self.add_relevance(&mut candidates, candidate, false, support)?;
+            self.add_union_concept(&mut candidates, candidate, false, support)?;
         }
         Some(self.reference_map(&candidates))
     }
@@ -1187,6 +1188,10 @@ fn source_route_constraints(routes: &BTreeSet<CompletionRoute>, shared_percepts:
 fn unused_members(members: &[ConceptId], used: &BTreeSet<usize>) -> Vec<ConceptId> {
     members.iter().enumerate().filter(|(index, _)| !used.contains(index)).map(|(_, concept)| concept.clone()).collect()
 }
+
+#[cfg(test)]
+#[path = "research/structural_scope.rs"]
+mod structural_scope;
 
 #[cfg(test)]
 mod route_tests {

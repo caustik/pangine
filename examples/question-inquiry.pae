@@ -1,0 +1,20 @@
+// A question is itself a Concept whose parts can be inspected.
+{memory} ~= [cat]->[purrs]
+{memory} ~= [dog]->[barks]
+{memory} @ {animal}->{sound}
+
+// The subject's Percepts remain references; the question's Percepts are blanks.
+(&{animal}) @ {left}->{right}
+${left}
+${right}
+
+// A second read follows the captured reference to its current values.
+$${left}
+
+// The inspection result is another subject. No intermediate store is needed.
+($({left}->{right})) @ {a}->{b}
+${a}
+${b}
+
+// Both original alternatives remain linked and available.
+$({animal}->{sound})

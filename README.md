@@ -50,7 +50,7 @@ Use `[name]` for names made from ASCII letters, digits, spaces, `_`, and `-`. Us
 
 `[]` remains no Concept. `[""]` is a normal named Concept whose name is the empty string, while an absent optional relationship is represented by leaving that relationship out. The corresponding Percept is `{""}`.
 
-A grounded answer is an ordinary Concept again. It can be assigned, formatted, parsed, or used as the subject of another question.
+An answer is an ordinary Concept again. It can be assigned, formatted, parsed, or used as the subject of another question. A structural subject keeps any embedded Percepts as represented references. Use `$` explicitly when their current values are wanted instead. A plain Percept, or an unordered default-coefficient set of Percepts, selects the complete Concepts retained under those sources.
 
 Several relationships can form one question. Reusing a Percept connects their blanks:
 
@@ -94,9 +94,9 @@ The last command shows `x2 [birds]` and `[traffic]`. `x2 [birds]` is the compact
 
 `^{answer}` chooses the greatest positive weight and uses canonical order to break a tie. This is a deterministic placeholder, not probability, confidence, sampling, or a finished theory of Relevance.
 
-I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. The application supplies observations and current values, but the Pangine program should form and choose among candidates instead of hiding that decision in application code.
+I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. A program can also inspect the possibilities, ask another question, or leave the answer open. A consumer's interpretation or choice policy should remain distinguishable from the behavior Pangine supplies.
 
-Every Percept on the left of `@` is a source and can add support to matching results. When a current value should only restrict the question, read it with `$` inside the question instead.
+Every selected source Percept on the left of `@` can add support to matching results. When a current value should only restrict the question, read it with `$` inside the question instead.
 
 ## Shared answers
 
@@ -135,6 +135,21 @@ command> ${food}
 Choosing `animal` removes the `dog-fish` row, then recalculates `food` from the surviving rows. Choosing several outputs together, such as `^({animal}->{food})`, chooses that complete subset at once. Separate choices can produce a different result because each choice changes what remains for the next one.
 
 A later question can reuse one linked output. Pangine joins compatible old and new rows and expands the shared answer. If no row is compatible, it returns `[]` without changing the existing answers. Asking again with every output from one answer starts a new answer cycle.
+
+A question shape can itself be inspected with another question:
+
+```text
+command> (&{animal}) @ {left}->{right}
+  {animal}->{food}
+command> ${left}
+  {animal}
+command> ${right}
+  {food}
+```
+
+Here the subject contains Percept references, and the new blanks capture those references. The original animal-food answer stays open. Reading a linked output substitutes its binding once; another `$` can then read the captured reference's current value. Ordinary detached values are followed recursively. These evaluation boundaries remain prototype behavior. [`examples/question-inquiry.pae`](examples/question-inquiry.pae) continues the inspection through another question using the same operations.
+
+Materialized results follow the same coefficient composition as written Concepts. The current wildcard question `x2[A] @ {part}` finds both `x2[A]` and its inner `[A]`; their ordinary union is `x3[A]`. The linked Answer still retains both complete possibilities. Inverted members can cancel in a materialized result without erasing its linked Answer.
 
 Assignment detaches a value. For example, `{animal-copy} = ${animal}` makes an independent copy that can be chosen without collapsing the original answer.
 

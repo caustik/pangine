@@ -1,0 +1,6 @@
+// These are opaque represented observations, with stable source identities.
+// The names imply no built-in units, reliability, or property semantics.
+{observations} ~= ([o-1]->[object]->[amber])([o-1]->[features]->([red][round]))([o-1]->[observer]->[north])
+{observations} ~= ([o-2]->[object]->[amber])([o-2]->[features]->([red][round][heavy]))([o-2]->[observer]->[south])
+{observations} ~= ([o-3]->[object]->[birch])([o-3]->[features]->([red][square]))([o-3]->[observer]->[north])
+{observations} ~= ([o-4]->[object]->[cedar])([o-4]->[features]->([blue][round]))([o-4]->[observer]->[south])

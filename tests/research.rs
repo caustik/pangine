@@ -8,6 +8,8 @@ mod decision_contract;
 mod decision_fallback;
 #[path = "research/decision_record.rs"]
 mod decision_record;
+#[path = "research/evidence_inquiry.rs"]
+mod evidence_inquiry;
 #[path = "research/experience_guided_decision.rs"]
 mod experience_guided_decision;
 #[path = "research/interface_percepts.rs"]
@@ -20,6 +22,10 @@ mod matcher_boundaries;
 mod outcome_learning;
 #[path = "research/question_support.rs"]
 mod question_support;
+#[path = "research/recursive_inquiry.rs"]
+mod recursive_inquiry;
+#[path = "research/reference_inquiry.rs"]
+mod reference_inquiry;
 #[path = "research/represented_choice.rs"]
 mod represented_choice;
 #[path = "research/row_choice.rs"]

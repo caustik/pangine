@@ -18,8 +18,8 @@ fn explicit_ordered_nesting_currently_changes_question_matches() {
 }
 
 #[test]
-#[ignore = "warning: unresolved Percepts in structural subjects remain invalid"]
-fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evaluation() {
+#[ignore = "warning: embedded Percepts are represented data while plain Percept selectors select retained sources"]
+fn structural_subjects_keep_percepts_literal_instead_of_implicitly_selecting_them() {
     let mut pangine = Pangine::new();
 
     let answer = must_ref(&mut pangine, "[Alice] @ {answer}");
@@ -27,9 +27,18 @@ fn unresolved_percept_subjects_require_plain_source_selection_or_explicit_evalua
     assert_eq!(must_ref(&mut pangine, "${answer}"), answer);
     assert!(pangine.reference_concept("{*} @ {global-answer}").is_ok(), "the read-only global Percept follows the ordinary Percept selector path");
 
-    for invalid in ["x2{Alice} @ {invalid-answer}", "{Alice}{Alice} @ {invalid-answer}", "!{Alice} @ {invalid-answer}", "{Alice}->[context] @ {invalid-answer}"]
-    {
-        assert!(pangine.reference_concept(invalid).is_err(), "expected invalid selector: {invalid}");
+    must_ref(&mut pangine, "{Alice} = [must-not-be-read]");
+    for subject in ["x2{Alice}", "{Alice}{Alice}", "!{Alice}", "{Alice}->[context]"] {
+        let subject_value = must_ref(&mut pangine, subject);
+        ask(&mut pangine, &format!("{subject} @ {{literal-answer}}"));
+        let output = pangine.reference_percept("literal-answer");
+        let answer = pangine.answer_snapshot(&output).expect("literal structural answer");
+        let reference = pangine.reference_percept("Alice");
+        let bindings = answer.result().completions().iter().filter_map(|row| row.binding(&output)).collect::<Vec<_>>();
+        assert!(bindings.contains(&&subject_value));
+        assert!(bindings.contains(&&reference));
+        assert!(answer.result().completions().iter().flat_map(|row| row.evidence()).all(|evidence| evidence.source_percept().is_none()));
+        assert_eq!(pangine.get_value(&reference), Some(must_ref(&mut pangine, "[must-not-be-read]")));
     }
 }
 

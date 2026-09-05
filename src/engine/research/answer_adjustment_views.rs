@@ -176,10 +176,10 @@ fn complete_action_and_tool_views_adjust_separate_outputs_without_a_single_decis
     assert_eq!(choose_value(&mut pangine, &adjusted), Some(must_ref(&mut pangine, "[inspect-symbols]->[dumpbin]")));
 
     let inventory = source_inventory(&mut pangine, &adjusted);
-    assert_eq!(inventory["([clean-build]->[cargo])"]["episode-clean-failed-1"], (1, -1));
-    assert_eq!(inventory["([clean-build]->[cargo])"]["episode-clean-failed-2"], (1, -1));
-    assert_eq!(inventory["([inspect-symbols]->[dumpbin])"]["episode-dumpbin-helpful"], (1, 1));
-    assert_eq!(inventory["([inspect-symbols]->[link-map])"].len(), 1);
+    assert_eq!(inventory["[clean-build]->[cargo]"]["episode-clean-failed-1"], (1, -1));
+    assert_eq!(inventory["[clean-build]->[cargo]"]["episode-clean-failed-2"], (1, -1));
+    assert_eq!(inventory["[inspect-symbols]->[dumpbin]"]["episode-dumpbin-helpful"], (1, 1));
+    assert_eq!(inventory["[inspect-symbols]->[link-map]"].len(), 1);
 }
 
 #[test]

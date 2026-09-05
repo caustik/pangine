@@ -153,6 +153,7 @@ Percept operations:
   {source} @ expression    Complete one retained Percept source
   {*} @ expression         Complete the global Percept's Concepts
   {a}{b} @ expression   Complete several retained sources together
+  A structural subject keeps embedded Percepts as data. Use $ to evaluate them.
   &operand                   Return the shared answer shape for linked Percepts
   $operand                   Read Percepts without changing their shared answer
   {target} @+= {evidence} Add matching evidence to a linked Answer
@@ -924,7 +925,7 @@ impl Pangine {
         }
 
         let selector = selector.ok_or(ParseError::InvalidSyntax)?;
-        let selector = self.question_selector(&selector).ok_or(ParseError::InvalidSyntax)?;
+        let selector = self.question_selector(&selector);
         parser.skip_ws();
         let question_start = parser.pos;
         let question = self.parse_expression(parser)?;
@@ -1512,13 +1513,12 @@ impl Pangine {
 
 // Percept updates and recursive evaluation.
 impl Pangine {
-    fn question_selector(&self, selector: &ConceptId) -> Option<QuestionSelector> {
+    fn question_selector(&self, selector: &ConceptId) -> QuestionSelector {
         if let Some(percepts) = self.question_percepts(selector) {
-            return Some(QuestionSelector::Percepts(percepts));
+            return QuestionSelector::Percepts(percepts);
         }
 
-        let mut contains_percept_cache = BTreeMap::new();
-        (!self.contains_percept(selector, &mut contains_percept_cache)).then(|| QuestionSelector::Subject(selector.clone()))
+        QuestionSelector::Subject(selector.clone())
     }
 
     fn question_percepts(&self, selector: &ConceptId) -> Option<Vec<ConceptId>> {
@@ -1879,10 +1879,11 @@ impl Pangine {
     ///
     /// Returns no Concept when the input is foreign or a required Percept has
     /// no current value. A repeated Percept in a reference cycle remains as the
-    /// point where recursion stops. An acyclic result is grounded at the time
-    /// of this call, so later input changes do not alter it. When every Percept
-    /// in the Concept is linked to one question, the result is projected from
-    /// that question's correlated answer without changing it.
+    /// point where recursion stops. Ordinary values are followed recursively.
+    /// When every Percept in the Concept is linked to one question, the result
+    /// is projected from that question's correlated answer without changing it.
+    /// That projection substitutes its bindings once, so represented Percepts
+    /// supplied by a source remain references and can be evaluated again.
     pub fn evaluate_concept(&mut self, concept: &ConceptId) -> Option<ConceptId> {
         if !self.owns(concept) {
             return None;
@@ -1961,7 +1962,7 @@ impl Pangine {
         let mut evaluated = ConceptMap::new();
         for (child, relevance) in concept.0.subconcepts.clone() {
             if let Some(child) = self.evaluate_concept_inner(&child, visited_percepts, percept_evaluation) {
-                self.add_relevance(&mut evaluated, child, false, relevance)?;
+                self.add_union_concept(&mut evaluated, child, false, relevance)?;
             }
         }
         Some(evaluated)
