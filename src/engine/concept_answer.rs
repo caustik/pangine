@@ -188,7 +188,7 @@ impl ConceptAnswer {
         for question in &self.questions {
             let mut question_outputs = BTreeSet::new();
             pangine.collect_output_percepts(question, &mut question_outputs);
-            if !question_outputs.is_empty() && question_outputs.is_subset(outputs) {
+            if question_outputs.is_subset(outputs) {
                 components.insert(question.clone());
                 represented_outputs.extend(question_outputs);
             }
@@ -656,6 +656,37 @@ fn decode_origin(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionBin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_questions_preserve_their_shape_and_complete_answer_through_transport() {
+        for (source, question, count) in [("[A]", "[A]", 1), ("[A]", "[absent]", 0), ("[A]->[B]", "[A]->[B]", 1), ("[A]->[B]", "[A]->[absent]", 0)] {
+            let mut pangine = Pangine::new();
+            let source = must_ref(&mut pangine, source);
+            let question = must_ref(&mut pangine, question);
+            // Supply the source directly so this codec test does not select
+            // the separate discovery policy for questions without blanks.
+            let snapshot =
+                BTreeMap::from([((QuestionSource::from_subject(source.clone()), source, BTreeMap::new()), BTreeSet::from([CompletionRoute::default()]))]);
+            let result = pangine.complete_question_snapshot(&question, &snapshot);
+            assert_eq!(result.completions().len(), count);
+            let answer = ConceptAnswer::from_result(&pangine, &result);
+            assert!(answer.outputs.is_empty());
+            let encoded = answer.encode(&mut pangine);
+            let restored = ConceptAnswer::decode(&pangine, &encoded).expect("fixed Answer").to_result(&mut pangine).expect("fixed completion result");
+            assert_eq!(restored.question(), &question);
+            assert!(restored.completions() == result.completions());
+
+            let text = pangine.format_concept(&encoded, false);
+            let mut other = Pangine::new();
+            let copied = must_ref(&mut other, &text);
+            let decoded = ConceptAnswer::decode(&other, &copied).expect("transported fixed Answer");
+            let result = decoded.to_result(&mut other).expect("transported completion result");
+            assert_eq!(other.format_concept(result.question(), false), pangine.format_concept(&question, false));
+            assert_eq!(result.completions().len(), count);
+            let encoded_again = ConceptAnswer::from_result(&other, &result).encode(&mut other);
+            assert_eq!(encoded_again, copied);
+        }
+    }
 
     #[test]
     fn one_concept_round_trips_every_retained_proof_field() {
