@@ -2,6 +2,8 @@
 mod action_loop;
 #[path = "research/application_choice.rs"]
 mod application_choice;
+#[path = "research/consumer_comparison.rs"]
+mod consumer_comparison;
 #[path = "research/decision_contract.rs"]
 mod decision_contract;
 #[path = "research/decision_fallback.rs"]
