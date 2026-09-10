@@ -21,7 +21,7 @@ The library commands run internal engine probes. They add no public snapshot or 
 
 The lifecycle report uses checkpoints `10,100,1000` by default. Set `PANGINE_ANSWER_CYCLE_SIZES` to a comma-separated list of positive cycle counts to run a smaller or larger manual report.
 
-The replay report uses the same default checkpoints. Set `PANGINE_ANSWER_REPLAY_SIZES` to compare full-history rebuilds with a carried open Answer over another range.
+The replay report uses the same default checkpoints. Set `PANGINE_ANSWER_REPLAY_SIZES` to compare full-history rebuilds with a carried open Answer over another range. The same command runs a fixed replacement/retraction check whose size is not controlled by that variable.
 
 Research programs that compare independent views copy a `$` result into a detached Percept before using `^`. Directly choosing a question output now conditions every output linked to that question.
 
@@ -51,7 +51,7 @@ Research programs that compare independent views copy a `$` result into a detach
 - `src/engine/research/structural_scope.rs` starts the existing matcher at a whole value or its direct union members. It compares those scopes with recursive discovery, binds compound/reference/Answer inputs before joining, tests existing Answer transport, and inspects fields across absent, singleton, and larger records while retaining their complete source. Coefficients remain structural and question remainders remain provisional; the helpers are test-only semantic comparisons.
 - `src/engine/research/staged_inquiry.rs` asks inside a directly bound value while retaining parent pairings and original sources. It exposes a lost selected-position distinction and the inability to select a compound projection. Test-only records of subject, question, and Answer preserve the request and support recursive inspection and captured replay across engines through eight further questions, while reporting eager transport size. Neither the restricted executor nor the tuple convention is a public interface.
 - `src/engine/research/answer_lifecycle.rs` reports Concept count, encoded answer size, proof rows and fragments, source visits, inspection size, and revisions across repeated current-grammar answer cycles. Its helpful-minus-failed roles exercise existing explicit operations rather than defining an outcome or Relevance policy.
-- `src/engine/research/answer_replay.rs` compares a full-history rebuild with applying only each newest stable episode source to a carried open Answer. It requires exact proof-bearing and choice equivalence while reporting source visits and elapsed time, without adding public syntax or state.
+- `src/engine/research/answer_replay.rs` compares a full-history rebuild with applying only each newest stable episode source to a carried open Answer. It requires exact proof-bearing and choice equivalence for append-only sources, then shows that inverse adjustment after replacement or retraction preserves visible results but retains cancelling proof and increases encoded state. It adds no public syntax or state.
 - `src/engine/concept_answer.rs` retains production answers as ordinary Concepts. Its focused tests exercise the codec, production-backed projection, collapse, adjustment, and joining, detachment, cross-engine round trips, indexed matching, and deterministic partition reduction.
 
 Broad current capabilities belong in ordinary tests:
