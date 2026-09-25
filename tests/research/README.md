@@ -7,6 +7,9 @@ Run them explicitly with:
 ```sh
 cargo test --test research --release -- --ignored
 cargo test --test research consumer_comparison --release -- --ignored --nocapture
+cargo test --test research troubleshooting_comparison --release -- --ignored --nocapture --test-threads=1
+cargo test --test research typesafe_composition --release -- --ignored --nocapture --test-threads=1
+cargo test --test research decision_ledger_comparison --release -- --ignored --nocapture --test-threads=1
 cargo test --lib source_state_copy --release -- --ignored
 cargo test --lib answer_adjustment_views --release -- --ignored
 cargo test --lib answer_context --release -- --ignored
@@ -44,6 +47,9 @@ Research programs that compare independent views copy a `$` result into a detach
 - `reference_inquiry.rs` compares literal references, singleton question shapes, ordinary input constraints, detached aliases, and mixed linked/ordinary reads. Two test-only evaluation rules repair different examples but both retain the mixed-read pairing problem; neither is selected as the meaning of `$`.
 - `represented_choice.rs` keeps focused counterexamples for experience, current state, context, stance, question order, source identity, records, and coefficients without host-side scoring.
 - `row_choice.rs` shows that collapsing complete rows into totals can discard information needed by some decisions.
+- `troubleshooting_comparison.rs` gives Pangine and Rust records the same bounded diagnostic workflow under an explicit outcome policy. It compares complete action/tool/scope alternatives, source contributions, choices, changed context and policy, corrected or retracted episodes, and implementation cost. It also exposes the host branch needed before adjusting by a zero-row question. The episodes are controlled fixtures, not measured diagnostic success rates.
+- `typesafe_composition.rs` gives a direct router, typed records, and a frozen-engine Pangine adapter the same captured-response-shaped support-triage fixtures. It keeps TypeSafe-style numeric thresholds in Rust, compares relevant judgment provenance and response revisions, and records that unmatched Pangine policy rows cannot explain their near misses without replaying the host's typed policy. The fixtures are not Jev outputs or calibration evidence.
+- `decision_ledger_comparison.rs` treats requests, typed model judgments, observed outcomes, model metadata, schemas, and revisions as independently sourced append-only evidence. Three questions added after ingestion match a typed-event baseline while retaining the exact three-, five-, or six-source lineage of every result. It also opens an error Answer through `@`, then extends it with model and schema evidence added later. The fixture supplies `wrong`, confidence, calibration, and option-band categories explicitly; it does not infer inequality, absence, model quality, or action policy, and its in-memory source collection is not a persistence design.
 - `src/engine/research/source_state_copy.rs` compares value copies, live references, direct source-state copies, and represented version scopes. The behavior is test-only and does not choose a public lifecycle.
 - `src/engine/research/answer_adjustment_views.rs` exercises the production immutable Answer and AnswerView API and the public `@+=` / `@-=` operations across explicit projections, collapse branches, adjustment receipts, strict publication, repeated outcomes, live-state boundaries, and weighted sources. It keeps deeper composition and policy questions under warnings.
 - `src/engine/research/answer_adjustment_views/higher_order_adjustment.rs` composes candidate, outcome, and reliability Answers through the production API. It probes explicit order, branching, intermediate choice, duplicate paths, signs, cycles, flattened history, and linear source context through an eight-layer chain. It adds no public syntax.

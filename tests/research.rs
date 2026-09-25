@@ -8,6 +8,8 @@ mod consumer_comparison;
 mod decision_contract;
 #[path = "research/decision_fallback.rs"]
 mod decision_fallback;
+#[path = "research/decision_ledger_comparison.rs"]
+mod decision_ledger_comparison;
 #[path = "research/decision_record.rs"]
 mod decision_record;
 #[path = "research/evidence_inquiry.rs"]
@@ -32,3 +34,7 @@ mod reference_inquiry;
 mod represented_choice;
 #[path = "research/row_choice.rs"]
 mod row_choice;
+#[path = "research/troubleshooting_comparison.rs"]
+mod troubleshooting_comparison;
+#[path = "research/typesafe_composition.rs"]
+mod typesafe_composition;
