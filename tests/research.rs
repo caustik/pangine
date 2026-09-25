@@ -34,7 +34,5 @@ mod reference_inquiry;
 mod represented_choice;
 #[path = "research/row_choice.rs"]
 mod row_choice;
-#[path = "research/troubleshooting_comparison.rs"]
-mod troubleshooting_comparison;
-#[path = "research/typesafe_composition.rs"]
-mod typesafe_composition;
+#[path = "research/structural_adaptation.rs"]
+mod structural_adaptation;
