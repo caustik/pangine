@@ -160,7 +160,7 @@ Two linked answers can also affect one another without being copied into ordinar
 {action}->{tool} @-= {failed-action}->{failed-tool}
 ```
 
-These commands assume earlier questions filled the candidate, helpful, and failed Percepts. Each side names the part of one linked answer to compare. Matching helpful sources are added to the candidate rows, matching failed sources are subtracted, and the whole target answer receives a new revision. Only the target is published, so a separate source answer stays unchanged. Either side can be one Percept or a larger shape. An unlinked operand is an error. Ordinary `+=` and `-=` still change ordinary Percept values.
+These commands assume earlier questions filled the candidate, helpful, and failed Percepts. Each side names the part of one linked answer to compare. Matching helpful sources are added to the candidate rows, matching failed sources are subtracted, and every linked target output is updated. Only the target changes, so a separate source answer stays unchanged. Either side can be one Percept or a larger shape. An unlinked operand is an error. Ordinary `+=` and `-=` still change ordinary Percept values.
 
 ## Input Percepts
 
@@ -195,6 +195,8 @@ A Percept populated through `~=` remains a reference when another experience men
 | `{memory} = expression` | Replace a Percept value |
 | `{memory} += expression` | Add a value |
 | `{memory} -= expression` | Subtract a value |
+| `{memory} *= expression` | Merge direct members into the value |
+| `{memory} /= expression` | Merge inverted direct members into the value |
 | `{memory} ~= expression` | Capture assigned inputs and remember one experience |
 | `subject @ question` | Fill blanks from a Concept or one or more Percepts |
 | `{target} @+= {evidence}` | Add matching sources from another linked answer |
@@ -212,7 +214,7 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
 
-Questions preserve complete rows and their source contributions. The Rust Answer API can branch, choose, adjust, inspect, and publish those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
+Questions preserve complete rows and their source contributions. The Rust Answer API can branch, choose, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
 The current choice rule uses signed integer support and a deterministic tie break. It remains a placeholder rather than a settled meaning for Relevance. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 
@@ -241,8 +243,6 @@ Run the normal suite with:
 cargo test --workspace --all-targets --release
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
-
-Ignored research tests record provisional questions, not compatibility promises.
 
 ## Contributing
 

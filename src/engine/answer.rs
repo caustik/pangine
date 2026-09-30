@@ -1,9 +1,7 @@
-use super::{concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, Completion, CompletionResult, ConceptId, Pangine};
+use super::{concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, CompletionResult, ConceptId, Pangine};
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-
-type SourceContributionKey = (ConceptId, ConceptId, Relevance, Relevance);
 
 /// An immutable proof-bearing answer snapshot.
 ///
@@ -47,22 +45,17 @@ impl Answer {
         Some(AnswerView { answer: self.clone(), projection })
     }
 
-    /// Replaces the live answer Concept from which this snapshot was derived.
+    /// Replaces the live answer Concept from which this snapshot was derived
+    /// and returns the newly current snapshot.
     ///
     /// Publication fails when another operation has already changed or
     /// detached any output linked to that Concept.
-    pub fn publish(&self, pangine: &mut Pangine) -> Result<AnswerPublication, AnswerPublicationError> {
+    pub(super) fn publish(&self, pangine: &mut Pangine) -> Result<Answer, AnswerPublicationError> {
         pangine.publish_answer(self)
     }
 
     fn derived(&self, result: CompletionResult) -> Self {
         Self { result: Rc::new(result), shape: self.shape.clone(), origin: self.origin.clone() }
-    }
-
-    #[cfg(test)]
-    pub(super) fn detached(result: CompletionResult) -> Self {
-        let shape = result.question().clone();
-        Self { result: Rc::new(result), shape, origin: None }
     }
 }
 
@@ -158,32 +151,10 @@ impl AnswerView {
     ///
     /// The returned answer keeps this view's answer shape. `factor` multiplies
     /// each imported source contribution; it does not change the source's raw
-    /// relevance. An empty factor can still report matching rows, but leaves
-    /// the answer unchanged.
-    pub fn adjust(&self, pangine: &mut Pangine, adjustment: &AnswerView, factor: Relevance) -> Option<AnswerAdjustment> {
+    /// relevance. An empty factor leaves the answer unchanged.
+    pub fn adjusted_by(&self, pangine: &mut Pangine, adjustment: &AnswerView, factor: Relevance) -> Option<AnswerView> {
         if !pangine.owns_answer(&self.answer) || !pangine.owns_answer(&adjustment.answer) {
             return None;
-        }
-
-        let adjustment_candidates = adjustment
-            .answer
-            .result
-            .completions
-            .iter()
-            .map(|completion| pangine.instantiate_completion(&adjustment.projection, completion))
-            .collect::<Option<Vec<_>>>()?;
-        let mut matched_adjustments = BTreeSet::new();
-        let mut matched_target_rows = 0;
-        let mut matched_pairs = 0;
-        for completion in &self.answer.result.completions {
-            let candidate = pangine.instantiate_completion(&self.projection, completion)?;
-            let matches =
-                adjustment_candidates.iter().enumerate().filter_map(|(index, adjustment)| (adjustment == &candidate).then_some(index)).collect::<Vec<_>>();
-            if !matches.is_empty() {
-                matched_target_rows += 1;
-                matched_pairs += matches.len();
-                matched_adjustments.extend(matches);
-            }
         }
 
         let mut target_outputs = BTreeSet::new();
@@ -196,43 +167,7 @@ impl AnswerView {
             &target_outputs,
             factor,
         )?;
-        let changed_target_rows = result.completions.iter().filter(|completion| !self.answer.result.completions.contains(completion)).count();
-        let added_source_occurrences = result
-            .completions
-            .iter()
-            .map(|adjusted| {
-                let before = self
-                    .answer
-                    .result
-                    .completions
-                    .iter()
-                    .find(|target| target.bindings().eq(adjusted.bindings()))
-                    .map(source_contribution_keys)
-                    .unwrap_or_default();
-                source_contribution_keys(adjusted).difference(&before).count()
-            })
-            .sum();
-        let answer = self.answer.derived(result);
-        Some(AnswerAdjustment {
-            answer: answer.view(pangine, self.projection.clone())?,
-            target_rows: self.answer.result.completions.len(),
-            adjustment_rows: adjustment.answer.result.completions.len(),
-            matched_target_rows,
-            matched_adjustment_rows: matched_adjustments.len(),
-            matched_pairs,
-            changed_target_rows,
-            added_source_occurrences,
-        })
-    }
-
-    /// Returns only the adjusted view when receipt measurements are not needed.
-    pub fn adjusted_by(&self, pangine: &mut Pangine, adjustment: &AnswerView, factor: Relevance) -> Option<AnswerView> {
-        Some(self.adjust(pangine, adjustment, factor)?.answer)
-    }
-
-    #[cfg(test)]
-    pub(super) fn from_result(pangine: &Pangine, result: CompletionResult, projection: ConceptId) -> Option<Self> {
-        Answer::detached(result).view(pangine, projection)
+        self.answer.derived(result).view(pangine, self.projection.clone())
     }
 }
 
@@ -328,98 +263,10 @@ impl AnswerChoice {
     }
 }
 
-/// Measurements from one functional answer adjustment.
-pub struct AnswerAdjustment {
-    pub(super) answer: AnswerView,
-    pub(super) target_rows: usize,
-    pub(super) adjustment_rows: usize,
-    pub(super) matched_target_rows: usize,
-    pub(super) matched_adjustment_rows: usize,
-    pub(super) matched_pairs: usize,
-    pub(super) changed_target_rows: usize,
-    pub(super) added_source_occurrences: usize,
-}
-
-impl AnswerAdjustment {
-    /// Returns the adjusted answer view.
-    pub fn view(&self) -> &AnswerView {
-        &self.answer
-    }
-
-    /// Consumes this result and returns the adjusted answer view.
-    pub fn into_view(self) -> AnswerView {
-        self.answer
-    }
-
-    /// Returns the number of complete rows in the target answer.
-    pub fn target_rows(&self) -> usize {
-        self.target_rows
-    }
-
-    /// Returns the number of complete rows in the adjustment answer.
-    pub fn adjustment_rows(&self) -> usize {
-        self.adjustment_rows
-    }
-
-    /// Returns the number of target rows matched at least once.
-    pub fn matched_target_rows(&self) -> usize {
-        self.matched_target_rows
-    }
-
-    /// Returns the number of adjustment rows matched at least once.
-    pub fn matched_adjustment_rows(&self) -> usize {
-        self.matched_adjustment_rows
-    }
-
-    /// Returns the number of matching target-adjustment row pairs.
-    pub fn matched_pairs(&self) -> usize {
-        self.matched_pairs
-    }
-
-    /// Returns the number of target rows whose complete retained evidence changed.
-    pub fn changed_target_rows(&self) -> usize {
-        self.changed_target_rows
-    }
-
-    /// Returns the number of new signed source occurrences across target rows.
-    pub fn added_source_occurrences(&self) -> usize {
-        self.added_source_occurrences
-    }
-}
-
-/// The result of replacing one current live answer Concept.
-pub struct AnswerPublication {
-    pub(super) answer: Answer,
-    pub(super) prior_revision: usize,
-    pub(super) revision: usize,
-}
-
-impl AnswerPublication {
-    /// Returns the newly current immutable answer snapshot.
-    pub fn answer(&self) -> &Answer {
-        &self.answer
-    }
-
-    /// Consumes this receipt and returns the newly current answer snapshot.
-    pub fn into_answer(self) -> Answer {
-        self.answer
-    }
-
-    /// Returns the live revision replaced by this publication.
-    pub fn prior_revision(&self) -> usize {
-        self.prior_revision
-    }
-
-    /// Returns the new live revision created by this publication.
-    pub fn revision(&self) -> usize {
-        self.revision
-    }
-}
-
 /// An error produced while publishing a derived answer into live Percepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum AnswerPublicationError {
+pub(super) enum AnswerPublicationError {
     /// The answer has no live origin revision.
     Detached,
     /// The answer or its origin belongs to another engine.
@@ -471,7 +318,7 @@ impl Pangine {
             && answer.result.completions().iter().all(|completion| completion.bindings().all(|(percept, value)| self.owns(percept) && self.owns(value)))
     }
 
-    fn publish_answer(&mut self, answer: &Answer) -> Result<AnswerPublication, AnswerPublicationError> {
+    fn publish_answer(&mut self, answer: &Answer) -> Result<Answer, AnswerPublicationError> {
         if !self.owns_answer(answer) {
             return Err(AnswerPublicationError::ForeignAnswer);
         }
@@ -489,19 +336,11 @@ impl Pangine {
         let mut concept_answer = ConceptAnswer::from_result(self, &answer.result);
         concept_answer.outputs = expected.answer.outputs;
         concept_answer.questions = expected.answer.questions;
-        let prior_revision = expected.revision;
-        let live = LiveConceptAnswer::successor(self, prior_revision, concept_answer).ok_or(AnswerPublicationError::InvalidAnswer)?;
+        let live = LiveConceptAnswer::successor(self, expected.revision, concept_answer).ok_or(AnswerPublicationError::InvalidAnswer)?;
         let value = self.install_live_answer(live.clone()).ok_or(AnswerPublicationError::InvalidAnswer)?;
-        let revision = live.revision;
-        let answer = self.answer_from_live_value(value, live).ok_or(AnswerPublicationError::InvalidAnswer)?;
-        Ok(AnswerPublication { answer, prior_revision, revision })
+        self.answer_from_live_value(value, live).ok_or(AnswerPublicationError::InvalidAnswer)
     }
 }
 
-fn source_contribution_keys(completion: &Completion) -> BTreeSet<SourceContributionKey> {
-    completion
-        .evidence()
-        .iter()
-        .map(|evidence| (evidence.source_subject().clone(), evidence.source_concept().clone(), evidence.source_relevance(), evidence.source_contribution()))
-        .collect()
-}
+#[cfg(test)]
+mod tests;

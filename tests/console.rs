@@ -57,6 +57,20 @@ fn troubleshooting_cycle_changes_its_complete_decision_after_reported_failures()
     assert_eq!(command_results(&stdout, "${recorded-outcome}"), vec!["[failed]"]);
 }
 
+#[test]
+fn question_inquiry_inspects_a_question_shape_without_disturbing_its_answer() {
+    let stdout = run_example("question-inquiry.pae");
+
+    assert_eq!(command_results(&stdout, "(&{animal}) @ {left}->{right}"), vec!["{animal}->{sound}"]);
+    assert_eq!(command_results(&stdout, "${left}"), vec!["{animal}"]);
+    assert_eq!(command_results(&stdout, "${right}"), vec!["{sound}"]);
+    assert_eq!(command_results(&stdout, "$${left}"), vec!["[cat][dog]"]);
+    assert_eq!(command_results(&stdout, "($({left}->{right})) @ {a}->{b}"), vec!["{animal}->{sound}"]);
+    assert_eq!(command_results(&stdout, "${a}"), vec!["{animal}"]);
+    assert_eq!(command_results(&stdout, "${b}"), vec!["{sound}"]);
+    assert_eq!(command_results(&stdout, "$({animal}->{sound})"), vec!["([cat]->[purrs])([dog]->[barks])"]);
+}
+
 fn run_example(name: &str) -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join(name);
     let output = Command::new(env!("CARGO_BIN_EXE_pangine-console")).arg(script).output().unwrap_or_else(|error| panic!("run {name}: {error}"));

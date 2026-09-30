@@ -1,4 +1,4 @@
-use pangine::{AnswerPublicationError, ConceptId, Pangine, Relevance};
+use super::*;
 
 #[test]
 fn immutable_choice_changes_live_outputs_only_after_publication() {
@@ -14,8 +14,7 @@ fn immutable_choice_changes_live_outputs_only_after_publication() {
     assert_eq!(food_choice.selected(), &must_ref(&mut pangine, "[fish]"));
     assert_eq!(must_ref(&mut pangine, "${animal}"), must_ref(&mut pangine, "x8[cat]x7[dog]"));
 
-    let publication = animal_choice.view().answer().publish(&mut pangine).expect("current answer revision");
-    assert_ne!(publication.revision(), publication.prior_revision());
+    animal_choice.view().answer().publish(&mut pangine).expect("current answer revision");
     assert_eq!(must_ref(&mut pangine, "${animal}"), must_ref(&mut pangine, "x8[cat]"));
     assert_eq!(must_ref(&mut pangine, "${food}"), must_ref(&mut pangine, "x5[milk]x3[fish]"));
     assert_eq!(food_choice.view().answer().publish(&mut pangine).err(), Some(AnswerPublicationError::Stale));
@@ -32,24 +31,11 @@ fn answer_adjustment_composes_through_reliability_outcomes_and_candidates() {
     let outcomes = pangine.answer_view(&episode).expect("outcome answer");
     let trusted = pangine.answer_view(&trusted_episode).expect("reliability answer");
 
-    let trusted_outcomes = outcomes.adjust(&mut pangine, &trusted, Relevance::DEFAULT).expect("matching episode values");
-    assert_eq!(
-        (
-            trusted_outcomes.target_rows(),
-            trusted_outcomes.adjustment_rows(),
-            trusted_outcomes.matched_target_rows(),
-            trusted_outcomes.matched_adjustment_rows(),
-            trusted_outcomes.matched_pairs(),
-            trusted_outcomes.changed_target_rows(),
-            trusted_outcomes.added_source_occurrences(),
-        ),
-        (2, 1, 1, 1, 1, 1, 1)
-    );
-    let trusted_outcomes = trusted_outcomes.into_view();
+    let trusted_outcomes = outcomes.adjusted_by(&mut pangine, &trusted, Relevance::DEFAULT).expect("matching episode values");
     assert_eq!(trusted_outcomes.materialize(&mut pangine), Some(must_ref(&mut pangine, "x2[episode-b][episode-a]")));
 
     let trusted_decisions = trusted_outcomes.projecting(&pangine, episode_decision).expect("outcome decision view");
-    let adjusted = candidates.adjust(&mut pangine, &trusted_decisions, Relevance::DEFAULT).expect("matching decision values").into_view();
+    let adjusted = candidates.adjusted_by(&mut pangine, &trusted_decisions, Relevance::DEFAULT).expect("matching decision values");
     assert_eq!(adjusted.materialize(&mut pangine), Some(must_ref(&mut pangine, "x3[B]x2[A]")));
     assert_eq!(adjusted.answer().shape(), candidates.answer().shape());
     assert!(adjusted.projecting(&pangine, episode).is_none());
@@ -82,20 +68,15 @@ fn intermediate_choice_controls_which_evidence_reaches_a_later_answer() {
 }
 
 #[test]
-fn empty_adjustment_factor_matches_without_changing_the_answer() {
+fn empty_adjustment_factor_leaves_the_answer_unchanged() {
     let mut pangine = layered_decisions();
     let decision = pangine.reference_percept("decision");
     let episode_decision = pangine.reference_percept("episode-decision");
     let candidates = pangine.answer_view(&decision).expect("candidate answer");
     let outcomes = pangine.answer_view(&episode_decision).expect("outcome answer");
 
-    let adjusted = candidates.adjust(&mut pangine, &outcomes, Relevance::EMPTY).expect("valid empty adjustment");
-    assert_eq!(adjusted.matched_target_rows(), 2);
-    assert_eq!(adjusted.matched_adjustment_rows(), 2);
-    assert_eq!(adjusted.matched_pairs(), 2);
-    assert_eq!(adjusted.changed_target_rows(), 0);
-    assert_eq!(adjusted.added_source_occurrences(), 0);
-    assert!(adjusted.view().answer().result().completions() == candidates.answer().result().completions());
+    let adjusted = candidates.adjusted_by(&mut pangine, &outcomes, Relevance::EMPTY).expect("valid empty adjustment");
+    assert!(adjusted.answer().result().completions() == candidates.answer().result().completions());
 }
 
 #[test]

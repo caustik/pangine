@@ -124,7 +124,7 @@ fn public_api_mutations_update_the_unified_percept_state() {
 
     let percept = test.engine_mut().reference_percept("direct");
     assert_eq!(test.reference("{direct}"), Some(percept.clone()));
-    assert_eq!(test.engine().get_percept(&percept), Some(percept.clone()));
+    assert!(matches!(test.engine().concept_kind(&percept), Some(pangine::ConceptKind::Percept { name }) if name == "direct"));
     assert_eq!(test.engine().get_value(&percept), None);
     assert_eq!(test.engine().get_relevance_map(&percept), Vec::new());
 
@@ -133,8 +133,8 @@ fn public_api_mutations_update_the_unified_percept_state() {
     assert!(test.engine_mut().set_percept_value(&percept, Some(a.clone())));
     assert_eq!(test.engine().get_value(&percept), Some(a.clone()));
     assert_eq!(test.engine().get_relevance_map(&percept), vec![(Relevance::DEFAULT, a.clone())]);
-    assert_eq!(test.engine().recurse(&percept, false), "{direct}");
-    assert_eq!(test.engine().recurse(&percept, true), "[A]");
+    assert_eq!(test.engine().format_concept(&percept, false), "{direct}");
+    assert_eq!(test.engine().format_concept(&percept, true), "[A]");
 
     let merged = test.engine_mut().perform_merge(&percept, Some(&b));
     assert_eq!(merged, test.reference("[A]*[B]"));

@@ -48,7 +48,7 @@ fn answer_snapshot_exposes_the_sources_used_by_the_shared_answer() {
 }
 
 #[test]
-fn answer_shape_views_adjust_sources_and_publish_every_target_output() {
+fn answer_adjustment_updates_every_target_output_and_keeps_signed_sources() {
     let mut pangine = Pangine::new();
     experience_in(&mut pangine, "candidates", "[cat]->[fish]", 1);
     experience_in(&mut pangine, "candidates", "[dog]->[bone]", 1);
@@ -61,15 +61,8 @@ fn answer_shape_views_adjust_sources_and_publish_every_target_output() {
     must_ref(&mut pangine, "{failed} @ {failed-candidate}->{failed-choice}");
 
     let choice = pangine.reference_percept("choice");
-    let candidate_shape = must_ref(&mut pangine, "{candidate}->{choice}");
-    let helpful_shape = must_ref(&mut pangine, "{helpful-candidate}->{helpful-choice}");
-    let failed_shape = must_ref(&mut pangine, "{failed-candidate}->{failed-choice}");
-    let candidates = pangine.answer_view(&candidate_shape).expect("candidate answer shape");
-    let helpful = pangine.answer_view(&helpful_shape).expect("helpful answer shape");
-    let failed = pangine.answer_view(&failed_shape).expect("failed answer shape");
-    let adjusted = candidates.adjust(&mut pangine, &helpful, Relevance::DEFAULT).expect("matching helpful answer").into_view();
-    let adjusted = adjusted.adjust(&mut pangine, &failed, Relevance::new(-1)).expect("matching failed answer").into_view();
-    adjusted.answer().publish(&mut pangine).expect("current target revision");
+    must_ref(&mut pangine, "{candidate}->{choice} @+= {helpful-candidate}->{helpful-choice}");
+    must_ref(&mut pangine, "{candidate}->{choice} @-= {failed-candidate}->{failed-choice}");
 
     assert_eq!(must_ref(&mut pangine, "&{choice}"), must_ref(&mut pangine, "{candidate}->{choice}"));
     assert_eq!(must_ref(&mut pangine, "${choice}"), must_ref(&mut pangine, "x2[fish][seed]![bone]"));

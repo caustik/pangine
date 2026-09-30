@@ -1,4 +1,4 @@
-use pangine::{AnswerView, ConceptId, Pangine, Relevance};
+use pangine::{AnswerView, ConceptId, Pangine};
 use std::collections::{BTreeMap, BTreeSet};
 
 const DECISION_QUESTION: &str = "
@@ -142,7 +142,7 @@ fn the_same_answer_cycle_handles_three_outputs_in_an_unordered_shape() {
 
     let choice = adjusted.choose(&mut pangine).expect("positive complete choice");
     assert_eq!(choice.selected(), &selected);
-    choice.view().answer().publish(&mut pangine).expect("current three-output answer");
+    assert_eq!(must_ref(&mut pangine, "^(([action]->{action})([tool]->{tool})([scope]->{scope}))"), selected);
     assert_eq!(must_ref(&mut pangine, "${action}"), must_ref(&mut pangine, "x2[inspect-installed-modes]"));
     assert_eq!(must_ref(&mut pangine, "${tool}"), must_ref(&mut pangine, "x2[pkgutil]"));
     assert_eq!(must_ref(&mut pangine, "${scope}"), must_ref(&mut pangine, "x2[installed-payload]"));
@@ -178,18 +178,12 @@ fn decision_round(pangine: &mut Pangine) -> Round {
     must_ref(pangine, &format!("{{episodes}} @ {HELPFUL_QUESTION}"));
     must_ref(pangine, &format!("{{episodes}} @ {FAILED_QUESTION}"));
 
+    pangine.reference_concept("{action}->{tool} @+= {helpful-action}->{helpful-tool}").expect("matching helpful outcomes");
+    pangine.reference_concept("{action}->{tool} @-= {failed-action}->{failed-tool}").expect("matching failed outcomes");
     let shape = must_ref(pangine, "{action}->{tool}");
-    let helpful_shape = must_ref(pangine, "{helpful-action}->{helpful-tool}");
-    let failed_shape = must_ref(pangine, "{failed-action}->{failed-tool}");
-    let base = pangine.answer_view(&shape).expect("complete candidate answer");
-    let helpful = pangine.answer_view(&helpful_shape).expect("complete helpful answer");
-    let failed = pangine.answer_view(&failed_shape).expect("complete failed answer");
-    let adjusted = base.adjusted_by(pangine, &helpful, Relevance::DEFAULT).expect("matching helpful outcomes");
-    let adjusted = adjusted.adjusted_by(pangine, &failed, Relevance::new(-1)).expect("matching failed outcomes");
+    let adjusted = pangine.answer_view(&shape).expect("adjusted candidate answer");
     let possibilities = inspect(pangine, &adjusted);
-    let choice = adjusted.choose(pangine).expect("positive complete choice");
-    let selected = choice.selected().clone();
-    choice.view().answer().publish(pangine).expect("current candidate answer");
+    let selected = must_ref(pangine, "^({action}->{tool})");
     Round { selected, possibilities }
 }
 

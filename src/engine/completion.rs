@@ -10,7 +10,7 @@ use std::rc::Rc;
 /// Identifies one proper contiguous ordered window projected from a complete
 /// ordered source Concept.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CompletionOrderedWindow {
+pub(super) struct CompletionOrderedWindow {
     pub(super) parent: ConceptId,
     pub(super) parent_occurrence: Vec<CompletionOrderedStep>,
     pub(super) start: usize,
@@ -19,42 +19,35 @@ pub struct CompletionOrderedWindow {
 
 impl CompletionOrderedWindow {
     /// Returns the complete ordered Concept containing the projected window.
-    pub fn parent(&self) -> &ConceptId {
+    #[cfg(test)]
+    pub(super) fn parent(&self) -> &ConceptId {
         &self.parent
     }
 
-    /// Iterates over the ordered component steps locating `parent` inside the
-    /// complete source Concept.
-    pub fn parent_occurrence(&self) -> impl Iterator<Item = &CompletionOrderedStep> {
-        self.parent_occurrence.iter()
-    }
-
-    /// Returns the zero-based component at which the window begins.
-    pub fn start(&self) -> usize {
-        self.start
-    }
-
     /// Returns the number of ordered components in the window.
-    pub fn width(&self) -> usize {
+    #[cfg(test)]
+    pub(super) fn width(&self) -> usize {
         self.width
     }
 }
 
 /// Identifies one ordered-component descent on the way to a projected window.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CompletionOrderedStep {
+pub(super) struct CompletionOrderedStep {
     pub(super) parent: ConceptId,
     pub(super) position: usize,
 }
 
 impl CompletionOrderedStep {
     /// Returns the ordered Concept containing this component occurrence.
-    pub fn parent(&self) -> &ConceptId {
+    #[cfg(test)]
+    pub(super) fn parent(&self) -> &ConceptId {
         &self.parent
     }
 
     /// Returns the zero-based component position selected from `parent`.
-    pub fn position(&self) -> usize {
+    #[cfg(test)]
+    pub(super) fn position(&self) -> usize {
         self.position
     }
 }
@@ -62,7 +55,7 @@ impl CompletionOrderedStep {
 /// Identifies the represented source occurrence that supplied one Percept
 /// binding along a route.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CompletionBindingOrigin {
+pub(super) struct CompletionBindingOrigin {
     pub(super) parent: ConceptId,
     pub(super) parent_occurrence: Vec<CompletionOrderedStep>,
     pub(super) span_start: usize,
@@ -72,29 +65,28 @@ pub struct CompletionBindingOrigin {
 
 impl CompletionBindingOrigin {
     /// Returns the complete ordered Concept containing the bound occurrence.
-    pub fn parent(&self) -> &ConceptId {
+    #[cfg(test)]
+    pub(super) fn parent(&self) -> &ConceptId {
         &self.parent
     }
 
     /// Iterates over the ordered component steps locating `parent` inside the
     /// complete source Concept.
-    pub fn parent_occurrence(&self) -> impl Iterator<Item = &CompletionOrderedStep> {
+    #[cfg(test)]
+    pub(super) fn parent_occurrence(&self) -> impl Iterator<Item = &CompletionOrderedStep> {
         self.parent_occurrence.iter()
     }
 
     /// Returns the zero-based start of the bound span inside `parent`.
-    pub fn span_start(&self) -> usize {
+    #[cfg(test)]
+    pub(super) fn span_start(&self) -> usize {
         self.span_start
     }
 
     /// Returns the width of the bound span inside `parent`.
-    pub fn span_width(&self) -> usize {
+    #[cfg(test)]
+    pub(super) fn span_width(&self) -> usize {
         self.span_width
-    }
-
-    /// Returns any ordered-component path nested beneath the selected span.
-    pub fn nested_path(&self) -> &[usize] {
-        &self.nested_path
     }
 }
 
@@ -105,7 +97,7 @@ impl CompletionBindingOrigin {
 /// Coefficient ancestors and ordered-window descriptions remain annotations;
 /// none is interpreted as a count, score, or new Concept identity.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CompletionRoute {
+pub(super) struct CompletionRoute {
     pub(super) coefficient_ancestors: BTreeSet<ConceptId>,
     pub(super) selected_entries: BTreeMap<ConceptId, ConceptId>,
     pub(super) ordered_windows: BTreeSet<CompletionOrderedWindow>,
@@ -113,18 +105,15 @@ pub struct CompletionRoute {
 }
 
 impl CompletionRoute {
-    /// Iterates over coefficient-bearing Concepts crossed along this route.
-    pub fn coefficient_ancestors(&self) -> impl Iterator<Item = &ConceptId> {
-        self.coefficient_ancestors.iter()
-    }
-
     /// Iterates over `(container, selected entry)` commitments on this route.
-    pub fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
+    #[cfg(test)]
+    pub(super) fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
         self.selected_entries.iter()
     }
 
     /// Iterates over proper ordered windows projected along this route.
-    pub fn ordered_windows(&self) -> impl Iterator<Item = &CompletionOrderedWindow> {
+    #[cfg(test)]
+    pub(super) fn ordered_windows(&self) -> impl Iterator<Item = &CompletionOrderedWindow> {
         self.ordered_windows.iter()
     }
 
@@ -134,7 +123,8 @@ impl CompletionRoute {
     /// A missing Percept has no occurrence constraint. Several origins for one
     /// Percept are alternatives; same-source route joins retain their
     /// intersection.
-    pub fn binding_origins(&self) -> impl Iterator<Item = (&ConceptId, &BTreeSet<CompletionBindingOrigin>)> {
+    #[cfg(test)]
+    pub(super) fn binding_origins(&self) -> impl Iterator<Item = (&ConceptId, &BTreeSet<CompletionBindingOrigin>)> {
         self.binding_origins.iter()
     }
 }
@@ -297,7 +287,7 @@ impl CompletionEvidence {
 
     /// Iterates over the alternative correlated routes to this matched source
     /// view before it joins the other clauses in the completion.
-    pub fn routes(&self) -> impl Iterator<Item = &CompletionRoute> {
+    pub(super) fn routes(&self) -> impl Iterator<Item = &CompletionRoute> {
         self.source.source_view.routes.iter()
     }
 
@@ -310,7 +300,7 @@ impl CompletionEvidence {
     /// annotations remain on each fragment's [`Self::routes`] and can be kept
     /// factorized by fragment identity rather than expanded as a Cartesian
     /// product during recognition.
-    pub fn source_route_products(&self) -> impl Iterator<Item = &CompletionRoute> {
+    pub(super) fn source_route_products(&self) -> impl Iterator<Item = &CompletionRoute> {
         self.source.source_route_products.iter()
     }
 
@@ -321,7 +311,8 @@ impl CompletionEvidence {
     /// one route. Different inner sets are alternatives, not simultaneous
     /// factors. A route for an exact wrapper match is empty because it crosses
     /// no coefficient boundary.
-    pub fn coefficient_ancestor_routes(&self) -> impl Iterator<Item = &BTreeSet<ConceptId>> {
+    #[cfg(test)]
+    pub(super) fn coefficient_ancestor_routes(&self) -> impl Iterator<Item = &BTreeSet<ConceptId>> {
         self.source.source_view.routes.iter().map(|route| &route.coefficient_ancestors)
     }
 
@@ -333,7 +324,8 @@ impl CompletionEvidence {
     /// alternatives matters. Equal ancestors under distinct source owners are
     /// distinguishable only when paired with this evidence's source fields.
     /// Nothing interprets a coefficient as occurrences, support, or a score.
-    pub fn coefficient_ancestors(&self) -> impl Iterator<Item = &ConceptId> {
+    #[cfg(test)]
+    pub(super) fn coefficient_ancestors(&self) -> impl Iterator<Item = &ConceptId> {
         self.source.source_view.routes.iter().flat_map(|route| route.coefficient_ancestors.iter())
     }
 
@@ -350,7 +342,8 @@ impl CompletionEvidence {
     /// [`Self::routes`] for exact route-local selections. Both values are
     /// ordinary Concepts, so this is derived provenance rather than a new
     /// stored value type.
-    pub fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
+    #[cfg(test)]
+    pub(super) fn selected_entries(&self) -> impl Iterator<Item = (&ConceptId, &ConceptId)> {
         self.source.source_view.routes.iter().flat_map(|route| route.selected_entries.iter())
     }
 
@@ -369,7 +362,7 @@ impl CompletionEvidence {
     /// Source-local bindings remain available through [`Self::binding`]. This
     /// separate set prevents a deep adjustment chain from copying every prior
     /// answer assignment into every retained source fragment.
-    pub fn adjusted_outputs(&self) -> impl Iterator<Item = &ConceptId> {
+    pub(super) fn adjusted_outputs(&self) -> impl Iterator<Item = &ConceptId> {
         self.adjusted_outputs.iter()
     }
 
@@ -648,22 +641,6 @@ impl Pangine {
         }
 
         Some(CompletionResult { question: target.question.clone(), completions: completions.into_iter().collect() })
-    }
-
-    #[cfg(test)]
-    pub(super) fn scale_completion_result_sources(&self, result: &mut CompletionResult, factors: &BTreeMap<ConceptId, Relevance>) -> Option<()> {
-        if factors.keys().any(|percept| !self.owns(percept)) {
-            return None;
-        }
-
-        for completion in &mut result.completions {
-            for evidence in &mut completion.evidence {
-                if let Some(factor) = evidence.source.source_view.source.percept().and_then(|percept| factors.get(percept)) {
-                    evidence.contribution = evidence.contribution.checked_mul(*factor)?;
-                }
-            }
-        }
-        Some(())
     }
 
     fn shared_clause_percepts(&self, clauses: &[ConceptId]) -> BTreeSet<ConceptId> {
@@ -1190,8 +1167,7 @@ fn unused_members(members: &[ConceptId], used: &BTreeSet<usize>) -> Vec<ConceptI
 }
 
 #[cfg(test)]
-#[path = "research/structural_scope.rs"]
-mod structural_scope;
+mod evidence_tests;
 
 #[cfg(test)]
 mod route_tests {
