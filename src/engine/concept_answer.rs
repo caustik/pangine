@@ -317,7 +317,7 @@ fn encode_evidence(pangine: &mut Pangine, evidence: &CompletionEvidence) -> Conc
         fields.push(encode_concept_set(pangine, REMAINDERS, remainders));
     }
     if evidence.source_contribution() != Relevance::DEFAULT {
-        let contribution = encode_signed(pangine, evidence.source_contribution().weight());
+        let contribution = encode_signed(pangine, evidence.source_contribution().count());
         fields.push(tagged(pangine, CONTRIBUTION, vec![contribution]));
     }
     if !adjusted_outputs.is_empty() {
@@ -379,7 +379,7 @@ fn encode_source(pangine: &mut Pangine, evidence: &CompletionEvidence) -> Concep
         .unwrap_or_else(|| tagged(pangine, SUBJECT_SOURCE, Vec::new()));
     let mut fields = vec![origin, evidence.source_concept().clone()];
     if evidence.source_relevance() != Relevance::DEFAULT {
-        fields.push(encode_signed(pangine, evidence.source_relevance().weight()));
+        fields.push(encode_signed(pangine, evidence.source_relevance().count()));
     }
     tagged(pangine, SOURCE, fields)
 }

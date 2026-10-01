@@ -3,6 +3,8 @@ mod support;
 use pangine::{ParseError, Relevance};
 use support::{pairs, PangineTest};
 
+type Reading = (String, i64, f64, bool);
+
 #[test]
 fn adjacency_composes_complete_operands_while_star_merges_their_members() {
     let mut test = PangineTest::new();
@@ -114,4 +116,66 @@ fn nested_coefficients_multiply_during_union_normalization() {
         "x2x-3[A]" => "x-6[A]",
         "x2x-3[A]x2x3[B]x2x-3[A]" => "x-12[A]x6[B]",
     });
+}
+
+#[test]
+fn answers_read_evidence_counts_as_probabilities_and_choose_the_most_probable() {
+    let mut test = PangineTest::new();
+    test.exec(["{memory} ~= [A]", "{memory} ~= [A]", "{memory} ~= [A]", "{memory} ~= [B]", "{memory} ~= [C]", "{memory} ~= [D]", "{memory} @ {answer}"]);
+
+    assert_eq!(
+        readings(&mut test, "{answer}"),
+        vec![
+            ("[A]".to_owned(), 3, 3.0 / 6.0, true),
+            ("[B]".to_owned(), 1, 1.0 / 6.0, false),
+            ("[C]".to_owned(), 1, 1.0 / 6.0, false),
+            ("[D]".to_owned(), 1, 1.0 / 6.0, false),
+        ]
+    );
+
+    // Negative evidence cancels support instead of taking a share.
+    test.exec(["{failed} ~= [D]", "{failed} ~= [D]", "{failed} @ {failed-answer}", "{answer} @-= {failed-answer}"]);
+    assert_eq!(
+        readings(&mut test, "{answer}"),
+        vec![
+            ("[A]".to_owned(), 3, 3.0 / 5.0, true),
+            ("[B]".to_owned(), 1, 1.0 / 5.0, false),
+            ("[C]".to_owned(), 1, 1.0 / 5.0, false),
+            ("[D]".to_owned(), -1, 0.0, false),
+        ]
+    );
+    assert_eq!(test.concept("^{answer}"), test.concept("[A]"));
+}
+
+#[test]
+fn equal_evidence_is_equally_probable_and_choice_breaks_the_tie_canonically() {
+    let mut test = PangineTest::new();
+    test.exec(["{memory} ~= [B]", "{memory} ~= [A]", "{memory} @ {answer}"]);
+
+    assert_eq!(readings(&mut test, "{answer}"), vec![("[A]".to_owned(), 1, 0.5, true), ("[B]".to_owned(), 1, 0.5, true)]);
+    assert_eq!(test.concept("^{answer}"), test.concept("[A]"));
+}
+
+#[test]
+fn choice_abstains_when_no_possibility_has_positive_evidence() {
+    let mut test = PangineTest::new();
+    test.exec(["{memory} ~= [A]", "{failed} ~= [A]", "{memory} @ {answer}", "{failed} @ {failed-answer}"]);
+
+    // The adjusted answer keeps its row, but no value has evidence left to show.
+    assert_eq!(test.reference("{answer} @-= {failed-answer}"), None);
+    assert_eq!(readings(&mut test, "{answer}"), vec![("[A]".to_owned(), 0, 0.0, false)]);
+    assert_eq!(test.reference("^{answer}"), None);
+}
+
+fn readings(test: &mut PangineTest, output: &str) -> Vec<Reading> {
+    let output = test.concept(output);
+    let pangine = test.engine_mut();
+    let answer = pangine.answer_view(&output).expect("linked answer");
+    let possibilities = answer.possibilities(pangine).expect("inspectable answer");
+    possibilities
+        .iter()
+        .map(|possibility| {
+            (pangine.format_concept(possibility.value(), false), possibility.strength().count(), possibility.probability(), possibility.is_top_tie())
+        })
+        .collect()
 }

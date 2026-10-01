@@ -1,5 +1,6 @@
 use super::{concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, CompletionResult, ConceptId, Pangine};
 use crate::Relevance;
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -82,8 +83,8 @@ impl AnswerView {
         self.answer.view(pangine, projection)
     }
 
-    /// Materializes the current strengths of this projection without changing
-    /// the answer or any live Percept.
+    /// Materializes this projection as an ordinary Concept whose members carry
+    /// their current counts, without changing the answer or any live Percept.
     pub fn materialize(&self, pangine: &mut Pangine) -> Option<ConceptId> {
         if !pangine.owns_answer(&self.answer) {
             return None;
@@ -91,13 +92,15 @@ impl AnswerView {
         pangine.materialize_completion_projection(&self.answer.result, &self.projection)
     }
 
-    /// Returns every projected possibility with the strength and distinct
-    /// source contributions used by the current choice rule.
+    /// Returns every projected possibility, most probable first, with its
+    /// evidence count, probability, and distinct source contributions.
     ///
-    /// Possibilities remain in canonical spelling order, including those with
-    /// zero or negative strength. `is_top_tie` identifies every possibility at
-    /// the greatest positive strength; it is false for every possibility when
-    /// the current rule would abstain.
+    /// A possibility's probability is its share of the positive evidence among
+    /// these possibilities. A possibility whose evidence is zero or negative
+    /// stays in the list with probability zero, and equal counts keep canonical
+    /// spelling order. `is_top_tie` identifies every most probable possibility;
+    /// it is false for every possibility when none has positive evidence and
+    /// choice abstains.
     pub fn possibilities(&self, pangine: &mut Pangine) -> Option<Vec<AnswerPossibility>> {
         if !pangine.owns_answer(&self.answer) {
             return None;
@@ -123,13 +126,22 @@ impl AnswerView {
                         contribution: witness.contribution,
                     })
                     .collect();
-                Some(AnswerPossibility { complete_rows: complete_rows.remove(&value).unwrap_or_default(), value, strength, sources, is_top_tie: false })
+                Some(AnswerPossibility {
+                    complete_rows: complete_rows.remove(&value).unwrap_or_default(),
+                    value,
+                    strength,
+                    sources,
+                    positive_total: 0,
+                    is_top_tie: false,
+                })
             })
             .collect::<Option<Vec<_>>>()?;
-        possibilities.sort_by_key(|possibility| pangine.format_concept(&possibility.value, false));
+        possibilities.sort_by_cached_key(|possibility| (Reverse(possibility.strength), pangine.format_concept(&possibility.value, false)));
 
-        let greatest_positive = possibilities.iter().map(|possibility| possibility.strength).filter(|strength| strength.weight() > 0).max();
+        let positive_total = possibilities.iter().map(|possibility| i128::from(possibility.strength.count().max(0))).sum();
+        let greatest_positive = possibilities.first().map(|possibility| possibility.strength).filter(|strength| strength.count() > 0);
         for possibility in &mut possibilities {
+            possibility.positive_total = positive_total;
             possibility.is_top_tie = Some(possibility.strength) == greatest_positive;
         }
         Some(possibilities)
@@ -178,6 +190,8 @@ pub struct AnswerPossibility {
     strength: Relevance,
     complete_rows: usize,
     sources: Vec<AnswerSourceContribution>,
+    /// The positive evidence of every possibility in the same view.
+    positive_total: i128,
     is_top_tie: bool,
 }
 
@@ -187,9 +201,22 @@ impl AnswerPossibility {
         &self.value
     }
 
-    /// Returns the signed strength calculated by the current Relevance rule.
+    /// Returns the signed evidence count behind this value, the sum of its
+    /// distinct source contributions.
     pub fn strength(&self) -> Relevance {
         self.strength
+    }
+
+    /// Returns this value's share of the positive evidence among the
+    /// possibilities of the same view, or zero when its own evidence is zero
+    /// or negative.
+    pub fn probability(&self) -> f64 {
+        let (numerator, denominator) = self.probability_fraction();
+        if numerator == 0 {
+            0.0
+        } else {
+            numerator as f64 / denominator as f64
+        }
     }
 
     /// Returns the number of complete proof-bearing rows projecting this value.
@@ -202,9 +229,16 @@ impl AnswerPossibility {
         &self.sources
     }
 
-    /// Returns whether this value shares the greatest positive strength.
+    /// Returns whether this value is among the most probable, which choice
+    /// separates by canonical spelling.
     pub fn is_top_tie(&self) -> bool {
         self.is_top_tie
+    }
+
+    /// Returns the probability as this value's positive evidence over the
+    /// view's positive total, without reducing the fraction.
+    pub(super) fn probability_fraction(&self) -> (i128, i128) {
+        (i128::from(self.strength.count().max(0)), self.positive_total)
     }
 }
 
@@ -229,7 +263,7 @@ impl AnswerSourceContribution {
         &self.concept
     }
 
-    /// Returns the Relevance stored on the source Concept.
+    /// Returns the evidence count stored on the source Concept.
     pub fn relevance(&self) -> Relevance {
         self.relevance
     }

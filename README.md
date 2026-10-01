@@ -80,7 +80,7 @@ Here the global view supplies `[known]` to the question. Reading it with `$` als
 
 ## Experience and choice
 
-Repeating an experience raises its current integer weight:
+Relevance counts evidence. Repeating an experience adds one to its count:
 
 ```text
 {world} ~= [morning]->[birds]
@@ -90,9 +90,11 @@ Repeating an experience raises its current integer weight:
 ${answer}
 ```
 
-The last command shows `x2 [birds]` and `[traffic]`. `x2 [birds]` is the compact form of two equal bird members. Pangine currently exposes remembered support this way.
+The last command shows `x2 [birds]` and `[traffic]`. `x2 [birds]` is the compact form of two equal bird members, one for each time that experience was remembered.
 
-`^{answer}` chooses the greatest positive weight and uses canonical order to break a tie. This is a deterministic placeholder, not probability, confidence, sampling, or a finished theory of Relevance.
+An answer reads these counts as probabilities. Each value's probability is its share of the positive evidence among the alternatives, so birds is 2/3 and traffic 1/3. The members of an unordered Concept read the same way: `x2[tea]x3[coffee]` is tea 2/5 and coffee 3/5. The probability is the relative frequency of what Pangine remembers, not a calibrated confidence that an answer is true.
+
+`^{answer}` chooses the most probable value, the one with the greatest positive count, and uses canonical order to break a tie. Evidence can be negative: an inverted member such as `![tea]` counts minus one, and `@-=` subtracts matching evidence from an answer. A value whose evidence is zero or negative has probability zero and is never chosen. When no value has positive evidence, `^` returns `[]`.
 
 I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. A program can also inspect the possibilities, ask another question, or leave the answer open. A consumer's interpretation or choice policy should remain distinguishable from the behavior Pangine supplies.
 
@@ -206,7 +208,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `^operand` | Choose and update every linked output |
 | `${*}` | Inspect the ordinary Concepts currently live in the engine |
 
-At the interactive CLI prompt, `inspect operand` lists each linked possibility, its strength and complete-row count, every signed source contribution, and all current top ties. It is a console diagnostic, not `.pae` syntax.
+At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, every signed source contribution, and all current top ties. It is a console diagnostic, not `.pae` syntax.
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 
@@ -216,7 +218,7 @@ The Rust prototype includes the parser, canonical Concept graph, mutable Percept
 
 Questions preserve complete rows and their source contributions. The Rust Answer API can branch, choose, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
-The current choice rule uses signed integer support and a deterministic tie break. It remains a placeholder rather than a settled meaning for Relevance. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
+Relevance is a signed evidence count read as probabilities, and `^` chooses the most probable value. How evidence from several experiences should combine within one joined row is still being settled. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 
 ## Run Pangine
 

@@ -324,11 +324,11 @@ fn formatting_round_trips_and_relevance_entries_are_ordered() {
     assert_eq!(concept, reparsed);
 
     let relevance = test.concept("[A]*[A]*[C]*[C]*[B]*[C]");
-    let x_coefficients: Vec<_> = test.engine().get_relevance_map(&relevance).into_iter().map(|(relevance, _)| relevance.x_coefficient).collect();
+    let x_coefficients: Vec<_> = test.engine().get_relevance_map(&relevance).into_iter().map(|(relevance, _)| relevance.count()).collect();
     assert_eq!(x_coefficients, vec![3, 2, 1]);
 
     let equal_relevance = test.concept("[A]*[C]*[B]");
-    let x_coefficients: Vec<_> = test.engine().get_relevance_map(&equal_relevance).into_iter().map(|(relevance, _)| relevance.x_coefficient).collect();
+    let x_coefficients: Vec<_> = test.engine().get_relevance_map(&equal_relevance).into_iter().map(|(relevance, _)| relevance.count()).collect();
     assert_eq!(x_coefficients, vec![1, 1, 1]);
 }
 

@@ -146,7 +146,7 @@ impl<'a> GraphBuilder<'a> {
             target: target.index(),
             role,
             owner,
-            x_coefficient: relevance.x_coefficient.to_string(),
+            x_coefficient: relevance.count().to_string(),
         });
     }
 }

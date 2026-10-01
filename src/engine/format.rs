@@ -204,11 +204,11 @@ impl Pangine {
 fn compare_canonical_coefficients_desc(left: Relevance, right: Relevance) -> Ordering {
     // Canonical text groups larger magnitudes first while retaining the sign
     // as a deterministic tie-breaker.
-    right.x_coefficient.unsigned_abs().cmp(&left.x_coefficient.unsigned_abs()).then_with(|| right.x_coefficient.cmp(&left.x_coefficient))
+    right.count().unsigned_abs().cmp(&left.count().unsigned_abs()).then_with(|| right.count().cmp(&left.count()))
 }
 
 pub(super) fn format_x_coefficient(relevance: Relevance) -> String {
-    match relevance.x_coefficient {
+    match relevance.count() {
         1 => String::new(),
         -1 => "!".to_owned(),
         x_coefficient => format!("x{x_coefficient}"),

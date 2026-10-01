@@ -7,7 +7,7 @@ use std::io::{self, Write};
 const DEBUG_CONSOLE_HELP: &str = "\
 Commands:
   help, h          Show this help
-  inspect operand  Show linked values and the sources behind their strengths
+  inspect operand  Show linked values, their probabilities, and their sources
   quit, q          Exit
 
 Concept syntax:
@@ -22,7 +22,7 @@ Concept syntax:
   [A]/[B]                    Merge with inverted [B]
   ![A]                       Inversion
   [A]->[B]->[C]              Ordered composition
-  x2[A]x3[B]                 Signed integer coefficients
+  x2[A]x3[B]                 Signed evidence counts
 
 Percept operations:
   {name} = expression      Assign
@@ -47,28 +47,31 @@ Experience:
   {memory} ~= [cat]->{input}
   Evaluates assigned Percepts in the complete input, then records the grounded
   result as one experience owned by {memory}. Percepts populated by experience
-  remain references. Repeating an equal Concept adds default relevance to that
-  member. Questions derive recursive matches without multiplying one experience
-  by match routes.
+  remain references. Repeating an equal Concept adds one to that member's
+  evidence count. Questions derive recursive matches without multiplying one
+  experience by match routes.
 
 Scripts:
   expression; expression    Multiple statements
   // line comment            C++-style comment
   /* block comment */        C-style comment
 
-Choice:
-  ^operand chooses the greatest positive current result. For output Percepts
-  from one question, it removes incompatible answers and refreshes every linked
+Relevance and choice:
+  Coefficients count evidence. A value's probability is its share of the
+  positive evidence among the alternatives, so x2[tea]x3[coffee] reads as tea
+  2/5 and coffee 3/5. Evidence at or below zero has probability 0.
+
+  ^operand chooses the most probable current result. For output Percepts from
+  one question, it removes incompatible answers and refreshes every linked
   output. Several output Percepts in one operand are chosen together.
 
   {choice} = x2[tea]x3[coffee]
   ^{choice}             returns [coffee]
   ^({animal}->{food}) chooses one complete animal-food pair
 
-  Exact top-weight ties use the earliest canonical Concept spelling. If no
-  entry has positive weight, ^ returns []. Zero-weight entries disappear when
-  their Concept is built and are not decision candidates. This is a
-  deterministic baseline rule. Richer sampling behavior remains open.
+  Exact ties use the earliest canonical Concept spelling. If no entry has
+  positive evidence, ^ returns []. Zero counts disappear when their Concept is
+  built and are not decision candidates.
 ";
 
 // Interactive console and diagnostic lines.
@@ -106,12 +109,14 @@ impl Pangine {
             let rows = possibility.complete_rows();
             let row_label = if rows == 1 { "row" } else { "rows" };
             let value = self.format_concept(possibility.value(), false);
-            lines.push(format!("  {marker} {:+}, {rows} {row_label}: {value}", possibility.strength().weight()));
+            let (numerator, denominator) = possibility.probability_fraction();
+            let probability = format_probability(numerator, denominator);
+            lines.push(format!("  {marker} {:+}, p={probability}, {rows} {row_label}: {value}", possibility.strength().count()));
 
             let mut sources = possibility
                 .sources()
                 .iter()
-                .map(|source| (self.format_concept(source.subject(), false), self.format_concept(source.concept(), false), source.contribution().weight()))
+                .map(|source| (self.format_concept(source.subject(), false), self.format_concept(source.concept(), false), source.contribution().count()))
                 .collect::<Vec<_>>();
             sources.sort();
 
@@ -174,14 +179,15 @@ impl Pangine {
 
     fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId) -> String {
         let mut out = String::from("  ");
-        let add_separator = relevance.x_coefficient != 1 && relevance.x_coefficient != -1;
-        let wrap_concept = relevance.x_coefficient != 1 && matches!(concept.0.kind, ConceptKind::Unordered | ConceptKind::Ordered { .. });
+        let count = relevance.count();
+        let add_separator = count != 1 && count != -1;
+        let wrap_concept = count != 1 && matches!(concept.0.kind, ConceptKind::Unordered | ConceptKind::Ordered { .. });
 
-        if relevance.x_coefficient == -1 {
+        if count == -1 {
             out.push('!');
         }
 
-        if relevance.x_coefficient != 1 && relevance.x_coefficient != -1 {
+        if count != 1 && count != -1 {
             out.push_str(&format_x_coefficient(relevance));
         }
 
@@ -198,6 +204,25 @@ impl Pangine {
         }
         out
     }
+}
+
+fn format_probability(numerator: i128, denominator: i128) -> String {
+    if numerator == 0 {
+        return "0".to_owned();
+    }
+
+    let divisor = greatest_common_divisor(numerator, denominator);
+    match (numerator / divisor, denominator / divisor) {
+        (numerator, 1) => numerator.to_string(),
+        (numerator, denominator) => format!("{numerator}/{denominator}"),
+    }
+}
+
+fn greatest_common_divisor(mut left: i128, mut right: i128) -> i128 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
 }
 
 fn debug_console_help(command: &str) -> Option<&'static str> {
@@ -231,7 +256,7 @@ mod tests {
             "(expression)               Make one complete surrounding operand",
             "[A]*[B]                    Merge unordered Concept members",
             "[A]/[B]",
-            "x2[A]x3[B]                 Signed integer coefficients",
+            "x2[A]x3[B]                 Signed evidence counts",
             "{name} ~= expression     Capture one experience",
             "subject @ expression       Complete a Concept",
             "{source} @ expression    Complete one retained Percept source",
@@ -241,7 +266,8 @@ mod tests {
             "{target} @+= {evidence} Add matching evidence",
             "{target} @-= {evidence} Subtract matching evidence",
             "${*}                     Inspect all live ordinary Concepts",
-            "Repeating an equal Concept adds default relevance",
+            "Repeating an equal Concept adds one to that member's",
+            "x2[tea]x3[coffee] reads as tea",
             "^{choice}",
         ] {
             assert!(help.contains(expected), "missing help entry: {expected}");
@@ -259,6 +285,33 @@ mod tests {
         assert_eq!(debug_console_inspection_operand("inspect"), Some(""));
         assert_eq!(debug_console_inspection_operand("inspector {choice}"), None);
         assert_eq!(debug_console_inspection_operand("[inspect]"), None);
+    }
+
+    #[test]
+    fn inspection_probabilities_print_as_reduced_fractions() {
+        assert_eq!(format_probability(0, 0), "0");
+        assert_eq!(format_probability(0, 3), "0");
+        assert_eq!(format_probability(3, 3), "1");
+        assert_eq!(format_probability(2, 4), "1/2");
+        assert_eq!(format_probability(2, 3), "2/3");
+    }
+
+    #[test]
+    fn debug_console_inspection_reads_repeated_experience_as_probabilities() {
+        let mut pangine = Pangine::new();
+        for script in ["{world} ~= [morning]->[birds]", "{world} ~= [morning]->[birds]", "{world} ~= [morning]->[traffic]", "{world} @ [morning]->{answer}"] {
+            assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
+        }
+
+        assert_eq!(
+            pangine.debug_answer_inspection_lines("{answer}"),
+            Ok(vec![
+                "  * +2, p=2/3, 1 row: [birds]".to_owned(),
+                "      +2 from {world}: [morning]->[birds]".to_owned(),
+                "    +1, p=1/3, 1 row: [traffic]".to_owned(),
+                "      +1 from {world}: [morning]->[traffic]".to_owned(),
+            ])
+        );
     }
 
     #[test]
@@ -282,12 +335,12 @@ mod tests {
         assert_eq!(
             pangine.debug_answer_inspection_lines("{choice}"),
             Ok(vec![
-                "    +0, 1 row: [A]".to_owned(),
+                "  * +1, p=1, 1 row: [B]".to_owned(),
+                "      +1 from {candidates}: [B]".to_owned(),
+                "    +0, p=0, 1 row: [A]".to_owned(),
                 "      +1 from {candidates}: [A]".to_owned(),
                 "      -2 from {failed}: [A]".to_owned(),
                 "      +1 from {helpful}: [A]".to_owned(),
-                "  * +1, 1 row: [B]".to_owned(),
-                "      +1 from {candidates}: [B]".to_owned(),
             ])
         );
         assert_eq!(pangine.debug_answer_inspection_lines("{missing}"), Err("operand is not part of one linked Answer".to_owned()));

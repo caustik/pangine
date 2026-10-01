@@ -188,7 +188,7 @@ impl IntoIterator for ConceptMap {
 fn entry_fingerprint(concept: &ConceptId, relevance: Relevance) -> u64 {
     let mut hasher = DefaultHasher::new();
     concept.hash(&mut hasher);
-    relevance.x_coefficient.hash(&mut hasher);
+    relevance.count().hash(&mut hasher);
     hasher.finish()
 }
 

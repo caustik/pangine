@@ -200,14 +200,14 @@ fn inspect(pangine: &mut Pangine, answer: &AnswerView) -> BTreeMap<String, Possi
                 .map(|source| Source {
                     subject: pangine.format_concept(source.subject(), false),
                     concept: pangine.format_concept(source.concept(), false),
-                    relevance: source.relevance().weight(),
-                    contribution: source.contribution().weight(),
+                    relevance: source.relevance().count(),
+                    contribution: source.contribution().count(),
                 })
                 .collect();
             (
                 value,
                 Possibility {
-                    strength: possibility.strength().weight(),
+                    strength: possibility.strength().count(),
                     complete_rows: possibility.complete_rows(),
                     sources,
                     is_top_tie: possibility.is_top_tie(),

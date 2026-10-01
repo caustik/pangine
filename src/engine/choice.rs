@@ -1,4 +1,4 @@
-//! Choice (`^`) under the current placeholder rule: the greatest positive weight wins, and canonical order breaks ties.
+//! Choice (`^`): the most probable value, the one with the greatest positive evidence count, wins, and canonical order breaks ties.
 
 use super::{CompletionProjectionWitnesses, ConceptId, ConceptKind, LiveConceptAnswer, Pangine};
 
@@ -16,23 +16,23 @@ impl Pangine {
             return Some(concept);
         }
 
-        self.select_greatest_positive(concept.0.subconcepts.iter().map(|(candidate, relevance)| (candidate, relevance.weight())))
+        self.select_greatest_positive(concept.0.subconcepts.iter().map(|(candidate, relevance)| (candidate, relevance.count())))
     }
 
     fn select_greatest_positive<'a>(&self, candidates: impl IntoIterator<Item = (&'a ConceptId, i64)>) -> Option<ConceptId> {
         let mut selected = None;
-        for (candidate, weight) in candidates {
-            if weight <= 0 {
+        for (candidate, count) in candidates {
+            if count <= 0 {
                 continue;
             }
 
             let canonical = self.format_concept(candidate, false);
             let replace = match &selected {
                 None => true,
-                Some((greatest, earliest, _)) => weight > *greatest || (weight == *greatest && canonical < *earliest),
+                Some((greatest, earliest, _)) => count > *greatest || (count == *greatest && canonical < *earliest),
             };
             if replace {
-                selected = Some((weight, canonical, candidate));
+                selected = Some((count, canonical, candidate));
             }
         }
         selected.map(|(_, _, candidate)| candidate.clone())
@@ -49,7 +49,7 @@ impl Pangine {
     pub(super) fn select_projection_candidate(&self, witnesses: &CompletionProjectionWitnesses) -> Option<ConceptId> {
         let candidates = witnesses
             .iter()
-            .map(|(candidate, sources)| self.question_source_support(sources).map(|support| (candidate, support.weight())))
+            .map(|(candidate, sources)| self.question_source_support(sources).map(|support| (candidate, support.count())))
             .collect::<Option<Vec<_>>>()?;
         self.select_greatest_positive(candidates)
     }

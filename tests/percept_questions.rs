@@ -377,7 +377,7 @@ fn wide_question_terminates_and_finds_the_expected_answer() {
 
     let candidates = named_value(&mut pangine, "${X}");
     assert_eq!(candidates[0].1, "V0");
-    assert!(candidates.iter().all(|(relevance, _)| relevance.weight() > 0));
+    assert!(candidates.iter().all(|(relevance, _)| relevance.count() > 0));
 }
 
 fn named_relevance(pangine: &Pangine, concept: &ConceptId) -> Vec<(Relevance, String)> {
@@ -397,7 +397,7 @@ fn named_value(pangine: &mut Pangine, input: &str) -> Vec<(Relevance, String)> {
 }
 
 fn candidate_weight(candidates: &[(Relevance, String)], name: &str) -> i64 {
-    candidates.iter().find_map(|(relevance, candidate)| (candidate == name).then(|| relevance.weight())).unwrap_or_else(|| panic!("missing candidate {name:?}"))
+    candidates.iter().find_map(|(relevance, candidate)| (candidate == name).then(|| relevance.count())).unwrap_or_else(|| panic!("missing candidate {name:?}"))
 }
 
 fn percept_relevance(pangine: &Pangine, percept: &ConceptId, concept: &ConceptId) -> Option<Relevance> {

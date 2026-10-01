@@ -663,7 +663,7 @@ impl ParsedUnionOperand {
 }
 
 fn compare_coefficients_desc(left: Relevance, right: Relevance) -> Ordering {
-    right.x_coefficient.cmp(&left.x_coefficient)
+    right.count().cmp(&left.count())
 }
 
 #[cfg(test)]
