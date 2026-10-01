@@ -50,6 +50,7 @@ const QUESTION_REMAINDER: &str = "pangine-answer-question-remainder";
 const ADJUSTMENTS: &str = "pangine-answer-adjustments";
 const ADJUSTMENT: &str = "pangine-answer-adjustment";
 const COMPOSED: &str = "pangine-answer-composed";
+const GENERALIZED: &str = "pangine-answer-generalized";
 const LIVE_ANSWER: &str = "pangine-live-answer";
 const LIVE_PROJECTIONS: &str = "pangine-answer-live-projections";
 const LIVE_PROJECTION: &str = "pangine-answer-live-projection";
@@ -307,8 +308,13 @@ fn encode_completion(pangine: &mut Pangine, completion: &Completion) -> ConceptI
             .collect::<Vec<_>>();
         fields.push(encode_concept_set(pangine, ADJUSTMENTS, adjustments));
     }
-    if completion.grade() == CompletionGrade::Composed {
-        fields.push(tagged(pangine, COMPOSED, Vec::new()));
+    match completion.grade() {
+        CompletionGrade::Exact => {}
+        CompletionGrade::Composed => fields.push(tagged(pangine, COMPOSED, Vec::new())),
+        CompletionGrade::Generalized { distance } => {
+            let distance = encode_unsigned(pangine, distance);
+            fields.push(tagged(pangine, GENERALIZED, vec![distance]));
+        }
     }
     tagged(pangine, ROW, fields)
 }
@@ -328,9 +334,17 @@ fn decode_completion(pangine: &Pangine, concept: &ConceptId) -> Option<Completio
         }
         None => Vec::new(),
     };
-    let grade = match optional.next_if(|field| tagged_fields(pangine, field, COMPOSED).is_some_and(<[ConceptId]>::is_empty)) {
-        Some(_) => CompletionGrade::Composed,
-        None => CompletionGrade::Exact,
+    let grade = if optional.next_if(|field| tagged_fields(pangine, field, COMPOSED).is_some_and(<[ConceptId]>::is_empty)).is_some() {
+        CompletionGrade::Composed
+    } else if let Some(field) = optional.next_if(|field| fixed_fields::<1>(pangine, field, GENERALIZED).is_some()) {
+        let [distance] = fixed_fields(pangine, field, GENERALIZED)?;
+        let distance = decode_unsigned(pangine, distance)?;
+        if distance == 0 {
+            return None;
+        }
+        CompletionGrade::Generalized { distance }
+    } else {
+        CompletionGrade::Exact
     };
     if optional.next().is_some() {
         return None;

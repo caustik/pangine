@@ -35,7 +35,7 @@ Percept operations:
   {source} @ expression    Complete one retained Percept source
   {*} @ expression         Complete the global Percept's Concepts
   {a}{b} @ expression   Complete several retained sources together
-  subject @~ expression      Graded: also compose parts seen separately
+  subject @~ expression      Graded: compose parts, generalize from cases
   A structural subject keeps embedded Percepts as data. Use $ to evaluate them.
   &operand                   Return the shared answer shape for linked Percepts
   $operand                   Read Percepts without changing their shared answer
@@ -62,7 +62,8 @@ Relevance and choice:
   positive evidence among the alternatives, so x2[tea]x3[coffee] reads as tea
   2/5 and coffee 3/5. Evidence at or below zero has probability 0. A row joined
   from separate experiences weighs the product of their counts. A graded @~
-  answer interpolates its probabilities from exact rows toward composed ones.
+  answer interpolates its probabilities from exact rows toward composed ones,
+  then toward single cases that differ from the question in a few names.
 
   ^operand chooses the most probable current result. For output Percepts from
   one question, it removes incompatible answers and refreshes every linked
@@ -135,8 +136,9 @@ impl Pangine {
 
             for (grade, sources, weight) in support {
                 let label = match grade {
-                    CompletionGrade::Exact => "",
-                    CompletionGrade::Composed => " composed",
+                    CompletionGrade::Exact => String::new(),
+                    CompletionGrade::Composed => " composed".to_owned(),
+                    CompletionGrade::Generalized { distance } => format!(" at distance {distance}"),
                 };
                 if let [(subject, source, _)] = sources.as_slice() {
                     lines.push(format!("      {weight:+}{label} from {subject}: {source}"));
@@ -280,7 +282,7 @@ mod tests {
             "{source} @ expression    Complete one retained Percept source",
             "{*} @ expression         Complete the global Percept's Concepts",
             "{a}{b} @ expression   Complete several retained sources together",
-            "subject @~ expression      Graded: also compose parts seen separately",
+            "subject @~ expression      Graded: compose parts, generalize from cases",
             "&operand                   Return the shared answer shape",
             "{target} @+= {evidence} Add matching evidence",
             "{target} @-= {evidence} Subtract matching evidence",
@@ -371,6 +373,24 @@ mod tests {
                 "      +1 composed from 2 sources:".to_owned(),
                 "        {closet}: ([bottom]->[jeans])([top]->[red])".to_owned(),
                 "        {closet}: [top]->[green]".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn debug_console_inspection_gives_the_distance_of_a_generalized_case() {
+        let mut pangine = Pangine::new();
+        for script in ["{games} ~= [x]->[_]->[o]->[c2]", "{games} ~= [x]->[_]->[_]->[c3]", "{games} @~ [x]->[_]->[o]->{move}"] {
+            assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
+        }
+
+        assert_eq!(
+            pangine.debug_answer_inspection_lines("{move}"),
+            Ok(vec![
+                "  * +1, p=3/4, 1 row: [c2]".to_owned(),
+                "      +1 from {games}: [x]->[_]->[o]->[c2]".to_owned(),
+                "    +1, p=1/4, 1 row: [c3]".to_owned(),
+                "      +1 at distance 1 from {games}: [x]->[_]->[_]->[c3]".to_owned(),
             ])
         );
     }

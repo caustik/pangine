@@ -375,6 +375,24 @@ pub enum CompletionGrade {
     /// Clause groups that share no blank were proven by separate experiences,
     /// which only a graded question allows.
     Composed,
+    /// One remembered experience matches the question's shape while some of
+    /// its names differ. The distance counts each name occurrence that differs
+    /// from the question, plus one for each extra value that a name the
+    /// question repeats takes.
+    Generalized {
+        /// How far the experience is from the question as asked.
+        distance: usize,
+    },
+}
+
+impl CompletionGrade {
+    /// Returns the grade of a row joined from rows of these two grades.
+    pub(super) fn joined(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Generalized { distance: left }, Self::Generalized { distance: right }) => Self::Generalized { distance: left.saturating_add(right) },
+            _ => self.max(other),
+        }
+    }
 }
 
 /// One proof-bearing correlated grounding of every Percept hole in a question.
@@ -457,6 +475,12 @@ impl CompletionResult {
     pub fn completions(&self) -> &[Completion] {
         &self.completions
     }
+
+    fn add_completions(&mut self, completions: Vec<Completion>) {
+        self.completions.extend(completions);
+        self.completions.sort();
+        self.completions.dedup();
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -486,12 +510,13 @@ impl Pangine {
     }
 
     /// Completes a structural question as `@~` does: the exact completions,
-    /// plus composed completions whose clause groups that share no blank were
-    /// proven by separate experiences.
+    /// composed completions whose clause groups that share no blank were
+    /// proven by separate experiences, and generalized completions from single
+    /// experiences that match the question's shape with some names changed.
     ///
     /// Every completion reports its [`CompletionGrade`], and a graded answer
     /// interpolates its probabilities from the exact grade toward the more
-    /// general one.
+    /// general ones.
     pub fn complete_graded(&mut self, selector: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
         self.complete_selector(selector, question, true)
     }
@@ -534,7 +559,12 @@ impl Pangine {
         }
 
         let snapshot = self.question_snapshot(sources, question);
-        Some(self.complete_question_snapshot(question, &snapshot, graded))
+        let mut result = self.complete_question_snapshot(question, &snapshot, graded);
+        if graded {
+            let generalized = self.generalized_completions(question, |pangine, opened| pangine.question_snapshot(sources, opened))?;
+            result.add_completions(generalized);
+        }
+        Some(result)
     }
 
     // The complete subject is treated as one source Concept with default
@@ -546,7 +576,12 @@ impl Pangine {
         }
 
         let snapshot = self.subject_question_snapshot(subject, question);
-        Some(self.complete_question_snapshot(question, &snapshot, graded))
+        let mut result = self.complete_question_snapshot(question, &snapshot, graded);
+        if graded {
+            let generalized = self.generalized_completions(question, |pangine, opened| pangine.subject_question_snapshot(subject, opened))?;
+            result.add_completions(generalized);
+        }
+        Some(result)
     }
 
     pub(super) fn complete_question_snapshot(&mut self, question: &ConceptId, snapshot: &super::QuestionSnapshot, graded: bool) -> CompletionResult {
@@ -642,8 +677,9 @@ impl Pangine {
     ///
     /// A joined row is weighed as the product of its two rows, so every pair
     /// of their derivations becomes one derivation of the joined row. A source
-    /// on both sides still counts once within each joined derivation, and the
-    /// joined row takes the less exact grade of the two.
+    /// on both sides still counts once within each joined derivation. The
+    /// joined row takes the less exact grade of the two, and two generalized
+    /// rows add their distances.
     pub(super) fn join_completion_results(
         &self,
         left: &CompletionResult,
@@ -676,7 +712,7 @@ impl Pangine {
                         adjustments.insert(CompletionAdjustment { factor: left_factor.checked_mul(right_factor)?, evidence });
                     }
                 }
-                let grade = left_completion.grade.max(right_completion.grade);
+                let grade = left_completion.grade.joined(right_completion.grade);
                 completions.insert(Completion { assignment, evidence, adjustments: adjustments.into_iter().collect(), grade });
             }
         }

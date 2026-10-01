@@ -14,6 +14,7 @@ mod concept_map;
 mod console;
 mod evaluation;
 mod format;
+mod generalization;
 mod interning;
 mod interpolation;
 mod parser;

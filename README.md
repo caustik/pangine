@@ -104,7 +104,7 @@ Every selected source Percept on the left of `@` can add support to matching res
 
 ## Graded questions
 
-`@` answers only from experience that fits the question as asked. `@~` asks the same question, then widens it when experience is thin. Today it widens in one step: parts of the question that share no blank may come from separate experiences.
+`@` answers only from experience that fits the question as asked. `@~` asks the same question, then widens it when experience is thin, in two steps: parts of the question that share no blank may come from separate experiences, and a single remembered case may match the question's shape with some of its names changed.
 
 ```text
 command> {closet} ~= ([top]->[red])([bottom]->[jeans])
@@ -138,7 +138,29 @@ command> $({shirt}->{pants})
 
 `@` returns the two outfits that were worn whole. `@~` also composes outfits from tops and bottoms seen separately, including the green top that was never worn with anything. Its probabilities mix the two levels with Witten-Bell interpolation, a standard rule from language modeling that needs no tuning: the more evidence the exact answer has, relative to how many different answers it gives, the more it counts, and the rest falls through to the composed answers. Here each outfit worn whole keeps 1/3 and each composed one gets 1/12.
 
-A graded `$` shows each probability as a share of a common denominator, so `x4` above means 4 of 12, and `^` chooses the most probable value. `inspect` marks every composed row and lists the separate experiences it came from. When nothing exact or composed fits, `@~` returns `[]`. A graded question with only exact rows answers exactly like `@`.
+A graded `$` shows each probability as a share of a common denominator, so `x4` above means 4 of 12, and `^` chooses the most probable value.
+
+A remembered case can also answer a question it does not match exactly:
+
+```text
+command> {families} ~= ([Tom]->[parent-of]->[Bob])([Bob]->[parent-of]->[Ann])([Tom]->[grandparent-of]->[Ann])
+  [Bob]->[parent-of]->[Ann]
+  [Tom]->[grandparent-of]->[Ann]
+  [Tom]->[parent-of]->[Bob]
+command> {families} ~= ([Liz]->[parent-of]->[Max])([Max]->[parent-of]->[Ivy])([Liz]->[grandparent-of]->[Ivy])
+  ([Bob]->[parent-of]->[Ann])([Tom]->[grandparent-of]->[Ann])([Tom]->[parent-of]->[Bob])
+  ([Liz]->[grandparent-of]->[Ivy])([Liz]->[parent-of]->[Max])([Max]->[parent-of]->[Ivy])
+command> {families} @ ([Joe]->[parent-of]->[Sue])([Sue]->[parent-of]->[Kim])([Joe]->[grandparent-of]->{who})
+  []
+command> {families} @~ ([Joe]->[parent-of]->[Sue])([Sue]->[parent-of]->[Kim])([Joe]->[grandparent-of]->{who})
+  x2(([Joe]->[grandparent-of]->[Kim])([Joe]->[parent-of]->[Sue])([Sue]->[parent-of]->[Kim]))
+command> ${who}
+  [Kim]
+```
+
+No family mentions Joe, so `@` finds nothing. `@~` compares the question with each remembered family as one complete case. The distance counts the name occurrences that differ, here Joe twice, Sue twice, and Kim once, plus one more for each extra value that a name the question repeats would take, so a match that split Joe into two different people would be farther away. In both families the grandchild sits where the question's `[Kim]` sits, so each family answers `[Kim]` in the question's own terms, and `@~` completes the whole family it never saw. A case counts only if it shares at least one name with the question, and each part of the question must come from a different part of the case. Only names inside ordered relationships can change; a name that is itself a member of an unordered group still matches by identity.
+
+Each distance forms one more level below the composed answers, and the same interpolation runs down every level. `inspect` marks composed rows with the separate experiences they came from and generalized rows with their distance and case. When nothing fits at any level, `@~` returns `[]`. A graded question with only exact rows answers exactly like `@`.
 
 ## Shared answers
 
@@ -241,7 +263,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `{memory} /= expression` | Merge inverted direct members into the value |
 | `{memory} ~= expression` | Capture assigned inputs and remember one experience |
 | `subject @ question` | Fill blanks from a Concept or one or more Percepts |
-| `subject @~ question` | Ask the same question, also composing parts seen separately |
+| `subject @~ question` | Ask the same question, also composing parts and generalizing from similar cases |
 | `{target} @+= {evidence}` | Add the evidence of matching rows from another linked answer |
 | `{target} @-= {evidence}` | Subtract the evidence of matching rows from another linked answer |
 | `&operand` | Return the shared answer shape |
@@ -249,7 +271,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `^operand` | Choose and update every linked output |
 | `${*}` | Inspect the ordinary Concepts currently live in the engine |
 
-At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed rows marked, and all current top ties. It is a console diagnostic, not `.pae` syntax.
+At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. It is a console diagnostic, not `.pae` syntax.
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 

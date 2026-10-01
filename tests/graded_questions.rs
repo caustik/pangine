@@ -45,7 +45,7 @@ fn a_graded_question_composes_parts_seen_separately_and_interpolates_their_proba
 #[test]
 fn the_removed_induction_now_prefers_the_case_observed_whole_and_labels_the_composed_one() {
     let mut pangine = Pangine::new();
-    for experience in ["([E]->[A])([K]->[L])", "([E]->[A])([M]->[N])", "([E]->[A])([P]->[Q])", "([C]->[A])([B]->[D])"] {
+    for experience in ["[E]->[A]", "[E]->[A]", "[E]->[A]", "([C]->[A])([B]->[D])"] {
         must_ref(&mut pangine, &format!("{{memory}} ~= {experience}"));
     }
 
@@ -61,6 +61,74 @@ fn the_removed_induction_now_prefers_the_case_observed_whole_and_labels_the_comp
     let grades = |possibility: &pangine::AnswerPossibility| possibility.support().iter().map(|support| support.grade()).collect::<Vec<_>>();
     assert!(grades(&possibilities[0]).contains(&CompletionGrade::Exact), "C was observed whole");
     assert!(grades(&possibilities[1]).iter().all(|grade| *grade == CompletionGrade::Composed), "E is only composed");
+}
+
+#[test]
+fn similar_cases_enter_below_the_exact_and_composed_answers() {
+    let mut pangine = Pangine::new();
+    for experience in ["([E]->[A])([K]->[L])", "([E]->[A])([M]->[N])", "([E]->[A])([P]->[Q])", "([C]->[A])([B]->[D])"] {
+        must_ref(&mut pangine, &format!("{{memory}} ~= {experience}"));
+    }
+
+    // Each partial experience also matches the question's shape with `[B]->[D]`
+    // renamed, so E gains support at distance 2 below its composed support.
+    must_ref(&mut pangine, "{memory} @~ ({x}->[A])([B]->[D])");
+    assert_eq!(readings(&mut pangine, "{x}"), vec![("[C]".to_owned(), 17.0 / 28.0), ("[E]".to_owned(), 11.0 / 28.0)]);
+    let grades = support_grades(&mut pangine, "{x}");
+    assert_eq!(grades[0], vec![CompletionGrade::Exact]);
+    assert!(grades[1].contains(&CompletionGrade::Composed) && grades[1].contains(&CompletionGrade::Generalized { distance: 2 }));
+}
+
+#[test]
+fn a_remembered_case_answers_a_new_one_in_its_own_terms() {
+    let mut pangine = Pangine::new();
+    must_ref(&mut pangine, "{families} ~= ([Tom]->[parent-of]->[Bob])([Bob]->[parent-of]->[Ann])([Tom]->[grandparent-of]->[Ann])");
+    must_ref(&mut pangine, "{families} ~= ([Liz]->[parent-of]->[Max])([Max]->[parent-of]->[Ivy])([Liz]->[grandparent-of]->[Ivy])");
+    let question = "([Joe]->[parent-of]->[Sue])([Sue]->[parent-of]->[Kim])([Joe]->[grandparent-of]->{who})";
+
+    assert_eq!(pangine.reference_concept(&format!("{{families}} @ {question}")).unwrap(), None);
+    let completed = must_ref(&mut pangine, &format!("{{families}} @~ {question}"));
+    assert_eq!(completed, must_ref(&mut pangine, "x2(([Joe]->[parent-of]->[Sue])([Sue]->[parent-of]->[Kim])([Joe]->[grandparent-of]->[Kim]))"));
+
+    // Each family keeps its people in the question's positions at distance 5.
+    // Splitting the question's repeated names would cost more, so no family
+    // answers with its own grandchild.
+    assert_eq!(readings(&mut pangine, "{who}"), vec![("[Kim]".to_owned(), 1.0)]);
+    assert_eq!(support_grades(&mut pangine, "{who}"), vec![vec![CompletionGrade::Generalized { distance: 5 }, CompletionGrade::Generalized { distance: 5 }]]);
+}
+
+#[test]
+fn a_nearby_board_shares_its_move_below_the_exact_game() {
+    let mut pangine = Pangine::new();
+    for game in ["[x]->[_]->[o]->[c2]", "[x]->[_]->[_]->[c3]", "[x]->[_]->[_]->[c3]"] {
+        must_ref(&mut pangine, &format!("{{games}} ~= {game}"));
+    }
+
+    must_ref(&mut pangine, "{games} @~ [x]->[_]->[o]->{move}");
+    assert_eq!(readings(&mut pangine, "{move}"), vec![("[c2]".to_owned(), 2.0 / 3.0), ("[c3]".to_owned(), 1.0 / 3.0)]);
+    assert_eq!(support_grades(&mut pangine, "{move}"), vec![vec![CompletionGrade::Exact], vec![CompletionGrade::Generalized { distance: 1 }]]);
+    assert_eq!(must_ref(&mut pangine, "${move}"), must_ref(&mut pangine, "x2[c2][c3]"));
+}
+
+#[test]
+fn the_2x_xor_note_answers_by_analogy() {
+    let mut pangine = Pangine::new();
+    must_ref(&mut pangine, "{notes} ~= ((([0]->[pair])->[1])->[xor])->[0]");
+    must_ref(&mut pangine, "{notes} @~ ((([1]->[pair])->[0])->[xor])->{answer}");
+    assert_eq!(must_ref(&mut pangine, "${answer}"), must_ref(&mut pangine, "[1]"));
+    assert_eq!(support_grades(&mut pangine, "{answer}"), vec![vec![CompletionGrade::Generalized { distance: 2 }]]);
+}
+
+#[test]
+fn a_case_must_share_a_name_and_supply_each_part_from_its_own_part() {
+    let mut pangine = Pangine::new();
+    // Nothing in this memory shares a name with the question.
+    must_ref(&mut pangine, "{memory} ~= [c]->[d]->[e]");
+    assert_eq!(pangine.reference_concept("{memory} @~ [a]->[b]->{x}").unwrap(), None);
+
+    // One remembered relationship cannot answer both parts of a question.
+    must_ref(&mut pangine, "{closet} ~= [top]->[green]");
+    assert_eq!(pangine.reference_concept("{closet} @~ ([top]->{shirt})([bottom]->{pants})").unwrap(), None);
 }
 
 #[test]
@@ -118,6 +186,11 @@ fn a_graded_answer_crosses_an_engine_boundary_with_its_grades() {
         must_ref(&mut pangine, &format!("{{m}} ~= {experience}"));
     }
     must_ref(&mut pangine, "{m} @~ ({x}->[A])([B]->{y})");
+    must_ref(&mut pangine, "{families} ~= ([Tom]->[parent-of]->[Bob])([Bob]->[parent-of]->[Ann])([Tom]->[grandparent-of]->[Ann])");
+    must_ref(&mut pangine, "{families} @~ ([Joe]->[parent-of]->[Sue])([Sue]->[parent-of]->[Kim])([Joe]->[grandparent-of]->{who})");
+    let who = pangine.reference_percept("who");
+    let generalized = pangine.linked_answer_value(&who).expect("generalized answer value");
+    let generalized_spelling = pangine.format_concept(&generalized, false);
     let x = pangine.reference_percept("x");
     let value = pangine.linked_answer_value(&x).expect("graded answer value");
     let spelling = pangine.format_concept(&value, false);
@@ -129,6 +202,18 @@ fn a_graded_answer_crosses_an_engine_boundary_with_its_grades() {
     let original_pairs = must_ref(&mut pangine, "$({x}->{y})");
     assert_eq!(restored.format_concept(&restored_pairs, false), pangine.format_concept(&original_pairs, false));
     assert_eq!(readings(&mut restored, "{x}"), readings(&mut pangine, "{x}"));
+
+    let transported = must_ref(&mut restored, &generalized_spelling);
+    assert!(restored.install_answer_value(&transported));
+    assert_eq!(support_grades(&mut restored, "{who}"), support_grades(&mut pangine, "{who}"));
+    assert_eq!(must_ref(&mut restored, "${who}"), must_ref(&mut restored, "[Kim]"));
+}
+
+fn support_grades(pangine: &mut Pangine, projection: &str) -> Vec<Vec<CompletionGrade>> {
+    let projection = must_ref(pangine, projection);
+    let view = pangine.answer_view(&projection).expect("linked answer");
+    let possibilities = view.possibilities(pangine).expect("inspectable answer");
+    possibilities.iter().map(|possibility| possibility.support().iter().map(|support| support.grade()).collect()).collect()
 }
 
 fn readings(pangine: &mut Pangine, projection: &str) -> Vec<(String, f64)> {
