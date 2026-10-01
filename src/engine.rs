@@ -22,6 +22,7 @@ mod question;
 mod question_index;
 
 pub use answer::{Answer, AnswerChoice, AnswerPossibility, AnswerSource, AnswerSupport, AnswerView};
+use choice::SampleGenerator;
 pub use completion::{Completion, CompletionEvidence, CompletionGrade, CompletionRemainder, CompletionRemainderSide, CompletionResult};
 use completion::{CompletionBindingOrigin, CompletionOrderedStep, CompletionOrderedWindow, CompletionRoute};
 use concept_answer::{ConceptAnswer, LiveConceptAnswer};
@@ -288,6 +289,8 @@ pub struct Pangine {
     composite_lookup: CompositeLookup,
     // Rebuild the weak indexes only as their stored size grows geometrically.
     next_index_prune_size: usize,
+    // The seeded generator that `^~` draws from.
+    sampler: SampleGenerator,
     #[cfg(test)]
     question_source_visits: usize,
 }
@@ -310,6 +313,7 @@ impl Default for Pangine {
             composites: Vec::new(),
             composite_lookup: CompositeLookup::new(),
             next_index_prune_size: 2,
+            sampler: SampleGenerator::default(),
             #[cfg(test)]
             question_source_visits: 0,
         }

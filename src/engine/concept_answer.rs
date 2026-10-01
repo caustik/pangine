@@ -9,6 +9,7 @@
 //! Decoding restores those values before any Answer operation sees them.
 
 use super::{
+    choice::Choice,
     completion::{CompletionAdjustment, CompletionEvidenceParts},
     Completion, CompletionBindingOrigin, CompletionEvidence, CompletionGrade, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder,
     CompletionRemainderSide, CompletionResult, CompletionRoute, ConceptId, ConceptKind, Pangine, ProjectionAssignment, QuestionSource,
@@ -212,10 +213,10 @@ impl ConceptAnswer {
         pangine.materialize_completion_rows(&result)
     }
 
-    pub(super) fn choose(&self, pangine: &mut Pangine, template: &ConceptId) -> Option<(ConceptId, Self)> {
+    pub(super) fn choose(&self, pangine: &mut Pangine, template: &ConceptId, choice: Choice) -> Option<(ConceptId, Self)> {
         self.projected_outputs(pangine, template)?;
         let result = self.to_result(pangine)?;
-        let (selected, result) = pangine.choose_completion_result(&result, template)?;
+        let (selected, result) = pangine.choose_completion_result(&result, template, choice)?;
         let mut answer = Self::from_result(pangine, &result);
         answer.questions = self.questions.clone();
         answer.outputs = self.outputs.clone();
@@ -773,12 +774,12 @@ mod tests {
         assert_eq!(answer_data.materialize(&mut pangine, &pair), Some(must_ref(&mut pangine, "x3([cat]->[fish])x5([cat]->[milk])x7([dog]->[fish])")));
         assert_eq!(answer_data.materialize_rows(&mut pangine), Some(must_ref(&mut pangine, "([cat]->[fish])([cat]->[milk])([dog]->[fish])")));
 
-        let (selected_animal, animal_answer) = answer_data.choose(&mut pangine, &animal).expect("animal choice");
+        let (selected_animal, animal_answer) = answer_data.choose(&mut pangine, &animal, Choice::MostProbable).expect("animal choice");
         assert_eq!(selected_animal, must_ref(&mut pangine, "[cat]"));
-        let (selected_food, _) = animal_answer.choose(&mut pangine, &food).expect("conditioned food choice");
+        let (selected_food, _) = animal_answer.choose(&mut pangine, &food, Choice::MostProbable).expect("conditioned food choice");
         assert_eq!(selected_food, must_ref(&mut pangine, "[milk]"));
 
-        let (selected_pair, pair_answer) = answer_data.choose(&mut pangine, &pair).expect("simultaneous choice");
+        let (selected_pair, pair_answer) = answer_data.choose(&mut pangine, &pair, Choice::MostProbable).expect("simultaneous choice");
         assert_eq!(selected_pair, must_ref(&mut pangine, "[dog]->[fish]"));
         assert_eq!(pair_answer.materialize(&mut pangine, &animal), Some(must_ref(&mut pangine, "x7[dog]")));
         assert_eq!(pair_answer.materialize(&mut pangine, &food), Some(must_ref(&mut pangine, "x7[fish]")));
@@ -808,7 +809,7 @@ mod tests {
         let adjusted =
             candidates.adjust(&mut pangine, &decision, &trusted_outcomes, &episode_decision, Relevance::DEFAULT).expect("higher-order candidate adjustment");
         assert_eq!(adjusted.materialize(&mut pangine, &decision), Some(must_ref(&mut pangine, "x3[B]x2[A]")));
-        assert_eq!(adjusted.choose(&mut pangine, &decision).unwrap().0, must_ref(&mut pangine, "[B]"));
+        assert_eq!(adjusted.choose(&mut pangine, &decision, Choice::MostProbable).unwrap().0, must_ref(&mut pangine, "[B]"));
         let encoded = adjusted.encode(&mut pangine);
         assert!(ConceptAnswer::decode(&pangine, &encoded).as_ref() == Some(&adjusted), "imported derivations survive the codec");
 

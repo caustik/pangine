@@ -104,8 +104,15 @@ pub(super) fn interpolated_probabilities(support: &CompletionProjectionSupport) 
     Some(probabilities.into_iter().map(|(value, probability)| (value.clone(), probability)).collect())
 }
 
+/// Restates each probability as a whole-number share over the probabilities'
+/// common denominator, keeping their exact ratios.
+pub(super) fn whole_number_shares<K: Ord>(probabilities: BTreeMap<K, Probability>) -> Option<BTreeMap<K, i128>> {
+    let denominator = common_denominator(probabilities.values())?;
+    probabilities.into_iter().map(|(value, probability)| Some((value, probability.numerator.checked_mul(denominator / probability.denominator)?))).collect()
+}
+
 /// Returns the least common multiple of the probabilities' denominators.
-pub(super) fn common_denominator<'a>(probabilities: impl IntoIterator<Item = &'a Probability>) -> Option<i128> {
+fn common_denominator<'a>(probabilities: impl IntoIterator<Item = &'a Probability>) -> Option<i128> {
     probabilities.into_iter().try_fold(1_i128, |common, probability| {
         let divisor = greatest_common_divisor(common, probability.denominator);
         (common / divisor).checked_mul(probability.denominator)
@@ -136,5 +143,7 @@ mod tests {
         assert!(Probability::new(1, 3).unwrap() < Probability::new(1, 2).unwrap());
         assert_eq!(Probability::new(9, 40).unwrap().cmp(&Probability::new(18, 80).unwrap()), Ordering::Equal);
         assert_eq!(common_denominator([Probability::new(9, 40).unwrap(), Probability::new(23, 120).unwrap()].iter()), Some(120));
+        let shares = whole_number_shares(BTreeMap::from([("C-D", Probability::new(9, 40).unwrap()), ("E-D", Probability::new(23, 120).unwrap())]));
+        assert_eq!(shares, Some(BTreeMap::from([("C-D", 27), ("E-D", 23)])));
     }
 }

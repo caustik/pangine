@@ -1,6 +1,6 @@
 # Pangine
 
-Pangine is an experimental language for writing information as simple shapes and asking questions of those shapes.
+Pangine is an experimental language for writing experience as simple shapes and asking questions of it. It answers exactly from what it remembers, or with graded answers composed from parts and generalized from similar cases, and every answer keeps its sources.
 
 Created by [Aaron (`caustik`)](https://github.com/caustik) and released by APU Software, LLC.
 
@@ -98,6 +98,29 @@ A row joined from separate experiences weighs the product of their counts, the n
 
 `^{answer}` chooses the most probable value, the one with the greatest positive count, and uses canonical order to break a tie. Evidence can be negative: an inverted member such as `![tea]` counts minus one, and `@-=` subtracts matching evidence from an answer. A value whose evidence is zero or negative has probability zero and is never chosen. When no value has positive evidence, `^` returns `[]`.
 
+`^~{choice}` draws a value instead, with probability equal to its share, so tea comes up with probability 2/5 and coffee 3/5:
+
+```text
+command> {choice} = x2[tea]x3[coffee]
+  x3 [coffee]
+  x2 [tea]
+command> ^{choice}
+  [coffee]
+command> ^~{choice}
+  [coffee]
+command> ^~{choice}
+  [tea]
+command> ^~{choice}
+  [coffee]
+command> seed 0
+command> ^~{choice}
+  [coffee]
+command> ^~{choice}
+  [tea]
+```
+
+Each engine draws from its own generator, which starts at seed 0, so the same commands draw the same values in every run. `seed 0` restarted that sequence above; the console's `seed n` command and Rust's `set_sample_seed` choose another one. On a linked answer, `^~` removes incompatible rows exactly as `^` does, and on a graded answer it draws by the interpolated probabilities described below. When no value has positive evidence, `^~` also returns `[]`.
+
 I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. A program can also inspect the possibilities, ask another question, or leave the answer open. A consumer's interpretation or choice policy should remain distinguishable from the behavior Pangine supplies.
 
 Every selected source Percept on the left of `@` can add support to matching results. When a current value should only restrict the question, read it with `$` inside the question instead.
@@ -138,7 +161,7 @@ command> $({shirt}->{pants})
 
 `@` returns the two outfits that were worn whole. `@~` also composes outfits from tops and bottoms seen separately, including the green top that was never worn with anything. Its probabilities mix the two levels with Witten-Bell interpolation, a standard rule from language modeling that needs no tuning: the more evidence the exact answer has, relative to how many different answers it gives, the more it counts, and the rest falls through to the composed answers. Here each outfit worn whole keeps 1/3 and each composed one gets 1/12.
 
-A graded `$` shows each probability as a share of a common denominator, so `x4` above means 4 of 12, and `^` chooses the most probable value.
+A graded `$` shows each probability as a share of a common denominator, so `x4` above means 4 of 12. `^` chooses the most probable value, and `^~` draws one with these probabilities.
 
 A remembered case can also answer a question it does not match exactly:
 
@@ -269,9 +292,10 @@ A Percept populated through `~=` remains a reference when another experience men
 | `&operand` | Return the shared answer shape |
 | `$operand` | Read Percepts without changing their answer |
 | `^operand` | Choose and update every linked output |
+| `^~operand` | Draw one result by probability and update every linked output |
 | `${*}` | Inspect the ordinary Concepts currently live in the engine |
 
-At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. It is a console diagnostic, not `.pae` syntax.
+At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. `seed n` restarts the generator that `^~` draws from. Both are console commands, not `.pae` syntax.
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 
@@ -279,9 +303,9 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
 
-Questions preserve complete rows and their source contributions. In Rust, `complete` and `complete_graded` return the rows `@` and `@~` produce, and the Answer API can branch, choose, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
+Questions preserve complete rows and their source contributions. In Rust, `complete` and `complete_graded` return the rows `@` and `@~` produce, and the Answer API can branch, choose, sample, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
-Relevance is a signed evidence count read as probabilities, and `^` chooses the most probable value. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
+Relevance is a signed evidence count read as probabilities. `^` chooses the most probable value, and `^~` draws one by probability from a seeded generator. Persistence, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 
 ## Run Pangine
 

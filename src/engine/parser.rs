@@ -1,6 +1,6 @@
 //! Script entry points, statement splitting, lexical rules, and the recursive-descent parser.
 
-use super::{ConceptId, Pangine, ParsedUnionOperand, GLOBAL_PERCEPT_NAME};
+use super::{choice::Choice, ConceptId, Pangine, ParsedUnionOperand, GLOBAL_PERCEPT_NAME};
 use crate::Relevance;
 use std::fs;
 use std::io::{self, Write};
@@ -274,12 +274,13 @@ impl Pangine {
             Some('{') => Ok(self.parse_percept(parser)?.map(ParsedUnionOperand::ordinary)),
             Some(operator @ ('$' | '&' | '^')) => {
                 parser.next();
+                let choice = if operator == '^' && parser.consume('~') { Choice::Sampled } else { Choice::MostProbable };
                 let operand = self.parse_union_operand(parser)?.ok_or(ParseError::InvalidSyntax)?;
                 let operand = self.reference_union(&[operand])?.ok_or(ParseError::InvalidSyntax)?;
                 let result = match operator {
                     '$' => self.evaluate_concept(&operand),
                     '&' => self.linked_answer(&operand),
-                    '^' => self.make_decision(&operand),
+                    '^' => self.make_decision(&operand, choice),
                     _ => unreachable!(),
                 };
                 Ok(result.map(ParsedUnionOperand::ordinary))

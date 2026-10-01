@@ -8,6 +8,7 @@ const DEBUG_CONSOLE_HELP: &str = "\
 Commands:
   help, h          Show this help
   inspect operand  Show linked values, their probabilities, and their sources
+  seed n           Restart the generator that ^~ draws from at seed n
   quit, q          Exit
 
 Concept syntax:
@@ -69,13 +70,18 @@ Relevance and choice:
   one question, it removes incompatible answers and refreshes every linked
   output. Several output Percepts in one operand are chosen together.
 
+  ^~operand draws a result instead, with probability equal to its share, and
+  collapses the answer the same way. Each engine draws from its own seeded
+  generator, so a new console starting from seed 0 repeats its draws exactly.
+
   {choice} = x2[tea]x3[coffee]
   ^{choice}             returns [coffee]
+  ^~{choice}            returns [tea] with probability 2/5
   ^({animal}->{food}) chooses one complete animal-food pair
 
   Exact ties use the earliest canonical Concept spelling. If no entry has
-  positive evidence, ^ returns []. Zero counts disappear when their Concept is
-  built and are not decision candidates.
+  positive evidence, ^ and ^~ return []. Zero counts disappear when their
+  Concept is built and are not decision candidates.
 ";
 
 // Interactive console and diagnostic lines.
@@ -153,6 +159,12 @@ impl Pangine {
         Ok(lines)
     }
 
+    fn debug_console_seed(&mut self, operand: &str) -> Result<(), String> {
+        let seed = operand.trim_end().parse().map_err(|_| format!("seed expects one whole number from 0 to {}", u64::MAX))?;
+        self.set_sample_seed(seed);
+        Ok(())
+    }
+
     /// Runs the interactive Pangine console on standard input and output.
     pub fn debug_console(&mut self) -> io::Result<()> {
         let stdin = io::stdin();
@@ -178,7 +190,7 @@ impl Pangine {
                 continue;
             }
 
-            if let Some(operand) = debug_console_inspection_operand(script) {
+            if let Some(operand) = debug_console_command_operand(script, "inspect") {
                 match self.debug_answer_inspection_lines(operand) {
                     Ok(lines) => {
                         for line in lines {
@@ -186,6 +198,13 @@ impl Pangine {
                         }
                     }
                     Err(error) => println!("  {error}"),
+                }
+                continue;
+            }
+
+            if let Some(operand) = debug_console_command_operand(script, "seed") {
+                if let Err(error) = self.debug_console_seed(operand) {
+                    println!("  {error}");
                 }
                 continue;
             }
@@ -249,8 +268,9 @@ fn debug_console_help(command: &str) -> Option<&'static str> {
     matches!(command, "h" | "help").then_some(DEBUG_CONSOLE_HELP)
 }
 
-fn debug_console_inspection_operand(command: &str) -> Option<&str> {
-    let operand = command.strip_prefix("inspect")?;
+// A console command is its name alone, or its name, whitespace, and an operand.
+fn debug_console_command_operand<'a>(command: &'a str, name: &str) -> Option<&'a str> {
+    let operand = command.strip_prefix(name)?;
     if operand.is_empty() {
         return Some(operand);
     }
@@ -283,6 +303,8 @@ mod tests {
             "{*} @ expression         Complete the global Percept's Concepts",
             "{a}{b} @ expression   Complete several retained sources together",
             "subject @~ expression      Graded: compose parts, generalize from cases",
+            "seed n           Restart the generator that ^~ draws from",
+            "^~{choice}            returns [tea] with probability 2/5",
             "&operand                   Return the shared answer shape",
             "{target} @+= {evidence} Add matching evidence",
             "{target} @-= {evidence} Subtract matching evidence",
@@ -301,11 +323,42 @@ mod tests {
         assert!(debug_console_quit("quit"));
         assert!(!debug_console_quit("query"));
         assert!(!debug_console_quit("quitting"));
-        assert_eq!(debug_console_inspection_operand("inspect {choice}"), Some("{choice}"));
-        assert_eq!(debug_console_inspection_operand("inspect\t{choice}"), Some("{choice}"));
-        assert_eq!(debug_console_inspection_operand("inspect"), Some(""));
-        assert_eq!(debug_console_inspection_operand("inspector {choice}"), None);
-        assert_eq!(debug_console_inspection_operand("[inspect]"), None);
+        assert_eq!(debug_console_command_operand("inspect {choice}", "inspect"), Some("{choice}"));
+        assert_eq!(debug_console_command_operand("inspect\t{choice}", "inspect"), Some("{choice}"));
+        assert_eq!(debug_console_command_operand("inspect", "inspect"), Some(""));
+        assert_eq!(debug_console_command_operand("inspector {choice}", "inspect"), None);
+        assert_eq!(debug_console_command_operand("[inspect]", "inspect"), None);
+        assert_eq!(debug_console_command_operand("seed 7", "seed"), Some("7"));
+        assert_eq!(debug_console_command_operand("seeds 7", "seed"), None);
+    }
+
+    #[test]
+    fn the_seed_command_restarts_the_generator_that_sampling_draws_from() {
+        let draws = |seed: Option<&str>| {
+            let mut pangine = Pangine::new();
+            if let Some(seed) = seed {
+                pangine.debug_console_seed(seed).expect("a valid seed");
+            }
+            pangine.reference_concept("{choice} = x2[tea]x3[coffee]").unwrap();
+            (0..24)
+                .map(|_| {
+                    let value = pangine.reference_concept("^~{choice}").unwrap().expect("a drawn value");
+                    pangine.format_concept(&value, false)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(draws(Some("0")), draws(None), "a new engine starts from seed 0");
+        assert_eq!(draws(Some("7")), draws(Some("7")));
+        assert_ne!(draws(Some("7")), draws(None));
+
+        let mut pangine = Pangine::new();
+        let expected = Err(format!("seed expects one whole number from 0 to {}", u64::MAX));
+        for operand in ["", "-1", "seven", "18446744073709551616"] {
+            assert_eq!(pangine.debug_console_seed(operand), expected, "operand {operand:?}");
+        }
+        assert_eq!(pangine.debug_console_seed("18446744073709551615"), Ok(()));
+        assert_eq!(pangine.debug_console_seed("7 "), Ok(()));
     }
 
     #[test]

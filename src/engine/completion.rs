@@ -1,7 +1,7 @@
-use super::interpolation::{common_denominator, interpolated_probabilities};
+use super::interpolation::{interpolated_probabilities, whole_number_shares};
 use super::{
-    CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment, QuestionSelector, QuestionSource,
-    QuestionSourceView,
+    choice::Choice, CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment, QuestionSelector,
+    QuestionSource, QuestionSourceView,
 };
 use crate::Relevance;
 use std::cmp::Ordering;
@@ -838,20 +838,22 @@ impl Pangine {
             // A graded projection shows its interpolated probabilities as
             // whole-number shares over their common denominator, so reading the
             // shares gives the probabilities back.
-            let probabilities = interpolated_probabilities(&support)?;
-            let denominator = common_denominator(probabilities.values())?;
-            for (candidate, probability) in probabilities {
-                let (numerator, own_denominator) = probability.fraction();
-                let share = i64::try_from(numerator.checked_mul(denominator / own_denominator)?).ok()?;
+            for (candidate, share) in whole_number_shares(interpolated_probabilities(&support)?)? {
+                let share = i64::try_from(share).ok()?;
                 self.add_union_concept(&mut candidates, candidate, false, Relevance::new(share))?;
             }
         }
         Some(self.reference_map(&candidates))
     }
 
-    pub(super) fn choose_completion_result(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<(ConceptId, CompletionResult)> {
+    pub(super) fn choose_completion_result(
+        &mut self,
+        result: &CompletionResult,
+        template: &ConceptId,
+        choice: Choice,
+    ) -> Option<(ConceptId, CompletionResult)> {
         let support = self.completion_projection_support(result, template)?;
-        let selected = self.select_projection_candidate(&support)?;
+        let selected = self.select_projection_candidate(&support, choice)?;
         let mut result = result.clone();
         result.completions.retain(|completion| self.instantiate_completion_inner(template, &completion.assignment).as_ref() == Some(&selected));
         (!result.completions.is_empty()).then_some((selected, result))

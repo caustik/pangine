@@ -1,4 +1,5 @@
 use super::{
+    choice::Choice,
     completion::projection_strength,
     concept_answer::{ConceptAnswer, LiveConceptAnswer},
     interpolation::{interpolated_probabilities, Probability},
@@ -161,11 +162,26 @@ impl AnswerView {
     /// Chooses this projection and returns the selected Concept together with
     /// a new answer containing only compatible complete rows.
     pub fn choose(&self, pangine: &mut Pangine) -> Option<AnswerChoice> {
+        self.pick(pangine, Choice::MostProbable)
+    }
+
+    /// Draws one value of this projection with probability equal to its
+    /// share, as `^~` does, and returns it together with a new answer
+    /// containing only compatible complete rows.
+    ///
+    /// A graded answer draws by its interpolated probabilities. Each draw
+    /// advances the engine's generator, which
+    /// [`Pangine::set_sample_seed`] seeds.
+    pub fn sample(&self, pangine: &mut Pangine) -> Option<AnswerChoice> {
+        self.pick(pangine, Choice::Sampled)
+    }
+
+    fn pick(&self, pangine: &mut Pangine, choice: Choice) -> Option<AnswerChoice> {
         if !pangine.owns_answer(&self.answer) {
             return None;
         }
 
-        let (selected, result) = pangine.choose_completion_result(&self.answer.result, &self.projection)?;
+        let (selected, result) = pangine.choose_completion_result(&self.answer.result, &self.projection, choice)?;
         let answer = self.answer.derived(result);
         Some(AnswerChoice { selected, answer: answer.view(pangine, self.projection.clone())? })
     }
@@ -296,7 +312,7 @@ impl AnswerSource {
     }
 }
 
-/// The result of functionally choosing an answer view.
+/// The result of functionally choosing or sampling an answer view.
 pub struct AnswerChoice {
     pub(super) selected: ConceptId,
     pub(super) answer: AnswerView,

@@ -180,6 +180,12 @@ impl PangineSession {
         self.core = SessionCore::default();
         self.snapshot()
     }
+
+    /// Seeds the generator that `^~` draws from. JavaScript passes the seed as
+    /// a BigInt. A new or reset session starts from seed 0.
+    pub fn set_sample_seed(&mut self, seed: u64) {
+        self.core.engine.set_sample_seed(seed);
+    }
 }
 
 impl Default for PangineSession {
@@ -296,6 +302,27 @@ mod tests {
             possibilities["consoleLines"],
             serde_json::json!(["  ([cat]->[eats]->[fish])([cat]->[lives-in]->[house])", "  ([dog]->[eats]->[bone])([dog]->[lives-in]->[yard])"])
         );
+    }
+
+    #[test]
+    fn a_seeded_session_repeats_its_draws() {
+        let draws = |seed: Option<u64>| {
+            let mut session = PangineSession::new();
+            if let Some(seed) = seed {
+                session.set_sample_seed(seed);
+            }
+            session.core.execute("{choice} = x2[tea]x3[coffee]").unwrap();
+            (0..24)
+                .map(|_| {
+                    let view: serde_json::Value = serde_json::from_str(&session.core.execute("^~{choice}").unwrap()).unwrap();
+                    view["canonical"].as_str().unwrap().to_owned()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(draws(None), draws(Some(0)), "a new session starts from seed 0");
+        assert_eq!(draws(Some(7)), draws(Some(7)));
+        assert_ne!(draws(Some(7)), draws(None));
     }
 
     #[test]
