@@ -59,7 +59,7 @@ fn complete_experiences_keep_question_parts_together() {
 
     let materialized_memory = must_ref(&mut pangine, "${memory}");
     let question = must_ref(&mut pangine, question_text);
-    let materialized = pangine.complete_subject(&materialized_memory, &question).expect("valid materialized memory question");
+    let materialized = pangine.complete(&materialized_memory, &question).expect("valid materialized memory question");
     assert_eq!(materialized.completions().len(), 3);
     let materialized_pairs = materialized
         .completions()
@@ -211,7 +211,7 @@ fn unmatched_context_survives_the_same_completion_that_supplies_a_residual() {
 
     let direct_source = must_ref(&mut pangine, "([room][kettle][empty])->[result]");
     let direct_question = must_ref(&mut pangine, "([kettle][empty])->{direct-answer}");
-    let direct = pangine.complete_subject(&direct_source, &direct_question).expect("valid direct containment question");
+    let direct = pangine.complete(&direct_source, &direct_question).expect("valid direct containment question");
     assert_eq!(direct.completions().len(), 1);
     let direct_remainders = direct.completions()[0].evidence()[0].remainders().collect::<Vec<_>>();
     assert_eq!(direct_remainders.len(), 1);
@@ -277,7 +277,7 @@ fn ordinary_concepts_are_one_structural_source_for_the_same_completion_calculus(
     let mut pangine = Pangine::new();
     let subject = must_ref(&mut pangine, "([cat]->[eats])([dog]->[sleeps])");
     let question = must_ref(&mut pangine, "{what}->{whats}");
-    let result = pangine.complete_subject(&subject, &question).expect("valid ordinary subject");
+    let result = pangine.complete(&subject, &question).expect("valid ordinary subject");
 
     let pairs = result
         .completions()
@@ -328,7 +328,7 @@ fn graph_rows_can_be_stored_round_tripped_and_directly_questioned_again() {
     assert_eq!(reparsed, rows, "formatted result did not preserve its row boundaries: {formatted}");
 
     let direct_question = must_ref(&mut pangine, "({direct-start}->[r]->{direct-middle})({direct-middle}->[s]->{direct-end})");
-    let direct = pangine.complete_subject(&reparsed, &direct_question).expect("question grounded rows directly");
+    let direct = pangine.complete(&reparsed, &direct_question).expect("question grounded rows directly");
     let direct_paths = direct
         .completions()
         .iter()
@@ -437,9 +437,9 @@ fn console_question_results_are_grounded_rows() {
 }
 
 fn complete(pangine: &mut Pangine, source_names: &[&str], question: &str) -> CompletionResult {
-    let sources = source_names.iter().map(|name| pangine.reference_percept(name)).collect::<Vec<_>>();
+    let selector = must_ref(pangine, &source_names.iter().map(|name| format!("{{{name}}}")).collect::<String>());
     let question = must_ref(pangine, question);
-    pangine.complete_question(&sources, &question).expect("valid structural question")
+    pangine.complete(&selector, &question).expect("valid structural question")
 }
 
 fn bound_name(pangine: &mut Pangine, completion: &Completion, percept: &str) -> String {

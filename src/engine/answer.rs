@@ -1,4 +1,9 @@
-use super::{completion::projection_strength, concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, CompletionResult, ConceptId, Pangine};
+use super::{
+    completion::projection_strength,
+    concept_answer::{ConceptAnswer, LiveConceptAnswer},
+    interpolation::{interpolated_probabilities, Probability},
+    CompletionGrade, CompletionResult, ConceptId, Pangine,
+};
 use crate::Relevance;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -96,8 +101,10 @@ impl AnswerView {
     /// evidence count, probability, and the support behind that count.
     ///
     /// A possibility's probability is its share of the positive evidence among
-    /// these possibilities. A possibility whose evidence is zero or negative
-    /// stays in the list with probability zero, and equal counts keep canonical
+    /// these possibilities. In a graded answer, the shares are interpolated
+    /// from the exact grade toward the more general ones. A possibility whose
+    /// evidence is zero or negative stays in the list with probability zero,
+    /// and equal probabilities keep the larger count first, then canonical
     /// spelling order. `is_top_tie` identifies every most probable possibility;
     /// it is false for every possibility when none has positive evidence and
     /// choice abstains.
@@ -107,6 +114,7 @@ impl AnswerView {
         }
 
         let support = pangine.completion_projection_support(&self.answer.result, &self.projection)?;
+        let probabilities = interpolated_probabilities(&support)?;
         let mut complete_rows = BTreeMap::new();
         for completion in &self.answer.result.completions {
             let value = pangine.instantiate_completion(&self.projection, completion)?;
@@ -117,9 +125,11 @@ impl AnswerView {
             .into_iter()
             .map(|(value, derivations)| {
                 let strength = projection_strength(&derivations)?;
+                let probability = probabilities.get(&value).copied().unwrap_or(Probability::ZERO);
                 let support = derivations
                     .into_iter()
-                    .map(|((_, sources), weight)| AnswerSupport {
+                    .map(|((grade, _, sources), weight)| AnswerSupport {
+                        grade,
                         weight,
                         sources: sources
                             .into_iter()
@@ -132,18 +142,18 @@ impl AnswerView {
                     value,
                     strength,
                     support,
-                    positive_total: 0,
+                    probability,
                     is_top_tie: false,
                 })
             })
             .collect::<Option<Vec<_>>>()?;
-        possibilities.sort_by_cached_key(|possibility| (Reverse(possibility.strength), pangine.format_concept(&possibility.value, false)));
+        possibilities.sort_by_cached_key(|possibility| {
+            (Reverse(possibility.probability), Reverse(possibility.strength), pangine.format_concept(&possibility.value, false))
+        });
 
-        let positive_total = possibilities.iter().map(|possibility| i128::from(possibility.strength.count().max(0))).sum();
-        let greatest_positive = possibilities.first().map(|possibility| possibility.strength).filter(|strength| strength.count() > 0);
+        let greatest = possibilities.first().map(|possibility| possibility.probability).filter(|probability| !probability.is_zero());
         for possibility in &mut possibilities {
-            possibility.positive_total = positive_total;
-            possibility.is_top_tie = Some(possibility.strength) == greatest_positive;
+            possibility.is_top_tie = Some(possibility.probability) == greatest;
         }
         Some(possibilities)
     }
@@ -183,8 +193,7 @@ pub struct AnswerPossibility {
     strength: Relevance,
     complete_rows: usize,
     support: Vec<AnswerSupport>,
-    /// The positive evidence of every possibility in the same view.
-    positive_total: i128,
+    probability: Probability,
     is_top_tie: bool,
 }
 
@@ -201,15 +210,10 @@ impl AnswerPossibility {
     }
 
     /// Returns this value's share of the positive evidence among the
-    /// possibilities of the same view, or zero when its own evidence is zero
-    /// or negative.
+    /// possibilities of the same view, interpolated across grades for a graded
+    /// answer, or zero when its own evidence is zero or negative.
     pub fn probability(&self) -> f64 {
-        let (numerator, denominator) = self.probability_fraction();
-        if numerator == 0 {
-            0.0
-        } else {
-            numerator as f64 / denominator as f64
-        }
+        self.probability.as_f64()
     }
 
     /// Returns the number of complete proof-bearing rows projecting this value.
@@ -229,10 +233,9 @@ impl AnswerPossibility {
         self.is_top_tie
     }
 
-    /// Returns the probability as this value's positive evidence over the
-    /// view's positive total, without reducing the fraction.
+    /// Returns the probability as a reduced fraction.
     pub(super) fn probability_fraction(&self) -> (i128, i128) {
-        (i128::from(self.strength.count().max(0)), self.positive_total)
+        self.probability.fraction()
     }
 }
 
@@ -242,14 +245,20 @@ impl AnswerPossibility {
 /// counts, so sources joined from separate experiences multiply while one
 /// source proving several clauses counts once. Evidence imported by `@+=` or
 /// `@-=` keeps its signed factor. The weight adds up every complete row that
-/// the same combination supports.
+/// the same combination supports at the same grade.
 #[derive(Clone)]
 pub struct AnswerSupport {
+    grade: CompletionGrade,
     weight: Relevance,
     sources: Vec<AnswerSource>,
 }
 
 impl AnswerSupport {
+    /// Returns how closely the supported rows answer the question as asked.
+    pub fn grade(&self) -> CompletionGrade {
+        self.grade
+    }
+
     /// Returns the signed evidence this combination supplies.
     pub fn weight(&self) -> Relevance {
         self.weight

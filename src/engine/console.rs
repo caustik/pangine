@@ -1,6 +1,6 @@
 //! The interactive console, its help text, and diagnostic output lines.
 
-use super::{format::format_x_coefficient, ConceptId, ConceptKind, Pangine};
+use super::{format::format_x_coefficient, CompletionGrade, ConceptId, ConceptKind, Pangine};
 use crate::Relevance;
 use std::io::{self, Write};
 
@@ -35,6 +35,7 @@ Percept operations:
   {source} @ expression    Complete one retained Percept source
   {*} @ expression         Complete the global Percept's Concepts
   {a}{b} @ expression   Complete several retained sources together
+  subject @~ expression      Graded: also compose parts seen separately
   A structural subject keeps embedded Percepts as data. Use $ to evaluate them.
   &operand                   Return the shared answer shape for linked Percepts
   $operand                   Read Percepts without changing their shared answer
@@ -60,7 +61,8 @@ Relevance and choice:
   Coefficients count evidence. A value's probability is its share of the
   positive evidence among the alternatives, so x2[tea]x3[coffee] reads as tea
   2/5 and coffee 3/5. Evidence at or below zero has probability 0. A row joined
-  from separate experiences weighs the product of their counts.
+  from separate experiences weighs the product of their counts. A graded @~
+  answer interpolates its probabilities from exact rows toward composed ones.
 
   ^operand chooses the most probable current result. For output Percepts from
   one question, it removes incompatible answers and refreshes every linked
@@ -126,17 +128,21 @@ impl Pangine {
                             (subject, self.format_concept(source.concept(), false), self.format_debug_console_member(source.relevance(), source.concept()))
                         })
                         .collect::<Vec<_>>();
-                    (sources, support.weight().count())
+                    (support.grade(), sources, support.weight().count())
                 })
                 .collect::<Vec<_>>();
             support.sort();
 
-            for (sources, weight) in support {
+            for (grade, sources, weight) in support {
+                let label = match grade {
+                    CompletionGrade::Exact => "",
+                    CompletionGrade::Composed => " composed",
+                };
                 if let [(subject, source, _)] = sources.as_slice() {
-                    lines.push(format!("      {weight:+} from {subject}: {source}"));
+                    lines.push(format!("      {weight:+}{label} from {subject}: {source}"));
                     continue;
                 }
-                lines.push(format!("      {weight:+} from {} sources:", sources.len()));
+                lines.push(format!("      {weight:+}{label} from {} sources:", sources.len()));
                 for (subject, _, member) in sources {
                     lines.push(format!("        {subject}: {member}"));
                 }
@@ -228,23 +234,13 @@ impl Pangine {
     }
 }
 
+// Probabilities arrive as reduced fractions.
 fn format_probability(numerator: i128, denominator: i128) -> String {
-    if numerator == 0 {
-        return "0".to_owned();
-    }
-
-    let divisor = greatest_common_divisor(numerator, denominator);
-    match (numerator / divisor, denominator / divisor) {
+    match (numerator, denominator) {
+        (0, _) => "0".to_owned(),
         (numerator, 1) => numerator.to_string(),
         (numerator, denominator) => format!("{numerator}/{denominator}"),
     }
-}
-
-fn greatest_common_divisor(mut left: i128, mut right: i128) -> i128 {
-    while right != 0 {
-        (left, right) = (right, left % right);
-    }
-    left
 }
 
 fn debug_console_help(command: &str) -> Option<&'static str> {
@@ -284,6 +280,7 @@ mod tests {
             "{source} @ expression    Complete one retained Percept source",
             "{*} @ expression         Complete the global Percept's Concepts",
             "{a}{b} @ expression   Complete several retained sources together",
+            "subject @~ expression      Graded: also compose parts seen separately",
             "&operand                   Return the shared answer shape",
             "{target} @+= {evidence} Add matching evidence",
             "{target} @-= {evidence} Subtract matching evidence",
@@ -310,12 +307,11 @@ mod tests {
     }
 
     #[test]
-    fn inspection_probabilities_print_as_reduced_fractions() {
-        assert_eq!(format_probability(0, 0), "0");
-        assert_eq!(format_probability(0, 3), "0");
-        assert_eq!(format_probability(3, 3), "1");
-        assert_eq!(format_probability(2, 4), "1/2");
-        assert_eq!(format_probability(2, 3), "2/3");
+    fn inspection_probabilities_print_as_fractions() {
+        assert_eq!(format_probability(0, 1), "0");
+        assert_eq!(format_probability(1, 1), "1");
+        assert_eq!(format_probability(1, 2), "1/2");
+        assert_eq!(format_probability(9, 40), "9/40");
     }
 
     #[test]
@@ -355,6 +351,26 @@ mod tests {
                 "      +2 from 2 sources:".to_owned(),
                 "        {knowledge}: x2([Socrates]->[is-a]->[human])".to_owned(),
                 "        {knowledge}: [human]->[is-a]->[mortal]".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn debug_console_inspection_labels_rows_composed_from_parts_seen_separately() {
+        let mut pangine = Pangine::new();
+        for script in ["{closet} ~= ([top]->[red])([bottom]->[jeans])", "{closet} ~= [top]->[green]", "{closet} @~ ([top]->{shirt})([bottom]->{pants})"] {
+            assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
+        }
+
+        assert_eq!(
+            pangine.debug_answer_inspection_lines("{shirt}->{pants}"),
+            Ok(vec![
+                "  * +1, p=3/4, 1 row: [red]->[jeans]".to_owned(),
+                "      +1 from {closet}: ([bottom]->[jeans])([top]->[red])".to_owned(),
+                "    +1, p=1/4, 1 row: [green]->[jeans]".to_owned(),
+                "      +1 composed from 2 sources:".to_owned(),
+                "        {closet}: ([bottom]->[jeans])([top]->[red])".to_owned(),
+                "        {closet}: [top]->[green]".to_owned(),
             ])
         );
     }

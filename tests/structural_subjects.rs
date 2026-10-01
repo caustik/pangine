@@ -7,16 +7,19 @@ fn direct_and_retained_subjects_preserve_references_at_every_nested_level() {
     let variable = pangine.reference_percept("variable");
     let captured = pangine.reference_percept("captured");
     let current = must_ref(&mut pangine, "[current]");
-    let mut subject = variable.clone();
-    let mut question = captured.clone();
+    // A bare Percept on the left of `@` selects its source, so the direct
+    // subject starts as one ordered structure that contains the reference.
+    let outer = pangine.reference_name("outer");
+    let mut subject = pangine.compose_ordered(&[outer.clone(), variable.clone()]).expect("owned composition").expect("subject");
+    let mut question = pangine.compose_ordered(&[outer, captured.clone()]).expect("owned composition").expect("question");
 
     // The same source value can be questioned directly or retained as one
     // experience. Embedding it again does not change reference identity.
     for depth in 0..8 {
         assert!(pangine.set_percept_value(&variable, (depth % 2 == 0).then(|| current.clone())));
         assert!(pangine.set_percept_value(&subject_slot, Some(subject.clone())));
-        let direct = pangine.complete_subject(&subject, &question).expect("owned structural subject");
-        let retained = pangine.complete_question(std::slice::from_ref(&subject_slot), &question).expect("owned retained source");
+        let direct = pangine.complete(&subject, &question).expect("owned structural subject");
+        let retained = pangine.complete(&subject_slot, &question).expect("owned retained source");
         let [direct_row] = direct.completions() else {
             panic!("one direct completion at depth {depth}");
         };
@@ -74,10 +77,10 @@ fn foreign_structural_subjects_and_questions_are_still_rejected() {
     let question = must_ref(&mut pangine, "[field]->{output}");
     let foreign_subject = must_ref(&mut foreign, "[field]->{input}");
     let foreign_question = must_ref(&mut foreign, "[field]->{output}");
-    assert!(pangine.complete_subject(&foreign_subject, &question).is_none());
-    assert!(pangine.complete_subject(&subject, &foreign_question).is_none());
-    assert!(pangine.complete_selector(&foreign_subject, &question).is_none());
-    assert!(pangine.complete_selector(&subject, &foreign_question).is_none());
+    assert!(pangine.complete(&foreign_subject, &question).is_none());
+    assert!(pangine.complete(&subject, &foreign_question).is_none());
+    assert!(pangine.complete_graded(&foreign_subject, &question).is_none());
+    assert!(pangine.complete_graded(&subject, &foreign_question).is_none());
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

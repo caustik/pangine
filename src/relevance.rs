@@ -7,9 +7,10 @@
 /// would leave the signed 64-bit range fails instead of rounding.
 ///
 /// Answers read counts as probabilities. A value's probability is its share of
-/// the positive evidence among the alternatives, and choice takes the value
-/// with the greatest positive count. The reading is the relative frequency of
-/// remembered evidence, not a calibrated confidence.
+/// the positive evidence among the alternatives, and choice takes the most
+/// probable value. A graded answer interpolates those shares across its
+/// grades. The reading is the relative frequency of remembered evidence, not a
+/// calibrated confidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Relevance {
     count: i64,

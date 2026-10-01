@@ -15,12 +15,13 @@ mod console;
 mod evaluation;
 mod format;
 mod interning;
+mod interpolation;
 mod parser;
 mod question;
 mod question_index;
 
 pub use answer::{Answer, AnswerChoice, AnswerPossibility, AnswerSource, AnswerSupport, AnswerView};
-pub use completion::{Completion, CompletionEvidence, CompletionRemainder, CompletionRemainderSide, CompletionResult};
+pub use completion::{Completion, CompletionEvidence, CompletionGrade, CompletionRemainder, CompletionRemainderSide, CompletionResult};
 use completion::{CompletionBindingOrigin, CompletionOrderedStep, CompletionOrderedWindow, CompletionRoute};
 use concept_answer::{ConceptAnswer, LiveConceptAnswer};
 use concept_map::ConceptMap;
@@ -29,10 +30,10 @@ use question_index::PerceptQuestionIndex;
 
 type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
-/// The signed factor and distinct sources that identify one weighed derivation.
-type DerivationSources = (Relevance, BTreeSet<QuestionSource>);
+/// The grade, signed factor, and distinct sources that identify one weighed derivation.
+type DerivationKey = (CompletionGrade, Relevance, BTreeSet<QuestionSource>);
 /// Each projected value's derivations and their weights summed across rows.
-type CompletionProjectionSupport = BTreeMap<ConceptId, BTreeMap<DerivationSources, Relevance>>;
+type CompletionProjectionSupport = BTreeMap<ConceptId, BTreeMap<DerivationKey, Relevance>>;
 type QuestionSourceViewKey = (QuestionSource, ConceptId, BTreeMap<ConceptId, ConceptId>);
 type QuestionSourceViews = BTreeMap<QuestionSourceViewKey, BTreeSet<CompletionRoute>>;
 

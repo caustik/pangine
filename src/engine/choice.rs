@@ -1,6 +1,6 @@
-//! Choice (`^`): the most probable value, the one with the greatest positive evidence count, wins, and canonical order breaks ties.
+//! Choice (`^`): the most probable value wins, and canonical order breaks ties. For an exact answer or a plain value, that is the greatest positive evidence count.
 
-use super::{completion::projection_strength, CompletionProjectionSupport, ConceptId, ConceptKind, LiveConceptAnswer, Pangine};
+use super::{interpolation::interpolated_probabilities, CompletionProjectionSupport, ConceptId, ConceptKind, LiveConceptAnswer, Pangine};
 
 impl Pangine {
     pub(super) fn make_decision(&mut self, concept: &ConceptId) -> Option<ConceptId> {
@@ -46,11 +46,25 @@ impl Pangine {
         Some(selected)
     }
 
+    // A linked answer chooses its most probable value. For an exact answer
+    // that is the greatest positive count; a graded answer compares its
+    // interpolated probabilities.
     pub(super) fn select_projection_candidate(&self, support: &CompletionProjectionSupport) -> Option<ConceptId> {
-        let candidates = support
-            .iter()
-            .map(|(candidate, derivations)| projection_strength(derivations).map(|strength| (candidate, strength.count())))
-            .collect::<Option<Vec<_>>>()?;
-        self.select_greatest_positive(candidates)
+        let mut selected = None;
+        for (candidate, probability) in interpolated_probabilities(support)? {
+            if probability.is_zero() {
+                continue;
+            }
+
+            let canonical = self.format_concept(&candidate, false);
+            let replace = match &selected {
+                None => true,
+                Some((greatest, earliest, _)) => probability > *greatest || (probability == *greatest && canonical < *earliest),
+            };
+            if replace {
+                selected = Some((probability, canonical, candidate));
+            }
+        }
+        selected.map(|(_, _, candidate)| candidate)
     }
 }

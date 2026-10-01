@@ -44,9 +44,9 @@ impl Pangine {
         (!percepts.is_empty()).then_some(percepts)
     }
 
-    pub(super) fn answer_question(&mut self, selector: QuestionSelector, question: Option<ConceptId>) -> Option<ConceptId> {
+    pub(super) fn answer_question(&mut self, selector: QuestionSelector, question: Option<ConceptId>, graded: bool) -> Option<ConceptId> {
         let question = question?;
-        let mut result = self.complete_selected_question(selector, &question)?;
+        let mut result = self.complete_selected_question(selector, &question, graded)?;
         let mut outputs = BTreeSet::new();
         self.collect_output_percepts(&question, &mut outputs);
         if outputs.is_empty() {
@@ -504,8 +504,8 @@ mod tests {
             let full = full_question_snapshot(&mut pangine, std::slice::from_ref(&source), &question);
             assert!(filtered.iter().all(|(key, ancestors)| full.get(key).is_some_and(|full_ancestors| ancestors.is_subset(full_ancestors))));
 
-            let filtered_results = pangine.complete_question_snapshot(&question, &filtered);
-            let full_results = pangine.complete_question_snapshot(&question, &full);
+            let filtered_results = pangine.complete_question_snapshot(&question, &filtered, false);
+            let full_results = pangine.complete_question_snapshot(&question, &full, false);
             assert!(filtered_results.completions() == full_results.completions(), "question {question_text}");
         }
 

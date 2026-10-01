@@ -10,8 +10,8 @@
 
 use super::{
     completion::{CompletionAdjustment, CompletionEvidenceParts},
-    Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
-    CompletionResult, CompletionRoute, ConceptId, ConceptKind, Pangine, ProjectionAssignment, QuestionSource,
+    Completion, CompletionBindingOrigin, CompletionEvidence, CompletionGrade, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder,
+    CompletionRemainderSide, CompletionResult, CompletionRoute, ConceptId, ConceptKind, Pangine, ProjectionAssignment, QuestionSource,
 };
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,6 +49,7 @@ const SOURCE_REMAINDER: &str = "pangine-answer-source-remainder";
 const QUESTION_REMAINDER: &str = "pangine-answer-question-remainder";
 const ADJUSTMENTS: &str = "pangine-answer-adjustments";
 const ADJUSTMENT: &str = "pangine-answer-adjustment";
+const COMPOSED: &str = "pangine-answer-composed";
 const LIVE_ANSWER: &str = "pangine-live-answer";
 const LIVE_PROJECTIONS: &str = "pangine-answer-live-projections";
 const LIVE_PROJECTION: &str = "pangine-answer-live-projection";
@@ -306,27 +307,37 @@ fn encode_completion(pangine: &mut Pangine, completion: &Completion) -> ConceptI
             .collect::<Vec<_>>();
         fields.push(encode_concept_set(pangine, ADJUSTMENTS, adjustments));
     }
+    if completion.grade() == CompletionGrade::Composed {
+        fields.push(tagged(pangine, COMPOSED, Vec::new()));
+    }
     tagged(pangine, ROW, fields)
 }
 
 fn decode_completion(pangine: &Pangine, concept: &ConceptId) -> Option<Completion> {
-    let (bindings, evidence, mut adjustments) = match tagged_fields(pangine, concept, ROW)? {
-        [bindings, evidence] => (bindings, evidence, Vec::new()),
-        [bindings, evidence, adjustments] => {
-            let adjustments = tagged_fields(pangine, adjustments, ADJUSTMENTS)?
-                .iter()
-                .map(|adjustment| decode_adjustment(pangine, adjustment))
-                .collect::<Option<Vec<_>>>()?;
+    let fields = tagged_fields(pangine, concept, ROW)?;
+    let [bindings, evidence] = <&[ConceptId; 2]>::try_from(fields.get(..2)?).ok()?;
+    let mut optional = fields[2..].iter().peekable();
+    let mut adjustments = match optional.next_if(|field| tagged_fields(pangine, field, ADJUSTMENTS).is_some()) {
+        Some(field) => {
+            let adjustments =
+                tagged_fields(pangine, field, ADJUSTMENTS)?.iter().map(|adjustment| decode_adjustment(pangine, adjustment)).collect::<Option<Vec<_>>>()?;
             if adjustments.is_empty() {
                 return None;
             }
-            (bindings, evidence, adjustments)
+            adjustments
         }
-        _ => return None,
+        None => Vec::new(),
     };
+    let grade = match optional.next_if(|field| tagged_fields(pangine, field, COMPOSED).is_some_and(<[ConceptId]>::is_empty)) {
+        Some(_) => CompletionGrade::Composed,
+        None => CompletionGrade::Exact,
+    };
+    if optional.next().is_some() {
+        return None;
+    }
     adjustments.sort();
     adjustments.dedup();
-    Some(Completion::from_parts(decode_bindings(pangine, bindings, BINDINGS)?, decode_evidence_set(pangine, evidence)?, adjustments))
+    Some(Completion::from_parts(decode_bindings(pangine, bindings, BINDINGS)?, decode_evidence_set(pangine, evidence)?, adjustments, grade))
 }
 
 fn decode_adjustment(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionAdjustment> {
@@ -681,7 +692,7 @@ mod tests {
             // the separate discovery policy for questions without blanks.
             let snapshot =
                 BTreeMap::from([((QuestionSource::from_subject(source.clone()), source, BTreeMap::new()), BTreeSet::from([CompletionRoute::default()]))]);
-            let result = pangine.complete_question_snapshot(&question, &snapshot);
+            let result = pangine.complete_question_snapshot(&question, &snapshot, false);
             assert_eq!(result.completions().len(), count);
             let answer = ConceptAnswer::from_result(&pangine, &result);
             assert!(answer.outputs.is_empty());

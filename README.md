@@ -102,6 +102,44 @@ I think of `@` as leaving possible answers together and `^` as collapsing them t
 
 Every selected source Percept on the left of `@` can add support to matching results. When a current value should only restrict the question, read it with `$` inside the question instead.
 
+## Graded questions
+
+`@` answers only from experience that fits the question as asked. `@~` asks the same question, then widens it when experience is thin. Today it widens in one step: parts of the question that share no blank may come from separate experiences.
+
+```text
+command> {closet} ~= ([top]->[red])([bottom]->[jeans])
+  [bottom]->[jeans]
+  [top]->[red]
+command> {closet} ~= ([top]->[blue])([bottom]->[skirt])
+  ([bottom]->[jeans])([top]->[red])
+  ([bottom]->[skirt])([top]->[blue])
+command> {closet} ~= [top]->[green]
+  [top]->[green]
+  ([bottom]->[jeans])([top]->[red])
+  ([bottom]->[skirt])([top]->[blue])
+command> {closet} @ ([top]->{shirt})([bottom]->{pants})
+  ([bottom]->[jeans])([top]->[red])
+  ([bottom]->[skirt])([top]->[blue])
+command> {closet} @~ ([top]->{shirt})([bottom]->{pants})
+  ([bottom]->[jeans])([top]->[blue])
+  ([bottom]->[jeans])([top]->[green])
+  ([bottom]->[jeans])([top]->[red])
+  ([bottom]->[skirt])([top]->[blue])
+  ([bottom]->[skirt])([top]->[green])
+  ([bottom]->[skirt])([top]->[red])
+command> $({shirt}->{pants})
+  x4([blue]->[skirt])
+  x4([red]->[jeans])
+  [blue]->[jeans]
+  [green]->[jeans]
+  [green]->[skirt]
+  [red]->[skirt]
+```
+
+`@` returns the two outfits that were worn whole. `@~` also composes outfits from tops and bottoms seen separately, including the green top that was never worn with anything. Its probabilities mix the two levels with Witten-Bell interpolation, a standard rule from language modeling that needs no tuning: the more evidence the exact answer has, relative to how many different answers it gives, the more it counts, and the rest falls through to the composed answers. Here each outfit worn whole keeps 1/3 and each composed one gets 1/12.
+
+A graded `$` shows each probability as a share of a common denominator, so `x4` above means 4 of 12, and `^` chooses the most probable value. `inspect` marks every composed row and lists the separate experiences it came from. When nothing exact or composed fits, `@~` returns `[]`. A graded question with only exact rows answers exactly like `@`.
+
 ## Shared answers
 
 Outputs from one question stay connected to the same complete answer. `&` reveals that answer's question shape, `$` reads it, and `^` removes complete rows that do not fit the chosen result.
@@ -203,6 +241,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `{memory} /= expression` | Merge inverted direct members into the value |
 | `{memory} ~= expression` | Capture assigned inputs and remember one experience |
 | `subject @ question` | Fill blanks from a Concept or one or more Percepts |
+| `subject @~ question` | Ask the same question, also composing parts seen separately |
 | `{target} @+= {evidence}` | Add the evidence of matching rows from another linked answer |
 | `{target} @-= {evidence}` | Subtract the evidence of matching rows from another linked answer |
 | `&operand` | Return the shared answer shape |
@@ -210,7 +249,7 @@ A Percept populated through `~=` remains a reference when another experience men
 | `^operand` | Choose and update every linked output |
 | `${*}` | Inspect the ordinary Concepts currently live in the engine |
 
-At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights, and all current top ties. It is a console diagnostic, not `.pae` syntax.
+At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed rows marked, and all current top ties. It is a console diagnostic, not `.pae` syntax.
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 
@@ -218,7 +257,7 @@ See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact
 
 The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
 
-Questions preserve complete rows and their source contributions. The Rust Answer API can branch, choose, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
+Questions preserve complete rows and their source contributions. In Rust, `complete` and `complete_graded` return the rows `@` and `@~` produce, and the Answer API can branch, choose, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
 Relevance is a signed evidence count read as probabilities, and `^` chooses the most probable value. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 

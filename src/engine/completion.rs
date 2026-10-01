@@ -1,5 +1,6 @@
+use super::interpolation::{common_denominator, interpolated_probabilities};
 use super::{
-    CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationSources, Pangine, ProjectionAssignment, QuestionSelector, QuestionSource,
+    CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment, QuestionSelector, QuestionSource,
     QuestionSourceView,
 };
 use crate::Relevance;
@@ -362,6 +363,20 @@ pub(super) struct CompletionAdjustment {
     pub(super) evidence: Vec<CompletionEvidence>,
 }
 
+/// How closely a completion answers the question as asked.
+///
+/// Grades are ordered from the most exact to the most general, and a graded
+/// answer interpolates its probabilities down that order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CompletionGrade {
+    /// One experience proves the question, or experiences are joined through
+    /// a blank the question shares. This is every completion `@` returns.
+    Exact,
+    /// Clause groups that share no blank were proven by separate experiences,
+    /// which only a graded question allows.
+    Composed,
+}
+
 /// One proof-bearing correlated grounding of every Percept hole in a question.
 /// Distinct clause-to-source proofs can therefore produce distinct completions
 /// with the same grounded assignment. Answer adjustment can add signed
@@ -371,11 +386,17 @@ pub struct Completion {
     assignment: ProjectionAssignment,
     evidence: Vec<CompletionEvidence>,
     adjustments: Vec<CompletionAdjustment>,
+    grade: CompletionGrade,
 }
 
 impl Completion {
-    pub(super) fn from_parts(assignment: ProjectionAssignment, evidence: Vec<CompletionEvidence>, adjustments: Vec<CompletionAdjustment>) -> Self {
-        Self { assignment, evidence, adjustments }
+    pub(super) fn from_parts(
+        assignment: ProjectionAssignment,
+        evidence: Vec<CompletionEvidence>,
+        adjustments: Vec<CompletionAdjustment>,
+        grade: CompletionGrade,
+    ) -> Self {
+        Self { assignment, evidence, adjustments, grade }
     }
 
     /// Returns the value assigned to `percept` in this completion.
@@ -395,6 +416,11 @@ impl Completion {
     /// reports both.
     pub fn evidence(&self) -> &[CompletionEvidence] {
         &self.evidence
+    }
+
+    /// Returns how closely this completion answers the question as asked.
+    pub fn grade(&self) -> CompletionGrade {
+        self.grade
     }
 
     /// Returns the derivations imported by answer adjustment.
@@ -440,34 +466,65 @@ struct Injection {
 }
 
 impl Pangine {
-    /// Completes a structural question using the same selector rules as `@`.
+    /// Completes a structural question exactly, as `@` does.
     ///
     /// The selector may be one Percept, an unordered default-relevance set of
-    /// distinct Percepts, or one structural subject Concept. Embedded Percepts
-    /// in a structural subject remain represented references. The read-only global
-    /// Percept supplies its computed view of live ordinary Concepts through the
-    /// same Percept path; selector meaning never depends on a Percept's value
-    /// shape.
-    pub fn complete_selector(&mut self, selector: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
-        let selector = self.question_selector(selector);
-        self.complete_selected_question(selector, question)
-    }
-
-    pub(super) fn complete_selected_question(&mut self, selector: QuestionSelector, question: &ConceptId) -> Option<CompletionResult> {
-        match selector {
-            QuestionSelector::Percepts(percepts) => self.complete_question(&percepts, question),
-            QuestionSelector::Subject(subject) => self.complete_subject(&subject, question),
-        }
-    }
-
-    /// Completes a structural question against Concepts retained by Percepts.
+    /// distinct Percepts, or one structural subject Concept. Selected Percepts
+    /// supply their remembered Concepts; a structural subject is one complete
+    /// source with default relevance, and Percepts embedded in it remain
+    /// represented references. The read-only global Percept supplies its
+    /// computed view of live ordinary Concepts through the same Percept path;
+    /// selector meaning never depends on a Percept's value shape.
     ///
     /// Top-level unordered collections of ordered clauses form one conjunction.
     /// Repeated Percept holes are shared variables, and each returned completion
     /// retains a correlated assignment, source evidence, and unmatched context.
     /// Clauses without a shared Percept remain connected through complete
     /// source experiences instead of freely crossing source records.
-    pub fn complete_question(&mut self, sources: &[ConceptId], question: &ConceptId) -> Option<CompletionResult> {
+    pub fn complete(&mut self, selector: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
+        self.complete_selector(selector, question, false)
+    }
+
+    /// Completes a structural question as `@~` does: the exact completions,
+    /// plus composed completions whose clause groups that share no blank were
+    /// proven by separate experiences.
+    ///
+    /// Every completion reports its [`CompletionGrade`], and a graded answer
+    /// interpolates its probabilities from the exact grade toward the more
+    /// general one.
+    pub fn complete_graded(&mut self, selector: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
+        self.complete_selector(selector, question, true)
+    }
+
+    fn complete_selector(&mut self, selector: &ConceptId, question: &ConceptId, graded: bool) -> Option<CompletionResult> {
+        if !self.owns(selector) {
+            return None;
+        }
+        let selector = self.question_selector(selector);
+        self.complete_selected_question(selector, question, graded)
+    }
+
+    pub(super) fn complete_selected_question(&mut self, selector: QuestionSelector, question: &ConceptId, graded: bool) -> Option<CompletionResult> {
+        match selector {
+            QuestionSelector::Percepts(percepts) => self.complete_percepts(&percepts, question, graded),
+            QuestionSelector::Subject(subject) => self.complete_structural_subject(&subject, question, graded),
+        }
+    }
+
+    /// Completes a structural question exactly against Concepts retained by
+    /// Percepts.
+    #[cfg(test)]
+    pub(super) fn complete_question(&mut self, sources: &[ConceptId], question: &ConceptId) -> Option<CompletionResult> {
+        self.complete_percepts(sources, question, false)
+    }
+
+    /// Completes a structural question exactly against one ordinary Concept.
+    #[cfg(test)]
+    pub(super) fn complete_subject(&mut self, subject: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
+        self.complete_structural_subject(subject, question, false)
+    }
+
+    fn complete_percepts(&mut self, sources: &[ConceptId], question: &ConceptId, graded: bool) -> Option<CompletionResult> {
         if sources.is_empty()
             || !self.owns(question)
             || sources.iter().any(|source| !self.is_percept(source))
@@ -477,25 +534,22 @@ impl Pangine {
         }
 
         let snapshot = self.question_snapshot(sources, question);
-        Some(self.complete_question_snapshot(question, &snapshot))
+        Some(self.complete_question_snapshot(question, &snapshot, graded))
     }
 
-    /// Completes a structural question against one ordinary Concept.
-    ///
-    /// The complete subject is treated as one source Concept with default
-    /// relevance. It is not split into synthetic experiences, and the
-    /// returned evidence therefore has no source Percept. Percepts contained
-    /// in the subject are matched as represented references, not evaluated.
-    pub fn complete_subject(&mut self, subject: &ConceptId, question: &ConceptId) -> Option<CompletionResult> {
+    // The complete subject is treated as one source Concept with default
+    // relevance. It is not split into synthetic experiences, and the returned
+    // evidence therefore has no source Percept.
+    fn complete_structural_subject(&mut self, subject: &ConceptId, question: &ConceptId, graded: bool) -> Option<CompletionResult> {
         if !self.owns(subject) || !self.owns(question) {
             return None;
         }
 
         let snapshot = self.subject_question_snapshot(subject, question);
-        Some(self.complete_question_snapshot(question, &snapshot))
+        Some(self.complete_question_snapshot(question, &snapshot, graded))
     }
 
-    pub(super) fn complete_question_snapshot(&mut self, question: &ConceptId, snapshot: &super::QuestionSnapshot) -> CompletionResult {
+    pub(super) fn complete_question_snapshot(&mut self, question: &ConceptId, snapshot: &super::QuestionSnapshot, graded: bool) -> CompletionResult {
         let clauses = question_clauses(question);
         let clause_groups = question_clause_groups(question);
         let clause_group_count = clause_groups.len();
@@ -505,7 +559,12 @@ impl Pangine {
             .flat_map(|(group, clauses)| clauses.into_iter().map(move |clause| (clause, group)))
             .collect::<BTreeMap<_, _>>();
         let shared_percepts = self.shared_clause_percepts(&clauses);
-        let mut products = BTreeSet::from([Completion { assignment: ProjectionAssignment::new(), evidence: Vec::new(), adjustments: Vec::new() }]);
+        let mut products = BTreeSet::from([Completion {
+            assignment: ProjectionAssignment::new(),
+            evidence: Vec::new(),
+            adjustments: Vec::new(),
+            grade: CompletionGrade::Exact,
+        }]);
 
         for clause in clauses {
             let mut clause_evidence = BTreeSet::new();
@@ -551,7 +610,7 @@ impl Pangine {
                     let mut evidence = evidence.clone();
                     Rc::make_mut(&mut evidence.source).source_route_products = source_route_products;
                     joined_evidence.push(evidence);
-                    next.insert(Completion { assignment, evidence: joined_evidence, adjustments: Vec::new() });
+                    next.insert(Completion { assignment, evidence: joined_evidence, adjustments: Vec::new(), grade: CompletionGrade::Exact });
                 }
             }
             products = next;
@@ -562,10 +621,19 @@ impl Pangine {
 
         let mut outputs = BTreeSet::new();
         self.collect_output_percepts(question, &mut outputs);
+        // A row whose unconnected clause groups come from separate experiences
+        // is not exact. A graded question keeps it as a composed row.
         let completions = products
             .into_iter()
             .filter(|completion| outputs.iter().all(|output| completion.assignment.contains_key(output)))
-            .filter(|completion| completion_sources_connect_clause_groups(completion, &group_by_clause, clause_group_count))
+            .filter_map(|mut completion| {
+                if completion_sources_connect_clause_groups(&completion, &group_by_clause, clause_group_count) {
+                    Some(completion)
+                } else {
+                    completion.grade = CompletionGrade::Composed;
+                    graded.then_some(completion)
+                }
+            })
             .collect();
         CompletionResult { question: question.clone(), completions }
     }
@@ -574,7 +642,8 @@ impl Pangine {
     ///
     /// A joined row is weighed as the product of its two rows, so every pair
     /// of their derivations becomes one derivation of the joined row. A source
-    /// on both sides still counts once within each joined derivation.
+    /// on both sides still counts once within each joined derivation, and the
+    /// joined row takes the less exact grade of the two.
     pub(super) fn join_completion_results(
         &self,
         left: &CompletionResult,
@@ -607,7 +676,8 @@ impl Pangine {
                         adjustments.insert(CompletionAdjustment { factor: left_factor.checked_mul(right_factor)?, evidence });
                     }
                 }
-                completions.insert(Completion { assignment, evidence, adjustments: adjustments.into_iter().collect() });
+                let grade = left_completion.grade.max(right_completion.grade);
+                completions.insert(Completion { assignment, evidence, adjustments: adjustments.into_iter().collect(), grade });
             }
         }
         Some(CompletionResult { question: question.clone(), completions: completions.into_iter().collect() })
@@ -692,11 +762,11 @@ impl Pangine {
             let candidate_support = support.entry(candidate).or_default();
             for (factor, evidence) in completion.derivations() {
                 let sources = evidence.iter().map(|fragment| fragment.question_source().clone()).collect::<BTreeSet<_>>();
-                if !weighed.insert((&completion.assignment, factor, sources.clone())) {
+                if !weighed.insert((&completion.assignment, completion.grade, factor, sources.clone())) {
                     continue;
                 }
                 let weight = sources.iter().try_fold(factor, |weight, source| weight.checked_mul(source.relevance))?;
-                let total = candidate_support.entry((factor, sources)).or_insert(Relevance::EMPTY);
+                let total = candidate_support.entry((completion.grade, factor, sources)).or_insert(Relevance::EMPTY);
                 *total = total.checked_add(weight)?;
             }
         }
@@ -723,9 +793,22 @@ impl Pangine {
     pub(super) fn try_materialize_completion_projection(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<Option<ConceptId>> {
         let support = self.completion_projection_support(result, template)?;
         let mut candidates = ConceptMap::new();
-        for (candidate, derivations) in support {
-            let strength = projection_strength(&derivations)?;
-            self.add_union_concept(&mut candidates, candidate, false, strength)?;
+        if result.completions.iter().all(|completion| completion.grade == CompletionGrade::Exact) {
+            for (candidate, derivations) in support {
+                let strength = projection_strength(&derivations)?;
+                self.add_union_concept(&mut candidates, candidate, false, strength)?;
+            }
+        } else {
+            // A graded projection shows its interpolated probabilities as
+            // whole-number shares over their common denominator, so reading the
+            // shares gives the probabilities back.
+            let probabilities = interpolated_probabilities(&support)?;
+            let denominator = common_denominator(probabilities.values())?;
+            for (candidate, probability) in probabilities {
+                let (numerator, own_denominator) = probability.fraction();
+                let share = i64::try_from(numerator.checked_mul(denominator / own_denominator)?).ok()?;
+                self.add_union_concept(&mut candidates, candidate, false, Relevance::new(share))?;
+            }
         }
         Some(self.reference_map(&candidates))
     }
@@ -945,7 +1028,7 @@ impl Pangine {
 }
 
 /// Returns a projected value's evidence count: the sum of its derivation weights.
-pub(super) fn projection_strength(derivations: &BTreeMap<DerivationSources, Relevance>) -> Option<Relevance> {
+pub(super) fn projection_strength(derivations: &BTreeMap<DerivationKey, Relevance>) -> Option<Relevance> {
     derivations.values().try_fold(Relevance::EMPTY, |strength, weight| strength.checked_add(*weight))
 }
 

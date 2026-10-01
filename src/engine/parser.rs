@@ -141,7 +141,8 @@ impl Pangine {
             return Ok(published_view.materialize(self));
         }
 
-        if !parser.consume('@') {
+        let graded = parser.consume_str("@~");
+        if !graded && !parser.consume('@') {
             return Ok(selector);
         }
 
@@ -153,7 +154,7 @@ impl Pangine {
         if parser.pos == question_start {
             return Err(ParseError::InvalidSyntax);
         }
-        Ok(self.answer_question(selector, question))
+        Ok(self.answer_question(selector, question, graded))
     }
 
     // An unparenthesized arrow chain is one ordered composition. Parentheses

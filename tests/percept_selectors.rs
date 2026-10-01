@@ -26,7 +26,7 @@ fn the_global_percept_uses_the_same_source_identity_as_other_percepts() {
     let _known = must_ref(&mut pangine, "[known]");
     let answer = pangine.reference_percept("answer");
 
-    let result = pangine.complete_selector(&global, &answer).expect("the global Percept is a valid selector");
+    let result = pangine.complete(&global, &answer).expect("the global Percept is a valid selector");
     assert!(!result.completions().is_empty());
     assert!(
         result.completions().iter().flat_map(|completion| completion.evidence()).all(|evidence| evidence.source_percept() == Some(&global)),
