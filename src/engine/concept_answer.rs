@@ -665,6 +665,9 @@ fn decode_origin(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionBin
 }
 
 #[cfg(test)]
+mod merge_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
