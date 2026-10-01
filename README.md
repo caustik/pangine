@@ -94,6 +94,8 @@ The last command shows `x2 [birds]` and `[traffic]`. `x2 [birds]` is the compact
 
 An answer reads these counts as probabilities. Each value's probability is its share of the positive evidence among the alternatives, so birds is 2/3 and traffic 1/3. The members of an unordered Concept read the same way: `x2[tea]x3[coffee]` is tea 2/5 and coffee 3/5. The probability is the relative frequency of what Pangine remembers, not a calibrated confidence that an answer is true.
 
+A row joined from separate experiences weighs the product of their counts, the number of ways to assemble it from what Pangine remembers. If `{knowledge}` in the Socrates example above held `[Socrates]->[is-a]->[human]` three times, `mortal` would carry three units of evidence. One experience that proves several parts of a row was observed whole, so it counts once.
+
 `^{answer}` chooses the most probable value, the one with the greatest positive count, and uses canonical order to break a tie. Evidence can be negative: an inverted member such as `![tea]` counts minus one, and `@-=` subtracts matching evidence from an answer. A value whose evidence is zero or negative has probability zero and is never chosen. When no value has positive evidence, `^` returns `[]`.
 
 I think of `@` as leaving possible answers together and `^` as collapsing them to one represented answer. Experience is allowed to shape that choice. A program can also inspect the possibilities, ask another question, or leave the answer open. A consumer's interpretation or choice policy should remain distinguishable from the behavior Pangine supplies.
@@ -162,7 +164,7 @@ Two linked answers can also affect one another without being copied into ordinar
 {action}->{tool} @-= {failed-action}->{failed-tool}
 ```
 
-These commands assume earlier questions filled the candidate, helpful, and failed Percepts. Each side names the part of one linked answer to compare. Matching helpful sources are added to the candidate rows, matching failed sources are subtracted, and every linked target output is updated. Only the target changes, so a separate source answer stays unchanged. Either side can be one Percept or a larger shape. An unlinked operand is an error. Ordinary `+=` and `-=` still change ordinary Percept values.
+These commands assume earlier questions filled the candidate, helpful, and failed Percepts. Each side names the part of one linked answer to compare. Matching helpful rows add their evidence to the candidate rows, matching failed rows subtract theirs, and every linked target output is updated. Only the target changes, so a separate source answer stays unchanged. Either side can be one Percept or a larger shape. An unlinked operand is an error. Ordinary `+=` and `-=` still change ordinary Percept values.
 
 ## Input Percepts
 
@@ -201,14 +203,14 @@ A Percept populated through `~=` remains a reference when another experience men
 | `{memory} /= expression` | Merge inverted direct members into the value |
 | `{memory} ~= expression` | Capture assigned inputs and remember one experience |
 | `subject @ question` | Fill blanks from a Concept or one or more Percepts |
-| `{target} @+= {evidence}` | Add matching sources from another linked answer |
-| `{target} @-= {evidence}` | Subtract matching sources from another linked answer |
+| `{target} @+= {evidence}` | Add the evidence of matching rows from another linked answer |
+| `{target} @-= {evidence}` | Subtract the evidence of matching rows from another linked answer |
 | `&operand` | Return the shared answer shape |
 | `$operand` | Read Percepts without changing their answer |
 | `^operand` | Choose and update every linked output |
 | `${*}` | Inspect the ordinary Concepts currently live in the engine |
 
-At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, every signed source contribution, and all current top ties. It is a console diagnostic, not `.pae` syntax.
+At the interactive CLI prompt, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights, and all current top ties. It is a console diagnostic, not `.pae` syntax.
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
 
@@ -218,7 +220,7 @@ The Rust prototype includes the parser, canonical Concept graph, mutable Percept
 
 Questions preserve complete rows and their source contributions. The Rust Answer API can branch, choose, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
-Relevance is a signed evidence count read as probabilities, and `^` chooses the most probable value. How evidence from several experiences should combine within one joined row is still being settled. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
+Relevance is a signed evidence count read as probabilities, and `^` chooses the most probable value. Persistence, sampling, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 
 ## Run Pangine
 

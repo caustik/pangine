@@ -3,7 +3,7 @@
 use super::{
     CompletionOrderedStep, CompletionOrderedWindow, CompletionResult, CompletionRoute, ConceptAnswer, ConceptId, ConceptKind, ConceptMap, ConceptShape,
     LiveConceptAnswer, Pangine, ParsedUnionOperand, PerceptQuestionIndex, ProjectionAssignment, QuestionSelector, QuestionSnapshot, QuestionSource,
-    QuestionSourceViews, QuestionWitness,
+    QuestionSourceViews,
 };
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,7 +78,7 @@ impl Pangine {
         let mut joined_outputs = outputs;
         for live in prior.values() {
             let prior_result = live.answer.to_result(self)?;
-            result = self.join_completion_results(&prior_result, &live.answer.outputs, &result, &joined_outputs, &answer_shape);
+            result = self.join_completion_results(&prior_result, &live.answer.outputs, &result, &joined_outputs, &answer_shape)?;
             joined_outputs.extend(live.answer.outputs.iter().cloned());
             if result.completions().is_empty() {
                 return None;
@@ -378,10 +378,6 @@ impl Pangine {
             .map(ParsedUnionOperand::ordinary)
             .collect::<Vec<_>>();
         self.reference_union(&operands).ok().flatten()
-    }
-
-    pub(super) fn question_source_support(&self, witnesses: &BTreeSet<QuestionWitness>) -> Option<Relevance> {
-        witnesses.iter().try_fold(Relevance::EMPTY, |support, witness| support.checked_add(witness.contribution))
     }
 
     pub(super) fn collect_output_percepts(&self, concept: &ConceptId, percepts: &mut BTreeSet<ConceptId>) {

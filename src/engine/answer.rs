@@ -1,4 +1,4 @@
-use super::{concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, CompletionResult, ConceptId, Pangine};
+use super::{completion::projection_strength, concept_answer::ConceptAnswer, concept_answer::LiveConceptAnswer, CompletionResult, ConceptId, Pangine};
 use crate::Relevance;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -93,7 +93,7 @@ impl AnswerView {
     }
 
     /// Returns every projected possibility, most probable first, with its
-    /// evidence count, probability, and distinct source contributions.
+    /// evidence count, probability, and the support behind that count.
     ///
     /// A possibility's probability is its share of the positive evidence among
     /// these possibilities. A possibility whose evidence is zero or negative
@@ -106,31 +106,32 @@ impl AnswerView {
             return None;
         }
 
-        let witnesses = pangine.completion_projection_witnesses(&self.answer.result, &self.projection)?;
+        let support = pangine.completion_projection_support(&self.answer.result, &self.projection)?;
         let mut complete_rows = BTreeMap::new();
         for completion in &self.answer.result.completions {
             let value = pangine.instantiate_completion(&self.projection, completion)?;
             *complete_rows.entry(value).or_insert(0) += 1;
         }
 
-        let mut possibilities = witnesses
+        let mut possibilities = support
             .into_iter()
-            .map(|(value, witnesses)| {
-                let strength = pangine.question_source_support(&witnesses)?;
-                let sources = witnesses
+            .map(|(value, derivations)| {
+                let strength = projection_strength(&derivations)?;
+                let support = derivations
                     .into_iter()
-                    .map(|witness| AnswerSourceContribution {
-                        subject: witness.source.subject().clone(),
-                        concept: witness.source.concept,
-                        relevance: witness.source.relevance,
-                        contribution: witness.contribution,
+                    .map(|((_, sources), weight)| AnswerSupport {
+                        weight,
+                        sources: sources
+                            .into_iter()
+                            .map(|source| AnswerSource { subject: source.subject().clone(), concept: source.concept, relevance: source.relevance })
+                            .collect(),
                     })
                     .collect();
                 Some(AnswerPossibility {
                     complete_rows: complete_rows.remove(&value).unwrap_or_default(),
                     value,
                     strength,
-                    sources,
+                    support,
                     positive_total: 0,
                     is_top_tie: false,
                 })
@@ -159,26 +160,18 @@ impl AnswerView {
         Some(AnswerChoice { selected, answer: answer.view(pangine, self.projection.clone())? })
     }
 
-    /// Adds signed source evidence from matching rows of another answer view.
+    /// Imports the evidence of matching rows from another answer view.
     ///
-    /// The returned answer keeps this view's answer shape. `factor` multiplies
-    /// each imported source contribution; it does not change the source's raw
-    /// relevance. An empty factor leaves the answer unchanged.
+    /// The returned answer keeps this view's answer shape. Every imported
+    /// derivation keeps its sources and is weighed by `factor`, which does not
+    /// change any source's own count. An empty factor leaves the answer
+    /// unchanged.
     pub fn adjusted_by(&self, pangine: &mut Pangine, adjustment: &AnswerView, factor: Relevance) -> Option<AnswerView> {
         if !pangine.owns_answer(&self.answer) || !pangine.owns_answer(&adjustment.answer) {
             return None;
         }
 
-        let mut target_outputs = BTreeSet::new();
-        pangine.collect_output_percepts(&self.answer.shape, &mut target_outputs);
-        let result = pangine.adjust_completion_result(
-            &self.answer.result,
-            &self.projection,
-            &adjustment.answer.result,
-            &adjustment.projection,
-            &target_outputs,
-            factor,
-        )?;
+        let result = pangine.adjust_completion_result(&self.answer.result, &self.projection, &adjustment.answer.result, &adjustment.projection, factor)?;
         self.answer.derived(result).view(pangine, self.projection.clone())
     }
 }
@@ -189,7 +182,7 @@ pub struct AnswerPossibility {
     value: ConceptId,
     strength: Relevance,
     complete_rows: usize,
-    sources: Vec<AnswerSourceContribution>,
+    support: Vec<AnswerSupport>,
     /// The positive evidence of every possibility in the same view.
     positive_total: i128,
     is_top_tie: bool,
@@ -202,7 +195,7 @@ impl AnswerPossibility {
     }
 
     /// Returns the signed evidence count behind this value, the sum of its
-    /// distinct source contributions.
+    /// support weights.
     pub fn strength(&self) -> Relevance {
         self.strength
     }
@@ -224,9 +217,10 @@ impl AnswerPossibility {
         self.complete_rows
     }
 
-    /// Returns the distinct source contributions used to calculate strength.
-    pub fn sources(&self) -> &[AnswerSourceContribution] {
-        &self.sources
+    /// Returns the combinations of sources whose weights add up to this
+    /// value's strength.
+    pub fn support(&self) -> &[AnswerSupport] {
+        &self.support
     }
 
     /// Returns whether this value is among the most probable, which choice
@@ -242,23 +236,47 @@ impl AnswerPossibility {
     }
 }
 
-/// One distinct source contribution to an [`AnswerPossibility`].
+/// One combination of sources behind an [`AnswerPossibility`].
+///
+/// A complete row's own proof weighs the product of its distinct sources'
+/// counts, so sources joined from separate experiences multiply while one
+/// source proving several clauses counts once. Evidence imported by `@+=` or
+/// `@-=` keeps its signed factor. The weight adds up every complete row that
+/// the same combination supports.
 #[derive(Clone)]
-pub struct AnswerSourceContribution {
+pub struct AnswerSupport {
+    weight: Relevance,
+    sources: Vec<AnswerSource>,
+}
+
+impl AnswerSupport {
+    /// Returns the signed evidence this combination supplies.
+    pub fn weight(&self) -> Relevance {
+        self.weight
+    }
+
+    /// Returns the distinct sources whose counts multiply into the weight.
+    pub fn sources(&self) -> &[AnswerSource] {
+        &self.sources
+    }
+}
+
+/// One source behind an [`AnswerSupport`].
+#[derive(Clone)]
+pub struct AnswerSource {
     subject: ConceptId,
     concept: ConceptId,
     relevance: Relevance,
-    contribution: Relevance,
 }
 
-impl AnswerSourceContribution {
+impl AnswerSource {
     /// Returns the owning Percept for remembered experience, or the complete
     /// subject Concept for a direct question.
     pub fn subject(&self) -> &ConceptId {
         &self.subject
     }
 
-    /// Returns the complete source Concept supplying the contribution.
+    /// Returns the complete source Concept.
     pub fn concept(&self) -> &ConceptId {
         &self.concept
     }
@@ -266,11 +284,6 @@ impl AnswerSourceContribution {
     /// Returns the evidence count stored on the source Concept.
     pub fn relevance(&self) -> Relevance {
         self.relevance
-    }
-
-    /// Returns the signed amount contributed to this answer.
-    pub fn contribution(&self) -> Relevance {
-        self.contribution
     }
 }
 

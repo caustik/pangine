@@ -38,12 +38,14 @@ fn answer_snapshot_exposes_the_sources_used_by_the_shared_answer() {
     let animal = pangine.reference_percept("animal");
     let answer = pangine.answer_snapshot(&animal).expect("linked answer snapshot");
     assert_eq!(answer.result().completions().len(), 3);
-    assert!(answer
+    let relevances = answer
         .result()
         .completions()
         .iter()
         .flat_map(|completion| completion.evidence())
-        .all(|evidence| evidence.source_relevance() == evidence.source_contribution()));
+        .map(|evidence| evidence.source_relevance().count())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(relevances, std::collections::BTreeSet::from([3, 5, 7]));
     assert_eq!(answer.result().question(), &must_ref(&mut pangine, "{animal}->{food}"));
 }
 
@@ -68,16 +70,17 @@ fn answer_adjustment_updates_every_target_output_and_keeps_signed_sources() {
     assert_eq!(must_ref(&mut pangine, "${choice}"), must_ref(&mut pangine, "x2[fish][seed]![bone]"));
     assert_eq!(must_ref(&mut pangine, "${candidate}"), must_ref(&mut pangine, "x2[cat][bird]![dog]"));
 
-    let answer = pangine.answer_snapshot(&choice).expect("published answer");
-    let failed = answer
-        .result()
-        .completions()
+    let view = pangine.answer_view(&choice).expect("published answer");
+    let possibilities = view.possibilities(&mut pangine).expect("inspectable answer");
+    let bone = possibilities.iter().find(|possibility| pangine.format_concept(possibility.value(), false) == "[bone]").expect("bone possibility");
+    let failed = bone
+        .support()
         .iter()
-        .flat_map(|completion| completion.evidence())
-        .find(|evidence| evidence.source_percept().is_some_and(|percept| pangine.format_concept(percept, false) == "{failed}"))
+        .find(|support| support.sources().iter().any(|source| pangine.format_concept(source.subject(), false) == "{failed}"))
         .expect("retained failed source");
-    assert_eq!(failed.source_relevance(), Relevance::new(2));
-    assert_eq!(failed.source_contribution(), Relevance::new(-2));
+    assert_eq!(failed.sources()[0].relevance(), Relevance::new(2));
+    assert_eq!(failed.weight(), Relevance::new(-2));
+    assert_eq!(bone.strength(), Relevance::new(-1));
 }
 
 #[test]
@@ -219,7 +222,7 @@ fn reusing_a_linked_output_extends_one_shared_answer() {
     assert_eq!(must_ref(&mut pangine, "&{food}"), must_ref(&mut pangine, "({animal}->[eats]->{food})({animal}->[lives-in]->{home})"));
     assert_eq!(
         must_ref(&mut pangine, "$(&{animal})"),
-        must_ref(&mut pangine, "x2(([cat]->[eats]->[fish])([cat]->[lives-in]->[house]))x2(([dog]->[eats]->[bone])([dog]->[lives-in]->[yard]))")
+        must_ref(&mut pangine, "(([cat]->[eats]->[fish])([cat]->[lives-in]->[house]))(([dog]->[eats]->[bone])([dog]->[lives-in]->[yard]))")
     );
 
     assert_eq!(must_ref(&mut pangine, "^{animal}"), must_ref(&mut pangine, "[cat]"));
@@ -257,7 +260,7 @@ fn a_detached_output_does_not_constrain_a_later_extension_through_its_linked_sib
     let extension = must_ref(&mut pangine, "{owners} @ {food}->[belongs-to]->{animal}");
     assert_eq!(extension, must_ref(&mut pangine, "([bone]->[belongs-to]->[wolf])([fish]->[belongs-to]->[bird])"));
     assert_eq!(must_ref(&mut pangine, "&{food}"), must_ref(&mut pangine, "{food}->[belongs-to]->{animal}"));
-    assert_eq!(must_ref(&mut pangine, "$({food}->{animal})"), must_ref(&mut pangine, "x2([bone]->[wolf])x2([fish]->[bird])"));
+    assert_eq!(must_ref(&mut pangine, "$({food}->{animal})"), must_ref(&mut pangine, "([bone]->[wolf])([fish]->[bird])"));
 }
 
 #[test]
@@ -282,7 +285,7 @@ fn one_question_can_combine_two_existing_shared_answers() {
         must_ref(&mut pangine, "$(&{animal})"),
         must_ref(
             &mut pangine,
-            "x3(([cat]->[eats]->[fish])([house]->[has-weather]->[warm])([cat]->[lives-in]->[house]))x3(([dog]->[eats]->[bone])([yard]->[has-weather]->[cold])([dog]->[lives-in]->[yard]))"
+            "(([cat]->[eats]->[fish])([house]->[has-weather]->[warm])([cat]->[lives-in]->[house]))(([dog]->[eats]->[bone])([yard]->[has-weather]->[cold])([dog]->[lives-in]->[yard]))"
         )
     );
 }
@@ -308,6 +311,44 @@ fn separate_questions_keep_separate_answer_values() {
     let shapes = must_ref(&mut pangine, "${shape}");
     assert_eq!(must_ref(&mut pangine, "^{animal}"), must_ref(&mut pangine, "[cat]"));
     assert_eq!(must_ref(&mut pangine, "${shape}"), shapes);
+}
+
+#[test]
+fn adjustment_imports_a_joined_row_with_the_product_of_its_counts() {
+    let mut pangine = Pangine::new();
+    experience_in(&mut pangine, "candidates", "[A]", 1);
+    experience_in(&mut pangine, "candidates", "[B]", 1);
+    experience_in(&mut pangine, "outcomes", "[trial]->[A]", 2);
+    experience_in(&mut pangine, "outcomes", "[A]->[worked]", 3);
+    must_ref(&mut pangine, "{outcomes} @ ([trial]->{tried})({tried}->[worked])");
+    must_ref(&mut pangine, "{candidates} @ {choice}");
+
+    // The imported row joins two experiences, so its counts multiply: 1 + 2 x 3.
+    assert_eq!(must_ref(&mut pangine, "{choice} @+= {tried}"), must_ref(&mut pangine, "x7[A][B]"));
+    let choice = pangine.reference_percept("choice");
+    let view = pangine.answer_view(&choice).expect("adjusted answer");
+    let possibilities = view.possibilities(&mut pangine).expect("inspectable answer");
+    let imported = possibilities[0].support().iter().find(|support| support.sources().len() == 2).expect("imported joined row");
+    assert_eq!(imported.weight(), Relevance::new(6));
+
+    // Subtracting the same evidence cancels it exactly.
+    assert_eq!(must_ref(&mut pangine, "{choice} @-= {tried}"), must_ref(&mut pangine, "[A][B]"));
+}
+
+#[test]
+fn extending_an_adjusted_answer_multiplies_its_whole_evidence() {
+    let mut pangine = Pangine::new();
+    experience_in(&mut pangine, "meals", "[cat]->[eats]->[fish]", 1);
+    experience_in(&mut pangine, "good", "[cat]->[eats]->[fish]", 2);
+    experience_in(&mut pangine, "homes", "[cat]->[lives-in]->[house]", 3);
+    must_ref(&mut pangine, "{meals} @ {animal}->[eats]->{food}");
+    must_ref(&mut pangine, "{good} @ {good-animal}->[eats]->{good-food}");
+    must_ref(&mut pangine, "{animal}->{food} @+= {good-animal}->{good-food}");
+    assert_eq!(must_ref(&mut pangine, "$(&{animal})"), must_ref(&mut pangine, "x3([cat]->[eats]->[fish])"));
+
+    // (1 + 2) x 3: every derivation of the adjusted row joins the new row.
+    must_ref(&mut pangine, "{homes} @ {animal}->[lives-in]->{home}");
+    assert_eq!(must_ref(&mut pangine, "$(&{animal})"), must_ref(&mut pangine, "x9(([cat]->[eats]->[fish])([cat]->[lives-in]->[house]))"));
 }
 
 fn weighted_animals() -> Pangine {

@@ -59,7 +59,8 @@ Scripts:
 Relevance and choice:
   Coefficients count evidence. A value's probability is its share of the
   positive evidence among the alternatives, so x2[tea]x3[coffee] reads as tea
-  2/5 and coffee 3/5. Evidence at or below zero has probability 0.
+  2/5 and coffee 3/5. Evidence at or below zero has probability 0. A row joined
+  from separate experiences weighs the product of their counts.
 
   ^operand chooses the most probable current result. For output Percepts from
   one question, it removes incompatible answers and refreshes every linked
@@ -113,15 +114,32 @@ impl Pangine {
             let probability = format_probability(numerator, denominator);
             lines.push(format!("  {marker} {:+}, p={probability}, {rows} {row_label}: {value}", possibility.strength().count()));
 
-            let mut sources = possibility
-                .sources()
+            let mut support = possibility
+                .support()
                 .iter()
-                .map(|source| (self.format_concept(source.subject(), false), self.format_concept(source.concept(), false), source.contribution().count()))
+                .map(|support| {
+                    let sources = support
+                        .sources()
+                        .iter()
+                        .map(|source| {
+                            let subject = self.format_concept(source.subject(), false);
+                            (subject, self.format_concept(source.concept(), false), self.format_debug_console_member(source.relevance(), source.concept()))
+                        })
+                        .collect::<Vec<_>>();
+                    (sources, support.weight().count())
+                })
                 .collect::<Vec<_>>();
-            sources.sort();
+            support.sort();
 
-            for (subject, source, contribution) in sources {
-                lines.push(format!("      {contribution:+} from {subject}: {source}"));
+            for (sources, weight) in support {
+                if let [(subject, source, _)] = sources.as_slice() {
+                    lines.push(format!("      {weight:+} from {subject}: {source}"));
+                    continue;
+                }
+                lines.push(format!("      {weight:+} from {} sources:", sources.len()));
+                for (subject, _, member) in sources {
+                    lines.push(format!("        {subject}: {member}"));
+                }
             }
         }
         Ok(lines)
@@ -178,7 +196,11 @@ impl Pangine {
     }
 
     fn format_debug_console_line(&self, relevance: Relevance, concept: &ConceptId) -> String {
-        let mut out = String::from("  ");
+        format!("  {}", self.format_debug_console_member(relevance, concept))
+    }
+
+    fn format_debug_console_member(&self, relevance: Relevance, concept: &ConceptId) -> String {
+        let mut out = String::new();
         let count = relevance.count();
         let add_separator = count != 1 && count != -1;
         let wrap_concept = count != 1 && matches!(concept.0.kind, ConceptKind::Unordered | ConceptKind::Ordered { .. });
@@ -310,6 +332,29 @@ mod tests {
                 "      +2 from {world}: [morning]->[birds]".to_owned(),
                 "    +1, p=1/3, 1 row: [traffic]".to_owned(),
                 "      +1 from {world}: [morning]->[traffic]".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn debug_console_inspection_lists_each_source_of_a_joined_row() {
+        let mut pangine = Pangine::new();
+        for script in [
+            "{knowledge} ~= [Socrates]->[is-a]->[human]",
+            "{knowledge} ~= [Socrates]->[is-a]->[human]",
+            "{knowledge} ~= [human]->[is-a]->[mortal]",
+            "{knowledge} @ ([Socrates]->[is-a]->{kind})({kind}->[is-a]->{conclusion})",
+        ] {
+            assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
+        }
+
+        assert_eq!(
+            pangine.debug_answer_inspection_lines("{conclusion}"),
+            Ok(vec![
+                "  * +2, p=1, 1 row: [mortal]".to_owned(),
+                "      +2 from 2 sources:".to_owned(),
+                "        {knowledge}: x2([Socrates]->[is-a]->[human])".to_owned(),
+                "        {knowledge}: [human]->[is-a]->[mortal]".to_owned(),
             ])
         );
     }

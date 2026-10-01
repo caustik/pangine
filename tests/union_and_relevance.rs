@@ -167,6 +167,56 @@ fn choice_abstains_when_no_possibility_has_positive_evidence() {
     assert_eq!(test.reference("^{answer}"), None);
 }
 
+#[test]
+fn joined_rows_multiply_separate_experiences_and_count_one_experience_once() {
+    let mut test = PangineTest::new();
+    remember(&mut test, "knowledge", "[Socrates]->[is-a]->[human]", 3);
+    remember(&mut test, "knowledge", "[Socrates]->[is-a]->[philosopher]", 1);
+    remember(&mut test, "knowledge", "[human]->[is-a]->[mortal]", 1);
+    remember(&mut test, "knowledge", "[philosopher]->[is-a]->[wise]", 1);
+    test.exec(["{knowledge} @ ([Socrates]->[is-a]->{kind})({kind}->[is-a]->{conclusion})"]);
+
+    assert_eq!(readings(&mut test, "{conclusion}"), vec![("[mortal]".to_owned(), 3, 3.0 / 4.0, true), ("[wise]".to_owned(), 1, 1.0 / 4.0, false)]);
+
+    // One experience that proves both clauses was observed whole, so it counts once.
+    remember(&mut test, "whole", "([Plato]->[is-a]->[human])([human]->[is-a]->[mortal])", 2);
+    test.exec(["{whole} @ ([Plato]->[is-a]->{plato-kind})({plato-kind}->[is-a]->{plato-conclusion})"]);
+    assert_eq!(readings(&mut test, "{plato-conclusion}"), vec![("[mortal]".to_owned(), 2, 1.0, true)]);
+}
+
+#[test]
+fn a_route_is_weighed_by_the_product_of_its_steps() {
+    let mut test = PangineTest::new();
+    remember(&mut test, "moves", "[A]->[north]->[B]", 9);
+    remember(&mut test, "moves", "[B]->[east]->[D]", 1);
+    remember(&mut test, "moves", "[A]->[east]->[C]", 5);
+    remember(&mut test, "moves", "[C]->[north]->[D]", 4);
+    test.exec(["{moves} @ ([A]->{first}->{middle})({middle}->{second}->[D])"]);
+
+    // Adding the steps would prefer 9 + 1 over 5 + 4.
+    assert_eq!(test.concept("$({first}->{middle}->{second})"), test.concept("x20([east]->[C]->[north])x9([north]->[B]->[east])"));
+    assert_eq!(test.concept("^({first}->{middle}->{second})"), test.concept("[east]->[C]->[north]"));
+}
+
+#[test]
+fn a_prior_joined_with_a_likelihood_reads_as_the_posterior() {
+    let mut test = PangineTest::new();
+    remember(&mut test, "evidence", "[prior]->[H1]", 1);
+    remember(&mut test, "evidence", "[prior]->[H2]", 9);
+    remember(&mut test, "evidence", "[positive]->[H1]", 4);
+    remember(&mut test, "evidence", "[positive]->[H2]", 1);
+    test.exec(["{evidence} @ ([prior]->{hypothesis})([positive]->{hypothesis})"]);
+
+    assert_eq!(readings(&mut test, "{hypothesis}"), vec![("[H2]".to_owned(), 9, 9.0 / 13.0, true), ("[H1]".to_owned(), 4, 4.0 / 13.0, false)]);
+}
+
+fn remember(test: &mut PangineTest, percept: &str, concept: &str, repetitions: usize) {
+    let experience = format!("{{{percept}}} ~= {concept}");
+    for _ in 0..repetitions {
+        test.exec([experience.as_str()]);
+    }
+}
+
 fn readings(test: &mut PangineTest, output: &str) -> Vec<Reading> {
     let output = test.concept(output);
     let pangine = test.engine_mut();

@@ -294,7 +294,7 @@ mod tests {
         let possibilities: serde_json::Value = serde_json::from_str(&session.execute("$(&{animal})").unwrap()).unwrap();
         assert_eq!(
             possibilities["consoleLines"],
-            serde_json::json!(["  x2(([cat]->[eats]->[fish])([cat]->[lives-in]->[house]))", "  x2(([dog]->[eats]->[bone])([dog]->[lives-in]->[yard]))"])
+            serde_json::json!(["  ([cat]->[eats]->[fish])([cat]->[lives-in]->[house])", "  ([dog]->[eats]->[bone])([dog]->[lives-in]->[yard])"])
         );
     }
 

@@ -1,6 +1,6 @@
 //! Choice (`^`): the most probable value, the one with the greatest positive evidence count, wins, and canonical order breaks ties.
 
-use super::{CompletionProjectionWitnesses, ConceptId, ConceptKind, LiveConceptAnswer, Pangine};
+use super::{completion::projection_strength, CompletionProjectionSupport, ConceptId, ConceptKind, LiveConceptAnswer, Pangine};
 
 impl Pangine {
     pub(super) fn make_decision(&mut self, concept: &ConceptId) -> Option<ConceptId> {
@@ -46,10 +46,10 @@ impl Pangine {
         Some(selected)
     }
 
-    pub(super) fn select_projection_candidate(&self, witnesses: &CompletionProjectionWitnesses) -> Option<ConceptId> {
-        let candidates = witnesses
+    pub(super) fn select_projection_candidate(&self, support: &CompletionProjectionSupport) -> Option<ConceptId> {
+        let candidates = support
             .iter()
-            .map(|(candidate, sources)| self.question_source_support(sources).map(|support| (candidate, support.count())))
+            .map(|(candidate, derivations)| projection_strength(derivations).map(|strength| (candidate, strength.count())))
             .collect::<Option<Vec<_>>>()?;
         self.select_greatest_positive(candidates)
     }

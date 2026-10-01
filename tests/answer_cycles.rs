@@ -44,9 +44,9 @@ fn repeated_outcomes_change_a_later_complete_choice_without_removing_untried_pos
     assert!(third.possibilities.values().all(|possibility| possibility.complete_rows == 1));
 
     let dumpbin_sources = &third.possibilities["[inspect-symbols]->[dumpbin]"].sources;
-    assert!(dumpbin_sources.iter().any(|source| source.concept.contains("episode-dumpbin-helpful") && source.contribution == 1));
-    assert!(dumpbin_sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-1") && source.contribution == -1));
-    assert!(dumpbin_sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-2") && source.contribution == -1));
+    assert!(dumpbin_sources.iter().any(|source| source.concept.contains("episode-dumpbin-helpful") && source.weight == 1));
+    assert!(dumpbin_sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-1") && source.weight == -1));
+    assert!(dumpbin_sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-2") && source.weight == -1));
     assert!(dumpbin_sources.iter().filter(|source| source.subject == "{episodes}").all(|source| source.relevance == 1));
     assert_eq!(must_ref(&mut pangine, "$({action}->{tool})"), third.selected);
 }
@@ -81,10 +81,10 @@ fn language_adjustment_keeps_zero_strength_rows_and_their_sources_in_the_linked_
     assert_eq!(possibilities.len(), 3);
     assert_eq!(dumpbin.strength, 0);
     assert_eq!(dumpbin.complete_rows, 1);
-    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("candidate-dumpbin") && source.contribution == 1));
-    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-helpful") && source.contribution == 1));
-    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-1") && source.contribution == -1));
-    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-2") && source.contribution == -1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("candidate-dumpbin") && source.weight == 1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-helpful") && source.weight == 1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-1") && source.weight == -1));
+    assert!(dumpbin.sources.iter().any(|source| source.concept.contains("episode-dumpbin-failed-2") && source.weight == -1));
     assert_eq!(must_ref(&mut pangine, "&{action}"), must_ref(&mut pangine, DECISION_QUESTION));
     assert_eq!(must_ref(&mut pangine, "^({action}->{tool})"), must_ref(&mut pangine, "[inspect-symbols]->[link-map]"));
 }
@@ -170,7 +170,7 @@ struct Source {
     subject: String,
     concept: String,
     relevance: i64,
-    contribution: i64,
+    weight: i64,
 }
 
 fn decision_round(pangine: &mut Pangine) -> Round {
@@ -195,13 +195,15 @@ fn inspect(pangine: &mut Pangine, answer: &AnswerView) -> BTreeMap<String, Possi
         .map(|possibility| {
             let value = pangine.format_concept(possibility.value(), false);
             let sources = possibility
-                .sources()
+                .support()
                 .iter()
-                .map(|source| Source {
-                    subject: pangine.format_concept(source.subject(), false),
-                    concept: pangine.format_concept(source.concept(), false),
-                    relevance: source.relevance().count(),
-                    contribution: source.contribution().count(),
+                .flat_map(|support| {
+                    support.sources().iter().map(|source| Source {
+                        subject: pangine.format_concept(source.subject(), false),
+                        concept: pangine.format_concept(source.concept(), false),
+                        relevance: source.relevance().count(),
+                        weight: support.weight().count(),
+                    })
                 })
                 .collect();
             (

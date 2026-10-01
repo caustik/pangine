@@ -9,8 +9,9 @@
 //! Decoding restores those values before any Answer operation sees them.
 
 use super::{
-    completion::CompletionEvidenceParts, Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow,
-    CompletionRemainder, CompletionRemainderSide, CompletionResult, CompletionRoute, ConceptId, ConceptKind, Pangine, ProjectionAssignment, QuestionSource,
+    completion::{CompletionAdjustment, CompletionEvidenceParts},
+    Completion, CompletionBindingOrigin, CompletionEvidence, CompletionOrderedStep, CompletionOrderedWindow, CompletionRemainder, CompletionRemainderSide,
+    CompletionResult, CompletionRoute, ConceptId, ConceptKind, Pangine, ProjectionAssignment, QuestionSource,
 };
 use crate::Relevance;
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,8 +47,8 @@ const REMAINDERS: &str = "pangine-answer-remainders";
 const REMAINDER: &str = "pangine-answer-remainder";
 const SOURCE_REMAINDER: &str = "pangine-answer-source-remainder";
 const QUESTION_REMAINDER: &str = "pangine-answer-question-remainder";
-const CONTRIBUTION: &str = "pangine-answer-contribution";
-const ADJUSTED_OUTPUTS: &str = "pangine-answer-adjusted-outputs";
+const ADJUSTMENTS: &str = "pangine-answer-adjustments";
+const ADJUSTMENT: &str = "pangine-answer-adjustment";
 const LIVE_ANSWER: &str = "pangine-live-answer";
 const LIVE_PROJECTIONS: &str = "pangine-answer-live-projections";
 const LIVE_PROJECTION: &str = "pangine-answer-live-projection";
@@ -232,7 +233,7 @@ impl ConceptAnswer {
         adjustment.projected_outputs(pangine, adjustment_template)?;
         let target = self.to_result(pangine)?;
         let adjustment = adjustment.to_result(pangine)?;
-        let result = pangine.adjust_completion_result(&target, template, &adjustment, adjustment_template, &self.outputs, factor)?;
+        let result = pangine.adjust_completion_result(&target, template, &adjustment, adjustment_template, factor)?;
         let mut answer = Self::from_result(pangine, &result);
         answer.questions = self.questions.clone();
         answer.outputs = self.outputs.clone();
@@ -251,7 +252,7 @@ impl ConceptAnswer {
         let question = answer.shape(pangine)?;
         let left = self.to_result(pangine)?;
         let right = other.to_result(pangine)?;
-        let result = pangine.join_completion_results(&left, &self.outputs, &right, &other.outputs, &question);
+        let result = pangine.join_completion_results(&left, &self.outputs, &right, &other.outputs, &question)?;
         if result.completions().is_empty() {
             return None;
         }
@@ -291,18 +292,62 @@ impl ConceptAnswer {
 
 fn encode_completion(pangine: &mut Pangine, completion: &Completion) -> ConceptId {
     let bindings = encode_bindings(pangine, BINDINGS, completion.bindings());
-    let evidence = completion.evidence().iter().map(|evidence| encode_evidence(pangine, evidence)).collect::<Vec<_>>();
-    let evidence = encode_concept_set(pangine, EVIDENCE_SET, evidence);
-    tagged(pangine, ROW, vec![bindings, evidence])
+    let evidence = encode_evidence_set(pangine, completion.evidence());
+    let mut fields = vec![bindings, evidence];
+    if !completion.adjustments().is_empty() {
+        let adjustments = completion
+            .adjustments()
+            .iter()
+            .map(|adjustment| {
+                let factor = encode_signed(pangine, adjustment.factor.count());
+                let evidence = encode_evidence_set(pangine, &adjustment.evidence);
+                tagged(pangine, ADJUSTMENT, vec![factor, evidence])
+            })
+            .collect::<Vec<_>>();
+        fields.push(encode_concept_set(pangine, ADJUSTMENTS, adjustments));
+    }
+    tagged(pangine, ROW, fields)
 }
 
 fn decode_completion(pangine: &Pangine, concept: &ConceptId) -> Option<Completion> {
-    let [bindings, evidence] = fixed_fields(pangine, concept, ROW)?;
-    let bindings = decode_bindings(pangine, bindings, BINDINGS)?;
-    let mut evidence = tagged_fields(pangine, evidence, EVIDENCE_SET)?.iter().map(|evidence| decode_evidence(pangine, evidence)).collect::<Option<Vec<_>>>()?;
+    let (bindings, evidence, mut adjustments) = match tagged_fields(pangine, concept, ROW)? {
+        [bindings, evidence] => (bindings, evidence, Vec::new()),
+        [bindings, evidence, adjustments] => {
+            let adjustments = tagged_fields(pangine, adjustments, ADJUSTMENTS)?
+                .iter()
+                .map(|adjustment| decode_adjustment(pangine, adjustment))
+                .collect::<Option<Vec<_>>>()?;
+            if adjustments.is_empty() {
+                return None;
+            }
+            (bindings, evidence, adjustments)
+        }
+        _ => return None,
+    };
+    adjustments.sort();
+    adjustments.dedup();
+    Some(Completion::from_parts(decode_bindings(pangine, bindings, BINDINGS)?, decode_evidence_set(pangine, evidence)?, adjustments))
+}
+
+fn decode_adjustment(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionAdjustment> {
+    let [factor, evidence] = fixed_fields(pangine, concept, ADJUSTMENT)?;
+    let factor = Relevance::new(decode_signed(pangine, factor)?);
+    if factor.is_empty() {
+        return None;
+    }
+    Some(CompletionAdjustment { factor, evidence: decode_evidence_set(pangine, evidence)? })
+}
+
+fn encode_evidence_set(pangine: &mut Pangine, evidence: &[CompletionEvidence]) -> ConceptId {
+    let evidence = evidence.iter().map(|evidence| encode_evidence(pangine, evidence)).collect::<Vec<_>>();
+    encode_concept_set(pangine, EVIDENCE_SET, evidence)
+}
+
+fn decode_evidence_set(pangine: &Pangine, concept: &ConceptId) -> Option<Vec<CompletionEvidence>> {
+    let mut evidence = tagged_fields(pangine, concept, EVIDENCE_SET)?.iter().map(|evidence| decode_evidence(pangine, evidence)).collect::<Option<Vec<_>>>()?;
     evidence.sort();
     evidence.dedup();
-    Some(Completion::from_parts(bindings, evidence))
+    Some(evidence)
 }
 
 fn encode_evidence(pangine: &mut Pangine, evidence: &CompletionEvidence) -> ConceptId {
@@ -311,17 +356,9 @@ fn encode_evidence(pangine: &mut Pangine, evidence: &CompletionEvidence) -> Conc
     let products = encode_route_set(pangine, SOURCE_ROUTE_PRODUCTS, evidence.source_route_products());
     let assignment = encode_bindings(pangine, BINDINGS, evidence.bindings());
     let remainders = evidence.remainders().map(|remainder| encode_remainder(pangine, remainder)).collect::<Vec<_>>();
-    let adjusted_outputs = evidence.adjusted_outputs().cloned().collect::<Vec<_>>();
     let mut fields = vec![source, evidence.clause().clone(), evidence.matched().clone(), routes, products, assignment];
     if !remainders.is_empty() {
         fields.push(encode_concept_set(pangine, REMAINDERS, remainders));
-    }
-    if evidence.source_contribution() != Relevance::DEFAULT {
-        let contribution = encode_signed(pangine, evidence.source_contribution().count());
-        fields.push(tagged(pangine, CONTRIBUTION, vec![contribution]));
-    }
-    if !adjusted_outputs.is_empty() {
-        fields.push(encode_concept_set(pangine, ADJUSTED_OUTPUTS, adjusted_outputs));
     }
     tagged(pangine, EVIDENCE, fields)
 }
@@ -330,35 +367,11 @@ fn decode_evidence(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionE
     let fields = tagged_fields(pangine, concept, EVIDENCE)?;
     let required: &[ConceptId; 6] = fields.get(..6)?.try_into().ok()?;
     let [source, clause, matched, routes, products, assignment] = required;
-    let mut remainders = BTreeSet::new();
-    let mut contribution = Relevance::DEFAULT;
-    let mut adjusted_outputs = BTreeSet::new();
-    let mut has_remainders = false;
-    let mut has_contribution = false;
-    let mut has_adjusted_outputs = false;
-    for field in &fields[6..] {
-        if let Some(values) = tagged_fields(pangine, field, REMAINDERS) {
-            if has_remainders {
-                return None;
-            }
-            has_remainders = true;
-            remainders = values.iter().map(|remainder| decode_remainder(pangine, remainder)).collect::<Option<_>>()?;
-        } else if let Some([value]) = fixed_fields(pangine, field, CONTRIBUTION) {
-            if has_contribution {
-                return None;
-            }
-            has_contribution = true;
-            contribution = Relevance::new(decode_signed(pangine, value)?);
-        } else if tagged_fields(pangine, field, ADJUSTED_OUTPUTS).is_some() {
-            if has_adjusted_outputs {
-                return None;
-            }
-            has_adjusted_outputs = true;
-            adjusted_outputs = decode_concept_set(pangine, field, ADJUSTED_OUTPUTS)?;
-        } else {
-            return None;
-        }
-    }
+    let remainders = match &fields[6..] {
+        [] => BTreeSet::new(),
+        [remainders] => tagged_fields(pangine, remainders, REMAINDERS)?.iter().map(|remainder| decode_remainder(pangine, remainder)).collect::<Option<_>>()?,
+        _ => return None,
+    };
     Some(CompletionEvidence::from_parts(CompletionEvidenceParts {
         source: decode_source(pangine, source)?,
         clause: clause.clone(),
@@ -367,8 +380,6 @@ fn decode_evidence(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionE
         source_route_products: decode_route_set(pangine, products, SOURCE_ROUTE_PRODUCTS)?,
         assignment: decode_bindings(pangine, assignment, BINDINGS)?,
         remainders,
-        contribution,
-        adjusted_outputs,
     }))
 }
 
@@ -770,15 +781,22 @@ mod tests {
             candidates.adjust(&mut pangine, &decision, &trusted_outcomes, &episode_decision, Relevance::DEFAULT).expect("higher-order candidate adjustment");
         assert_eq!(adjusted.materialize(&mut pangine, &decision), Some(must_ref(&mut pangine, "x3[B]x2[A]")));
         assert_eq!(adjusted.choose(&mut pangine, &decision).unwrap().0, must_ref(&mut pangine, "[B]"));
+        let encoded = adjusted.encode(&mut pangine);
+        assert!(ConceptAnswer::decode(&pangine, &encoded).as_ref() == Some(&adjusted), "imported derivations survive the codec");
 
         let cancelled = candidates.adjust(&mut pangine, &decision, &candidates, &decision, Relevance::new(-1)).expect("self cancellation");
         assert_eq!(cancelled.rows.len(), 2);
         for row in &cancelled.rows {
-            assert!(row.evidence().iter().any(|evidence| evidence.source_contribution() == Relevance::DEFAULT));
-            assert!(row.evidence().iter().any(|evidence| evidence.source_contribution() == Relevance::new(-1)));
+            let [adjustment] = row.adjustments() else {
+                panic!("self cancellation imports one derivation into each row");
+            };
+            assert_eq!(adjustment.factor, Relevance::new(-1));
+            assert!(adjustment.evidence == row.evidence());
             assert!(row.evidence().iter().all(|evidence| pangine.format_concept(evidence.source_subject(), false) == "{candidates}"));
         }
         assert!(cancelled.materialize(&mut pangine, &decision).is_none());
+        let encoded = cancelled.encode(&mut pangine);
+        assert!(ConceptAnswer::decode(&pangine, &encoded).as_ref() == Some(&cancelled), "signed factors survive the codec");
     }
 
     #[test]
@@ -821,7 +839,7 @@ mod tests {
         let middle_conclusion = must_ref(&mut reducer, "{middle}->{conclusion}");
         let conclusion = reducer.reference_percept("conclusion");
 
-        assert_eq!(joined.materialize(&mut reducer, &middle_conclusion), Some(must_ref(&mut reducer, "x2([human]->[mortal])")));
+        assert_eq!(joined.materialize(&mut reducer, &middle_conclusion), Some(must_ref(&mut reducer, "[human]->[mortal]")));
         assert_eq!(joined.materialize(&mut reducer, &conclusion), Some(must_ref(&mut reducer, "[mortal]")));
         assert_eq!(joined.rows.len(), 1);
     }

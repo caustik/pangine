@@ -426,6 +426,9 @@ fn console_question_results_are_grounded_rows() {
     }
     let composed = must_ref(&mut pangine, "{Room} @ ([kitchen]->[connected-to]->{where})({where}->[sound]->{indirect-answer})");
     assert_eq!(pangine.debug_console_lines(Some(&composed)), vec!["  [kitchen]->[connected-to]->[living-room]", "  [living-room]->[sound]->[music]"]);
+    // The one row joins two experiences seen once each, so the shared hole carries 1 x 1.
+    let shared = must_ref(&mut pangine, "${where}");
+    assert_eq!(pangine.debug_console_lines(Some(&shared)), vec!["  [living-room]"]);
 
     experience(&mut pangine, "world", "[morning][birds]", 2);
     experience(&mut pangine, "world", "[morning][traffic]", 1);

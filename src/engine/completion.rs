@@ -1,6 +1,6 @@
 use super::{
-    CompletionProjectionWitnesses, ConceptId, ConceptKind, ConceptMap, Pangine, ProjectionAssignment, QuestionSelector, QuestionSource, QuestionSourceView,
-    QuestionWitness,
+    CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationSources, Pangine, ProjectionAssignment, QuestionSelector, QuestionSource,
+    QuestionSourceView,
 };
 use crate::Relevance;
 use std::cmp::Ordering;
@@ -201,14 +201,11 @@ struct CompletionEvidenceSource {
 
 /// Describes one selected source fragment participating in a completion.
 ///
-/// Immutable source matching details are shared across derived answers. An
-/// adjustment changes only the signed contribution and the target outputs to
-/// which that source applies.
+/// Immutable source matching details are shared across derived answers, and
+/// answer adjustment imports complete fragments without changing them.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CompletionEvidence {
     source: Rc<CompletionEvidenceSource>,
-    contribution: Relevance,
-    adjusted_outputs: BTreeSet<ConceptId>,
 }
 
 pub(super) struct CompletionEvidenceParts {
@@ -219,8 +216,6 @@ pub(super) struct CompletionEvidenceParts {
     pub(super) source_route_products: BTreeSet<CompletionRoute>,
     pub(super) assignment: ProjectionAssignment,
     pub(super) remainders: BTreeSet<CompletionRemainder>,
-    pub(super) contribution: Relevance,
-    pub(super) adjusted_outputs: BTreeSet<ConceptId>,
 }
 
 impl CompletionEvidence {
@@ -233,7 +228,7 @@ impl CompletionEvidence {
             assignment: parts.assignment,
             remainders: parts.remainders,
         };
-        Self { source: Rc::new(source), contribution: parts.contribution, adjusted_outputs: parts.adjusted_outputs }
+        Self { source: Rc::new(source) }
     }
 
     /// Returns the question clause matched by this evidence.
@@ -264,20 +259,11 @@ impl CompletionEvidence {
         &self.source.source_view.source.concept
     }
 
-    /// Returns the relevance attached to the source Concept.
+    /// Returns the evidence count of the source Concept.
     ///
     /// Direct ordinary Concepts have default relevance.
     pub fn source_relevance(&self) -> Relevance {
         self.source.source_view.source.relevance
-    }
-
-    /// Returns this source's signed contribution to the current linked answer.
-    ///
-    /// This equals [`Self::source_relevance`] for an ordinary question.
-    /// Functional Answer adjustment can retain the source while changing the
-    /// sign of its contribution.
-    pub fn source_contribution(&self) -> Relevance {
-        self.contribution
     }
 
     /// Returns the recursive source view matched by the clause.
@@ -356,36 +342,40 @@ impl CompletionEvidence {
         self.source.assignment.iter()
     }
 
-    /// Iterates over answer outputs that this evidence supports because it was
-    /// imported through an explicit answer adjustment.
-    ///
-    /// Source-local bindings remain available through [`Self::binding`]. This
-    /// separate set prevents a deep adjustment chain from copying every prior
-    /// answer assignment into every retained source fragment.
-    pub(super) fn adjusted_outputs(&self) -> impl Iterator<Item = &ConceptId> {
-        self.adjusted_outputs.iter()
-    }
-
     /// Returns unmatched structure retained by this evidence fragment.
     pub fn remainders(&self) -> impl Iterator<Item = &CompletionRemainder> {
         self.source.remainders.iter()
     }
+
+    fn question_source(&self) -> &QuestionSource {
+        &self.source.source_view.source
+    }
+}
+
+/// Evidence imported into a completion by answer adjustment.
+///
+/// It keeps one complete derivation of a matching row from another answer,
+/// together with the signed factor that the adjustment applied to it.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct CompletionAdjustment {
+    pub(super) factor: Relevance,
+    pub(super) evidence: Vec<CompletionEvidence>,
 }
 
 /// One proof-bearing correlated grounding of every Percept hole in a question.
 /// Distinct clause-to-source proofs can therefore produce distinct completions
-/// with the same grounded assignment. After Answer adjustment, the evidence
-/// can also include the matched clauses from the separate answer that adjusted
-/// this grounding.
+/// with the same grounded assignment. Answer adjustment can add signed
+/// derivations imported from matching rows of another answer.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Completion {
     assignment: ProjectionAssignment,
     evidence: Vec<CompletionEvidence>,
+    adjustments: Vec<CompletionAdjustment>,
 }
 
 impl Completion {
-    pub(super) fn from_parts(assignment: ProjectionAssignment, evidence: Vec<CompletionEvidence>) -> Self {
-        Self { assignment, evidence }
+    pub(super) fn from_parts(assignment: ProjectionAssignment, evidence: Vec<CompletionEvidence>, adjustments: Vec<CompletionAdjustment>) -> Self {
+        Self { assignment, evidence, adjustments }
     }
 
     /// Returns the value assigned to `percept` in this completion.
@@ -398,9 +388,25 @@ impl Completion {
         self.assignment.iter()
     }
 
-    /// Returns the source fragments participating in this completion.
+    /// Returns the source fragments that prove this completion's own question.
+    ///
+    /// Evidence imported by answer adjustment is kept apart from this proof;
+    /// [`AnswerPossibility::support`](crate::AnswerPossibility::support)
+    /// reports both.
     pub fn evidence(&self) -> &[CompletionEvidence] {
         &self.evidence
+    }
+
+    /// Returns the derivations imported by answer adjustment.
+    pub(super) fn adjustments(&self) -> &[CompletionAdjustment] {
+        &self.adjustments
+    }
+
+    /// Iterates over this completion's derivations: its own proof with the
+    /// default factor, then every imported adjustment with its signed factor.
+    pub(super) fn derivations(&self) -> impl Iterator<Item = (Relevance, &[CompletionEvidence])> {
+        std::iter::once((Relevance::DEFAULT, self.evidence.as_slice()))
+            .chain(self.adjustments.iter().map(|adjustment| (adjustment.factor, adjustment.evidence.as_slice())))
     }
 }
 
@@ -499,7 +505,7 @@ impl Pangine {
             .flat_map(|(group, clauses)| clauses.into_iter().map(move |clause| (clause, group)))
             .collect::<BTreeMap<_, _>>();
         let shared_percepts = self.shared_clause_percepts(&clauses);
-        let mut products = BTreeSet::from([Completion { assignment: ProjectionAssignment::new(), evidence: Vec::new() }]);
+        let mut products = BTreeSet::from([Completion { assignment: ProjectionAssignment::new(), evidence: Vec::new(), adjustments: Vec::new() }]);
 
         for clause in clauses {
             let mut clause_evidence = BTreeSet::new();
@@ -508,8 +514,6 @@ impl Pangine {
                     let routes = routes_with_binding_origins(routes, &completion.binding_paths);
                     let source_route_products = source_route_constraints(&routes, &shared_percepts);
                     clause_evidence.insert(CompletionEvidence {
-                        contribution: source.relevance,
-                        adjusted_outputs: BTreeSet::new(),
                         source: Rc::new(CompletionEvidenceSource {
                             clause: clause.clone(),
                             source_route_products,
@@ -547,7 +551,7 @@ impl Pangine {
                     let mut evidence = evidence.clone();
                     Rc::make_mut(&mut evidence.source).source_route_products = source_route_products;
                     joined_evidence.push(evidence);
-                    next.insert(Completion { assignment, evidence: joined_evidence });
+                    next.insert(Completion { assignment, evidence: joined_evidence, adjustments: Vec::new() });
                 }
             }
             products = next;
@@ -566,6 +570,11 @@ impl Pangine {
         CompletionResult { question: question.clone(), completions }
     }
 
+    /// Joins compatible rows of two answers.
+    ///
+    /// A joined row is weighed as the product of its two rows, so every pair
+    /// of their derivations becomes one derivation of the joined row. A source
+    /// on both sides still counts once within each joined derivation.
     pub(super) fn join_completion_results(
         &self,
         left: &CompletionResult,
@@ -573,7 +582,7 @@ impl Pangine {
         right: &CompletionResult,
         right_outputs: &BTreeSet<ConceptId>,
         question: &ConceptId,
-    ) -> CompletionResult {
+    ) -> Option<CompletionResult> {
         let active_outputs = left_outputs.union(right_outputs).cloned().collect::<BTreeSet<_>>();
         let mut completions = BTreeSet::new();
         for left_completion in &left.completions {
@@ -583,31 +592,41 @@ impl Pangine {
                 let Some(assignment) = Self::merge_projection_assignments(&left_assignment, &right_assignment) else {
                     continue;
                 };
-                let mut evidence = left_completion.evidence.clone();
-                evidence.extend(right_completion.evidence.iter().cloned());
-                evidence.sort();
-                evidence.dedup();
-                if !refresh_completion_evidence_routes(&mut evidence, &active_outputs) {
+                let Some(evidence) = joined_evidence(&left_completion.evidence, &right_completion.evidence, &active_outputs) else {
                     continue;
+                };
+                let mut adjustments = BTreeSet::new();
+                for (left_index, (left_factor, left_evidence)) in left_completion.derivations().enumerate() {
+                    for (right_index, (right_factor, right_evidence)) in right_completion.derivations().enumerate() {
+                        if left_index == 0 && right_index == 0 {
+                            continue;
+                        }
+                        let Some(evidence) = joined_evidence(left_evidence, right_evidence, &active_outputs) else {
+                            continue;
+                        };
+                        adjustments.insert(CompletionAdjustment { factor: left_factor.checked_mul(right_factor)?, evidence });
+                    }
                 }
-                evidence.sort();
-                evidence.dedup();
-                completions.insert(Completion { assignment, evidence });
+                completions.insert(Completion { assignment, evidence, adjustments: adjustments.into_iter().collect() });
             }
         }
-        CompletionResult { question: question.clone(), completions: completions.into_iter().collect() }
+        Some(CompletionResult { question: question.clone(), completions: completions.into_iter().collect() })
     }
 
+    /// Imports every derivation of each matching adjustment row into the
+    /// target rows, multiplied by `factor`.
+    ///
+    /// Importing a derivation that a target row already holds with the same
+    /// factor changes nothing, so repeating an adjustment is idempotent.
     pub(super) fn adjust_completion_result(
         &mut self,
         target: &CompletionResult,
         target_template: &ConceptId,
         adjustment: &CompletionResult,
         adjustment_template: &ConceptId,
-        target_outputs: &BTreeSet<ConceptId>,
-        contribution_factor: Relevance,
+        factor: Relevance,
     ) -> Option<CompletionResult> {
-        if contribution_factor.is_empty() {
+        if factor.is_empty() {
             return Some(target.clone());
         }
 
@@ -623,20 +642,13 @@ impl Pangine {
             let mut adjusted = target_completion.clone();
 
             for (_, adjustment_completion) in adjustment_candidates.iter().filter(|(candidate, _)| *candidate == target_candidate) {
-                for evidence in &adjustment_completion.evidence {
-                    let mut evidence = evidence.clone();
-                    evidence.contribution = evidence.contribution.checked_mul(contribution_factor)?;
-                    evidence.adjusted_outputs = target_outputs
-                        .iter()
-                        .filter(|output| evidence.source.assignment.get(*output) != target_completion.assignment.get(*output))
-                        .cloned()
-                        .collect();
-                    adjusted.evidence.push(evidence);
+                for (derivation_factor, evidence) in adjustment_completion.derivations() {
+                    adjusted.adjustments.push(CompletionAdjustment { factor: factor.checked_mul(derivation_factor)?, evidence: evidence.to_vec() });
                 }
             }
 
-            adjusted.evidence.sort();
-            adjusted.evidence.dedup();
+            adjusted.adjustments.sort();
+            adjusted.adjustments.dedup();
             completions.insert(adjusted);
         }
 
@@ -663,32 +675,32 @@ impl Pangine {
         self.instantiate_completion_inner(template, &completion.assignment)
     }
 
-    pub(super) fn completion_projection_witnesses(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<CompletionProjectionWitnesses> {
-        let mut outputs = BTreeSet::new();
-        self.collect_output_percepts(template, &mut outputs);
-        let mut witnesses = CompletionProjectionWitnesses::new();
+    /// Weighs every projected value by the derivations of the complete rows
+    /// that project it.
+    ///
+    /// A derivation weighs its factor times the counts of its distinct
+    /// sources, so a source proving several clauses counts once while sources
+    /// joined from separate experiences multiply. Alternative routes through
+    /// the same sources prove the same derivation of a row only once. Each
+    /// value's derivations are grouped by factor and sources, and their
+    /// weights add across rows.
+    pub(super) fn completion_projection_support(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<CompletionProjectionSupport> {
+        let mut support = CompletionProjectionSupport::new();
+        let mut weighed = BTreeSet::new();
         for completion in &result.completions {
             let candidate = self.instantiate_completion_inner(template, &completion.assignment)?;
-            let candidate_witnesses = witnesses.entry(candidate).or_default();
-            candidate_witnesses.extend(
-                completion
-                    .evidence
-                    .iter()
-                    .filter(|evidence| {
-                        outputs.iter().any(|output| {
-                            if evidence.adjusted_outputs.contains(output) {
-                                return true;
-                            }
-                            let Some(binding) = evidence.source.assignment.get(output) else {
-                                return false;
-                            };
-                            completion.assignment.get(output) == Some(binding)
-                        })
-                    })
-                    .map(|evidence| QuestionWitness { source: evidence.source.source_view.source.clone(), contribution: evidence.contribution }),
-            );
+            let candidate_support = support.entry(candidate).or_default();
+            for (factor, evidence) in completion.derivations() {
+                let sources = evidence.iter().map(|fragment| fragment.question_source().clone()).collect::<BTreeSet<_>>();
+                if !weighed.insert((&completion.assignment, factor, sources.clone())) {
+                    continue;
+                }
+                let weight = sources.iter().try_fold(factor, |weight, source| weight.checked_mul(source.relevance))?;
+                let total = candidate_support.entry((factor, sources)).or_insert(Relevance::EMPTY);
+                *total = total.checked_add(weight)?;
+            }
         }
-        Some(witnesses)
+        Some(support)
     }
 
     pub(super) fn materialize_completion_rows(&mut self, result: &CompletionResult) -> Option<ConceptId> {
@@ -709,21 +721,18 @@ impl Pangine {
     }
 
     pub(super) fn try_materialize_completion_projection(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<Option<ConceptId>> {
-        let witnesses = self.completion_projection_witnesses(result, template)?;
+        let support = self.completion_projection_support(result, template)?;
         let mut candidates = ConceptMap::new();
-        for (candidate, sources) in witnesses {
-            // The current integer rule adds distinct source witnesses. Keeping
-            // those witnesses in the complete answer leaves room for a different
-            // Relevance combination rule later.
-            let support = self.question_source_support(&sources)?;
-            self.add_union_concept(&mut candidates, candidate, false, support)?;
+        for (candidate, derivations) in support {
+            let strength = projection_strength(&derivations)?;
+            self.add_union_concept(&mut candidates, candidate, false, strength)?;
         }
         Some(self.reference_map(&candidates))
     }
 
     pub(super) fn choose_completion_result(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<(ConceptId, CompletionResult)> {
-        let witnesses = self.completion_projection_witnesses(result, template)?;
-        let selected = self.select_projection_candidate(&witnesses)?;
+        let support = self.completion_projection_support(result, template)?;
+        let selected = self.select_projection_candidate(&support)?;
         let mut result = result.clone();
         result.completions.retain(|completion| self.instantiate_completion_inner(template, &completion.assignment).as_ref() == Some(&selected));
         (!result.completions.is_empty()).then_some((selected, result))
@@ -935,8 +944,26 @@ impl Pangine {
     }
 }
 
+/// Returns a projected value's evidence count: the sum of its derivation weights.
+pub(super) fn projection_strength(derivations: &BTreeMap<DerivationSources, Relevance>) -> Option<Relevance> {
+    derivations.values().try_fold(Relevance::EMPTY, |strength, weight| strength.checked_add(*weight))
+}
+
 fn active_completion_assignment(completion: &Completion, outputs: &BTreeSet<ConceptId>) -> ProjectionAssignment {
     completion.assignment.iter().filter(|(percept, _)| outputs.contains(*percept)).map(|(percept, value)| (percept.clone(), value.clone())).collect()
+}
+
+fn joined_evidence(left: &[CompletionEvidence], right: &[CompletionEvidence], active_outputs: &BTreeSet<ConceptId>) -> Option<Vec<CompletionEvidence>> {
+    let mut evidence = left.to_vec();
+    evidence.extend(right.iter().cloned());
+    evidence.sort();
+    evidence.dedup();
+    if !refresh_completion_evidence_routes(&mut evidence, active_outputs) {
+        return None;
+    }
+    evidence.sort();
+    evidence.dedup();
+    Some(evidence)
 }
 
 fn refresh_completion_evidence_routes(evidence: &mut [CompletionEvidence], active_outputs: &BTreeSet<ConceptId>) -> bool {

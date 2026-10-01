@@ -19,7 +19,7 @@ mod parser;
 mod question;
 mod question_index;
 
-pub use answer::{Answer, AnswerChoice, AnswerPossibility, AnswerSourceContribution, AnswerView};
+pub use answer::{Answer, AnswerChoice, AnswerPossibility, AnswerSource, AnswerSupport, AnswerView};
 pub use completion::{Completion, CompletionEvidence, CompletionRemainder, CompletionRemainderSide, CompletionResult};
 use completion::{CompletionBindingOrigin, CompletionOrderedStep, CompletionOrderedWindow, CompletionRoute};
 use concept_answer::{ConceptAnswer, LiveConceptAnswer};
@@ -29,7 +29,10 @@ use question_index::PerceptQuestionIndex;
 
 type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
-type CompletionProjectionWitnesses = BTreeMap<ConceptId, BTreeSet<QuestionWitness>>;
+/// The signed factor and distinct sources that identify one weighed derivation.
+type DerivationSources = (Relevance, BTreeSet<QuestionSource>);
+/// Each projected value's derivations and their weights summed across rows.
+type CompletionProjectionSupport = BTreeMap<ConceptId, BTreeMap<DerivationSources, Relevance>>;
 type QuestionSourceViewKey = (QuestionSource, ConceptId, BTreeMap<ConceptId, ConceptId>);
 type QuestionSourceViews = BTreeMap<QuestionSourceViewKey, BTreeSet<CompletionRoute>>;
 
@@ -76,12 +79,6 @@ impl QuestionSource {
             QuestionSourceOrigin::Subject => None,
         }
     }
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct QuestionWitness {
-    source: QuestionSource,
-    contribution: Relevance,
 }
 
 enum QuestionSelector {
@@ -717,10 +714,13 @@ mod tests {
         assert!(pangine.set_percept_subconcepts(&meals, ConceptMap::from([(meal, Relevance::new(i64::MAX))])).is_some());
         pangine.reference_concept("{meals} @ {animal}->[eats]->{food}").unwrap().unwrap();
         pangine.reference_concept("{home} = [old-home]").unwrap().unwrap();
+        let homes = pangine.reference_percept("homes");
+        let home = pangine.reference_concept("[cat]->[lives-in]->[house]").unwrap().unwrap();
+        assert!(pangine.set_percept_subconcepts(&homes, ConceptMap::from([(home, Relevance::new(2))])).is_some());
 
         let linked_before = pangine.reference_concept("&{animal}").unwrap().unwrap();
         let animal_before = pangine.reference_concept("${animal}").unwrap().unwrap();
-        assert!(pangine.reference_concept("([cat]->[lives-in]->[house]) @ {animal}->[lives-in]->{home}").unwrap().is_none());
+        assert!(pangine.reference_concept("{homes} @ {animal}->[lives-in]->{home}").unwrap().is_none());
 
         assert_eq!(pangine.reference_concept("&{animal}").unwrap(), Some(linked_before));
         assert_eq!(pangine.reference_concept("${animal}").unwrap(), Some(animal_before));
