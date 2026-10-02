@@ -18,59 +18,74 @@ const MILLION: u128 = 1_000_000;
 /// Fractions with larger denominators print as decimals.
 const LARGEST_PRINTED_DENOMINATOR: i128 = 1_000_000;
 
-/// A probability: an exact reduced fraction, or a fixed-point value once
-/// exact arithmetic would no longer fit in 128 bits.
+/// A probability read from an answer's evidence.
+///
+/// It is an exact reduced fraction while the arithmetic behind it fits in 128
+/// bits. Past that it is a fixed-point value with 64 fractional bits, computed
+/// with integer rounding, so every platform reads the same value. Its display
+/// form is a fraction such as `9/40`, or a decimal to six places when the
+/// denominator is above one million or the value is fixed point.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum Probability {
-    /// A reduced fraction with `0 <= numerator <= denominator`.
+pub struct Probability(Value);
+
+#[derive(Clone, Copy, Debug)]
+enum Value {
+    // A reduced fraction with `0 <= numerator <= denominator`.
     Exact { numerator: i128, denominator: i128 },
-    /// The probability in units of 2^-64.
+    // The probability in units of 2^-64.
     Fixed(u128),
 }
 
 impl Probability {
-    pub(super) const ZERO: Self = Self::Exact { numerator: 0, denominator: 1 };
+    pub(super) const ZERO: Self = Self(Value::Exact { numerator: 0, denominator: 1 });
 
     pub(super) fn new(numerator: i128, denominator: i128) -> Option<Self> {
         if numerator < 0 || denominator <= 0 || numerator > denominator {
             return None;
         }
         let divisor = greatest_common_divisor(numerator, denominator);
-        Some(Self::Exact { numerator: numerator / divisor, denominator: denominator / divisor })
+        Some(Self(Value::Exact { numerator: numerator / divisor, denominator: denominator / divisor }))
     }
 
-    /// Returns the reduced numerator and denominator of an exact probability.
-    pub(super) fn fraction(self) -> Option<(i128, i128)> {
-        match self {
-            Self::Exact { numerator, denominator } => Some((numerator, denominator)),
-            Self::Fixed(_) => None,
+    fn fixed_point(value: u128) -> Self {
+        Self(Value::Fixed(value))
+    }
+
+    /// Returns the reduced numerator and denominator, or none for a
+    /// fixed-point probability.
+    pub fn fraction(self) -> Option<(i128, i128)> {
+        match self.0 {
+            Value::Exact { numerator, denominator } => Some((numerator, denominator)),
+            Value::Fixed(_) => None,
         }
     }
 
-    pub(super) fn is_zero(self) -> bool {
+    /// Returns whether the probability is zero.
+    pub fn is_zero(self) -> bool {
         self.fixed() == 0
     }
 
-    pub(super) fn as_f64(self) -> f64 {
-        match self {
-            Self::Exact { numerator, denominator } => numerator as f64 / denominator as f64,
-            Self::Fixed(value) => value as f64 / FIXED_ONE as f64,
+    /// Returns the probability as a floating-point number.
+    pub fn as_f64(self) -> f64 {
+        match self.0 {
+            Value::Exact { numerator, denominator } => numerator as f64 / denominator as f64,
+            Value::Fixed(value) => value as f64 / FIXED_ONE as f64,
         }
     }
 
     /// Returns the probability in units of 2^-64, rounded down.
     fn fixed(self) -> u128 {
-        match self {
-            Self::Exact { numerator, denominator } => scaled_down(numerator.unsigned_abs(), denominator.unsigned_abs()),
-            Self::Fixed(value) => value,
+        match self.0 {
+            Value::Exact { numerator, denominator } => scaled_down(numerator.unsigned_abs(), denominator.unsigned_abs()),
+            Value::Fixed(value) => value,
         }
     }
 }
 
 impl Ord for Probability {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (*self, *other) {
-            (Self::Exact { numerator: a, denominator: b }, Self::Exact { numerator: c, denominator: d }) => {
+        match (self.0, other.0) {
+            (Value::Exact { numerator: a, denominator: b }, Value::Exact { numerator: c, denominator: d }) => {
                 compare_fractions(a.unsigned_abs(), b.unsigned_abs(), c.unsigned_abs(), d.unsigned_abs())
             }
             _ => self.fixed().cmp(&other.fixed()),
@@ -96,10 +111,10 @@ impl Eq for Probability {}
 /// denominator is above one million or the probability is fixed point.
 impl std::fmt::Display for Probability {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            Self::Exact { numerator: 0, .. } => formatter.write_str("0"),
-            Self::Exact { numerator, denominator: 1 } => write!(formatter, "{numerator}"),
-            Self::Exact { numerator, denominator } if denominator <= LARGEST_PRINTED_DENOMINATOR => write!(formatter, "{numerator}/{denominator}"),
+        match self.0 {
+            Value::Exact { numerator: 0, .. } => formatter.write_str("0"),
+            Value::Exact { numerator, denominator: 1 } => write!(formatter, "{numerator}"),
+            Value::Exact { numerator, denominator } if denominator <= LARGEST_PRINTED_DENOMINATOR => write!(formatter, "{numerator}/{denominator}"),
             _ => {
                 // Round to the nearest millionth; the fixed value is at most 2^64.
                 let millionths = (self.fixed() * MILLION + FIXED_ONE / 2) >> 64;
@@ -191,7 +206,7 @@ fn fixed_interpolation<'a>(levels: &[BTreeMap<&'a ConceptId, i128>]) -> Option<B
             })
             .collect::<Option<_>>()?;
     }
-    Some(probabilities.into_iter().map(|(value, fixed)| (value, Probability::Fixed(fixed))).collect())
+    Some(probabilities.into_iter().map(|(value, fixed)| (value, Probability::fixed_point(fixed))).collect())
 }
 
 /// Restates the probabilities as whole-number shares to draw from: exact
@@ -375,6 +390,6 @@ mod tests {
         assert_eq!(Probability::new(1, 1_000_000).unwrap().to_string(), "1/1000000");
         assert_eq!(Probability::new(2, 3_000_001).unwrap().to_string(), "0.000001");
         assert_eq!(Probability::new(108_340_675_114_792_281_569, 156_302_554_713_764_659_200).unwrap().to_string(), "0.693147");
-        assert_eq!(Probability::Fixed(FIXED_ONE / 4).to_string(), "0.250000");
+        assert_eq!(Probability::fixed_point(FIXED_ONE / 4).to_string(), "0.250000");
     }
 }

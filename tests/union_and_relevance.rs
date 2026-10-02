@@ -225,7 +225,7 @@ fn readings(test: &mut PangineTest, output: &str) -> Vec<Reading> {
     possibilities
         .iter()
         .map(|possibility| {
-            (pangine.format_concept(possibility.value(), false), possibility.strength().count(), possibility.probability(), possibility.is_top_tie())
+            (pangine.format_concept(possibility.value(), false), possibility.strength().count(), possibility.probability().as_f64(), possibility.is_top_tie())
         })
         .collect()
 }

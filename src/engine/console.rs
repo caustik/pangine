@@ -9,7 +9,7 @@ Commands:
   help, h          Show this help
   inspect operand  Show linked values, their probabilities, and their sources
   seed n           Restart the generator that ^~ draws from at seed n
-  quit, q          Exit
+  quit, q          Exit the command-line console
 
 Concept syntax:
   []                         No Concept
@@ -121,7 +121,7 @@ impl Pangine {
             let rows = possibility.complete_rows();
             let row_label = if rows == 1 { "row" } else { "rows" };
             let value = self.format_concept(possibility.value(), false);
-            let probability = possibility.probability_value();
+            let probability = possibility.probability();
             lines.push(format!("  {marker} {:+}, p={probability}, {rows} {row_label}: {value}", possibility.strength().count()));
 
             let mut support = possibility
@@ -166,6 +166,24 @@ impl Pangine {
         Ok(())
     }
 
+    /// Runs one console command: `help` or `h`, `inspect operand`, or
+    /// `seed n`.
+    ///
+    /// Returns the lines the command prints, or its message when it fails.
+    /// Returns none when `line` is not a console command, so the caller can run
+    /// it as Pangine syntax. The interactive console and the pangine.com
+    /// workbench share these commands.
+    pub fn debug_console_command(&mut self, line: &str) -> Option<Result<Vec<String>, String>> {
+        if let Some(help) = debug_console_help(line) {
+            return Some(Ok(help.lines().map(str::to_owned).collect()));
+        }
+        if let Some(operand) = debug_console_command_operand(line, "inspect") {
+            return Some(self.debug_answer_inspection_lines(operand));
+        }
+        let operand = debug_console_command_operand(line, "seed")?;
+        Some(self.debug_console_seed(operand).map(|()| Vec::new()))
+    }
+
     /// Runs the interactive Pangine console on standard input and output.
     pub fn debug_console(&mut self) -> io::Result<()> {
         let stdin = io::stdin();
@@ -186,33 +204,13 @@ impl Pangine {
                 break;
             }
 
-            if let Some(help) = debug_console_help(script) {
-                print!("{help}");
-                continue;
-            }
-
-            if let Some(operand) = debug_console_command_operand(script, "inspect") {
-                match self.debug_answer_inspection_lines(operand) {
-                    Ok(lines) => {
-                        for line in lines {
-                            println!("{line}");
-                        }
-                    }
-                    Err(error) => println!("  {error}"),
-                }
-                continue;
-            }
-
-            if let Some(operand) = debug_console_command_operand(script, "seed") {
-                if let Err(error) = self.debug_console_seed(operand) {
-                    println!("  {error}");
-                }
-                continue;
-            }
-
-            match self.reference_concept(script) {
-                Ok(concept) => {
-                    for line in self.debug_console_lines(concept.as_ref()) {
+            let output = match self.debug_console_command(script) {
+                Some(output) => output,
+                None => self.reference_concept(script).map(|concept| self.debug_console_lines(concept.as_ref())).map_err(|error| error.to_string()),
+            };
+            match output {
+                Ok(lines) => {
+                    for line in lines {
                         println!("{line}");
                     }
                 }
@@ -323,6 +321,26 @@ mod tests {
         assert_eq!(debug_console_command_operand("[inspect]", "inspect"), None);
         assert_eq!(debug_console_command_operand("seed 7", "seed"), Some("7"));
         assert_eq!(debug_console_command_operand("seeds 7", "seed"), None);
+    }
+
+    #[test]
+    fn console_commands_are_shared_and_other_lines_are_left_to_the_caller() {
+        let mut pangine = Pangine::new();
+        let help = pangine.debug_console_command("help").expect("help is a console command").expect("help prints");
+        assert_eq!(help.first().map(String::as_str), Some("Commands:"));
+        assert_eq!(help.join("\n") + "\n", DEBUG_CONSOLE_HELP);
+
+        for script in ["{world} ~= [morning]->[birds]", "{world} ~= [morning]->[birds]", "{world} ~= [morning]->[traffic]", "{world} @ [morning]->{answer}"] {
+            assert_eq!(pangine.debug_console_command(script), None, "{script} is Pangine syntax");
+            pangine.reference_concept(script).unwrap();
+        }
+        assert_eq!(pangine.debug_console_command("inspect {answer}"), Some(pangine.debug_answer_inspection_lines("{answer}")));
+        assert_eq!(pangine.debug_console_command("inspect {missing}"), Some(Err("operand is not part of one linked Answer".to_owned())));
+        assert_eq!(pangine.debug_console_command("seed 7"), Some(Ok(Vec::new())));
+        assert!(matches!(pangine.debug_console_command("seed seven"), Some(Err(_))));
+        for line in ["quit", "q", "seeds 7", "inspector", "[help]"] {
+            assert_eq!(pangine.debug_console_command(line), None, "{line} is not a shared console command");
+        }
     }
 
     #[test]

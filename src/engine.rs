@@ -27,6 +27,7 @@ pub use completion::{Completion, CompletionEvidence, CompletionGrade, Completion
 use completion::{CompletionBindingOrigin, CompletionOrderedStep, CompletionOrderedWindow, CompletionRoute};
 use concept_answer::{ConceptAnswer, LiveConceptAnswer};
 use concept_map::ConceptMap;
+pub use interpolation::Probability;
 pub use parser::{ParseError, ParseResult};
 use question_index::PerceptQuestionIndex;
 

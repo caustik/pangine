@@ -228,8 +228,8 @@ impl AnswerPossibility {
     /// Returns this value's share of the positive evidence among the
     /// possibilities of the same view, interpolated across grades for a graded
     /// answer, or zero when its own evidence is zero or negative.
-    pub fn probability(&self) -> f64 {
-        self.probability.as_f64()
+    pub fn probability(&self) -> Probability {
+        self.probability
     }
 
     /// Returns the number of complete proof-bearing rows projecting this value.
@@ -247,11 +247,6 @@ impl AnswerPossibility {
     /// separates by canonical spelling.
     pub fn is_top_tie(&self) -> bool {
         self.is_top_tie
-    }
-
-    /// Returns the probability as an exact fraction or a fixed-point value.
-    pub(super) fn probability_value(&self) -> Probability {
-        self.probability
     }
 }
 

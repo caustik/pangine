@@ -9,6 +9,6 @@ mod relevance;
 pub use engine::{
     Answer, AnswerChoice, AnswerPossibility, AnswerSource, AnswerSupport, AnswerView, Completion, CompletionEvidence, CompletionGrade, CompletionRemainder,
     CompletionRemainderSide, CompletionResult, ConceptConstructionError, ConceptId, ConceptKind, Pangine, ParseError, ParseResult, PerceptUpdateError,
-    GLOBAL_PERCEPT_NAME,
+    Probability, GLOBAL_PERCEPT_NAME,
 };
 pub use relevance::Relevance;

@@ -132,6 +132,26 @@ fn a_case_must_share_a_name_and_supply_each_part_from_its_own_part() {
 }
 
 #[test]
+fn a_probability_reads_as_a_fraction_text_and_number() {
+    let mut pangine = Pangine::new();
+    for experience in THREE_X_MEMORY {
+        must_ref(&mut pangine, &format!("{{m}} ~= {experience}"));
+    }
+    must_ref(&mut pangine, "{m} @~ ({x}->[A])([B]->{y})");
+    let projection = must_ref(&mut pangine, "{x}->{y}");
+    let view = pangine.answer_view(&projection).expect("linked answer");
+    let possibilities = view.possibilities(&mut pangine).expect("inspectable answer");
+
+    let first = possibilities[0].probability();
+    assert_eq!(first.fraction(), Some((9, 40)));
+    assert_eq!(first.to_string(), "9/40");
+    assert!((first.as_f64() - 0.225).abs() < 1e-15);
+    assert!(!first.is_zero());
+    assert!(possibilities.windows(2).all(|pair| pair[0].probability() >= pair[1].probability()));
+    assert_eq!(possibilities.last().map(|possibility| possibility.probability().to_string()), Some("1/60".to_owned()));
+}
+
+#[test]
 fn a_graded_answer_with_many_levels_still_answers() {
     // One exact case and one case at each distance from 1 to 28. Exact shares
     // would need a 68-bit denominator, more than `$` can store as evidence
@@ -148,6 +168,11 @@ fn a_graded_answer_with_many_levels_still_answers() {
     let millionths = [693_147, 193_147, 68_147, 26_481, 10_856, 4_606, 2_001, 885, 397, 180, 82, 38, 18, 8, 4, 2, 1];
     let expected = millionths.iter().enumerate().map(|(index, share)| format!("x{share}[a{index}]")).collect::<String>();
     assert_eq!(must_ref(&mut pangine, "${x}"), must_ref(&mut pangine, &expected));
+    let x = pangine.reference_percept("x");
+    let view = pangine.answer_view(&x).expect("linked answer");
+    let top = view.possibilities(&mut pangine).expect("inspectable answer")[0].probability();
+    assert_eq!(top.to_string(), "0.693147");
+    assert!(top.fraction().is_some(), "the exact fraction still fits in 128 bits");
     let readings = readings(&mut pangine, "{x}");
     assert_eq!(readings.len(), 29);
     assert_eq!(readings[0].0, "[a0]");
@@ -286,7 +311,7 @@ fn readings(pangine: &mut Pangine, projection: &str) -> Vec<(String, f64)> {
     let projection = must_ref(pangine, projection);
     let view = pangine.answer_view(&projection).expect("linked answer");
     let possibilities = view.possibilities(pangine).expect("inspectable answer");
-    possibilities.iter().map(|possibility| (pangine.format_concept(possibility.value(), false), possibility.probability())).collect()
+    possibilities.iter().map(|possibility| (pangine.format_concept(possibility.value(), false), possibility.probability().as_f64())).collect()
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

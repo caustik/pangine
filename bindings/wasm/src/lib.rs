@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use pangine::{ConceptId, ConceptKind, Pangine, Relevance};
+use pangine::{AnswerPossibility, CompletionGrade, ConceptId, ConceptKind, Pangine, Relevance};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use wasm_bindgen::prelude::*;
@@ -37,9 +37,47 @@ struct ConceptEdge {
     x_coefficient: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InspectionView {
+    projection: String,
+    possibilities: Vec<PossibilityView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PossibilityView {
+    value: String,
+    count: String,
+    probability: f64,
+    probability_text: String,
+    complete_rows: usize,
+    top_tie: bool,
+    support: Vec<SupportView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SupportView {
+    grade: &'static str,
+    distance: Option<usize>,
+    weight: String,
+    sources: Vec<SourceView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceView {
+    subject: String,
+    concept: String,
+    count: String,
+}
+
 struct SessionCore {
     engine: Pangine,
     current: Option<ConceptId>,
+    // The statement that produced `current`. Console commands leave both alone.
+    command: String,
 }
 
 struct GraphBuilder<'a> {
@@ -51,21 +89,75 @@ struct GraphBuilder<'a> {
 
 impl Default for SessionCore {
     fn default() -> Self {
-        Self { engine: Pangine::new(), current: None }
+        Self { engine: Pangine::new(), current: None, command: String::new() }
     }
 }
 
 impl SessionCore {
     fn execute(&mut self, command: &str) -> Result<String, String> {
+        if let Some(output) = self.engine.debug_console_command(command) {
+            return self.serialize(output?);
+        }
         self.current = self.engine.reference_concept(command).map_err(|error| error.to_string())?;
-        self.serialize(command)
+        self.command = command.to_owned();
+        self.serialize(self.engine.debug_console_lines(self.current.as_ref()))
+    }
+
+    fn run(&mut self, command: &str) -> Result<String, String> {
+        let concept = self.engine.reference_concept(command).map_err(|error| error.to_string())?;
+        Ok(concept.map_or_else(|| "[]".to_owned(), |concept| self.engine.format_concept(&concept, false)))
+    }
+
+    fn inspect(&mut self, operand: &str) -> Result<String, String> {
+        let projection =
+            self.engine.reference_concept(operand).map_err(|error| error.to_string())?.ok_or_else(|| "inspect expects one linked Answer operand".to_owned())?;
+        let answer = self.engine.answer_view(&projection).ok_or_else(|| "operand is not part of one linked Answer".to_owned())?;
+        let possibilities = answer.possibilities(&mut self.engine).ok_or_else(|| "linked Answer could not be inspected".to_owned())?;
+        let view = InspectionView {
+            projection: self.engine.format_concept(&projection, false),
+            possibilities: possibilities.iter().map(|possibility| self.possibility_view(possibility)).collect(),
+        };
+        serde_json::to_string(&view).map_err(|error| error.to_string())
+    }
+
+    fn possibility_view(&self, possibility: &AnswerPossibility) -> PossibilityView {
+        let support = possibility
+            .support()
+            .iter()
+            .map(|support| {
+                let (grade, distance) = match support.grade() {
+                    CompletionGrade::Exact => ("exact", None),
+                    CompletionGrade::Composed => ("composed", None),
+                    CompletionGrade::Generalized { distance } => ("generalized", Some(distance)),
+                };
+                let sources = support
+                    .sources()
+                    .iter()
+                    .map(|source| SourceView {
+                        subject: self.engine.format_concept(source.subject(), false),
+                        concept: self.engine.format_concept(source.concept(), false),
+                        count: source.relevance().count().to_string(),
+                    })
+                    .collect();
+                SupportView { grade, distance, weight: support.weight().count().to_string(), sources }
+            })
+            .collect();
+        PossibilityView {
+            value: self.engine.format_concept(possibility.value(), false),
+            count: possibility.strength().count().to_string(),
+            probability: possibility.probability().as_f64(),
+            probability_text: possibility.probability().to_string(),
+            complete_rows: possibility.complete_rows(),
+            top_tie: possibility.is_top_tie(),
+            support,
+        }
     }
 
     fn snapshot(&self) -> Result<String, String> {
-        self.serialize("")
+        self.serialize(self.engine.debug_console_lines(self.current.as_ref()))
     }
 
-    fn serialize(&self, command: &str) -> Result<String, String> {
+    fn serialize(&self, console_lines: Vec<String>) -> Result<String, String> {
         let current = self.current.as_ref();
         let mut graph = GraphBuilder::new(&self.engine);
         if let Some(concept) = current {
@@ -74,9 +166,9 @@ impl SessionCore {
         let (nodes, edges) = graph.finish();
 
         let view = ExecutionView {
-            command: command.to_owned(),
+            command: self.command.clone(),
             canonical: current.map_or_else(|| "[]".to_owned(), |concept| self.engine.format_concept(concept, false)),
-            console_lines: self.engine.debug_console_lines(current),
+            console_lines,
             current_concept: current.map(ConceptId::index),
             concept_count: self.engine.concept_count(),
             nodes,
@@ -165,9 +257,27 @@ impl PangineSession {
         Self { core: SessionCore::default() }
     }
 
-    /// Executes Pangine syntax and returns its console output and graph view as JSON.
+    /// Executes Pangine syntax, or a console command such as `help`,
+    /// `inspect operand`, or `seed n`, and returns its console output and
+    /// graph view as JSON. A console command keeps the current result and
+    /// replaces only the console output.
     pub fn execute(&mut self, command: &str) -> Result<String, JsValue> {
         self.core.execute(command).map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Runs Pangine syntax and returns the result's canonical spelling,
+    /// without building the graph view or console output.
+    pub fn run(&mut self, command: &str) -> Result<String, JsValue> {
+        self.core.run(command).map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Inspects one linked answer and returns its possibilities as JSON, most
+    /// probable first. Each has its value, evidence count, probability as a
+    /// number and as text, complete rows, and whether it is a top tie, with
+    /// the support behind its count: each support's grade, distance, weight,
+    /// and sources. Counts are strings, so 64-bit values survive JavaScript.
+    pub fn inspect(&mut self, operand: &str) -> Result<String, JsValue> {
+        self.core.inspect(operand).map_err(|error| JsValue::from_str(&error))
     }
 
     /// Returns the current disposable graph view as JSON.
@@ -323,6 +433,81 @@ mod tests {
         assert_eq!(draws(None), draws(Some(0)), "a new session starts from seed 0");
         assert_eq!(draws(Some(7)), draws(Some(7)));
         assert_ne!(draws(Some(7)), draws(None));
+    }
+
+    #[test]
+    fn console_commands_run_in_the_workbench_without_replacing_the_result() {
+        let mut session = SessionCore::default();
+        for statement in ["{world} ~= [morning]->[birds]", "{world} ~= [morning]->[birds]", "{world} ~= [morning]->[traffic]", "{world} @ [morning]->{answer}"]
+        {
+            session.execute(statement).unwrap();
+        }
+
+        let inspected: serde_json::Value = serde_json::from_str(&session.execute("inspect {answer}").unwrap()).unwrap();
+        assert_eq!(
+            inspected["consoleLines"],
+            serde_json::json!([
+                "  * +2, p=2/3, 1 row: [birds]",
+                "      +2 from {world}: [morning]->[birds]",
+                "    +1, p=1/3, 1 row: [traffic]",
+                "      +1 from {world}: [morning]->[traffic]"
+            ])
+        );
+        assert_eq!(inspected["command"], "{world} @ [morning]->{answer}");
+        assert_eq!(inspected["canonical"], "([morning]->[birds])([morning]->[traffic])");
+
+        let seeded: serde_json::Value = serde_json::from_str(&session.execute("seed 3").unwrap()).unwrap();
+        assert_eq!(seeded["consoleLines"], serde_json::json!([]));
+        let help: serde_json::Value = serde_json::from_str(&session.execute("help").unwrap()).unwrap();
+        assert_eq!(help["consoleLines"][0], "Commands:");
+        assert_eq!(session.execute("inspect {missing}"), Err("operand is not part of one linked Answer".to_owned()));
+    }
+
+    #[test]
+    fn inspect_reports_each_possibility_with_its_graded_support() {
+        let mut session = SessionCore::default();
+        for statement in [
+            "{options} ~= [hall]->[north]->[left]",
+            "{options} ~= [hall]->[north]->[right]",
+            "{trips} ~= [lobby]->[north]->[left]",
+            "{options} @ [hall]->[north]->{way}",
+            "{trips} @~ [hall]->[north]->{trip-way}",
+            "{way} @+= {trip-way}",
+        ] {
+            session.run(statement).unwrap();
+        }
+
+        let view: serde_json::Value = serde_json::from_str(&session.inspect("{way}").unwrap()).unwrap();
+        assert_eq!(view["projection"], "{way}");
+        let left = &view["possibilities"][0];
+        assert_eq!(left["value"], "[left]");
+        assert_eq!(left["count"], "2");
+        assert_eq!(left["probabilityText"], "7/12");
+        assert!((left["probability"].as_f64().unwrap() - 7.0 / 12.0).abs() < 1e-12);
+        assert_eq!(left["completeRows"], 1);
+        assert_eq!(left["topTie"], true);
+        assert_eq!(left["support"][0]["grade"], "exact");
+        assert_eq!(left["support"][0]["distance"], serde_json::Value::Null);
+        assert_eq!(
+            left["support"][1],
+            serde_json::json!({
+                "grade": "generalized",
+                "distance": 1,
+                "weight": "1",
+                "sources": [{ "subject": "{trips}", "concept": "[lobby]->[north]->[left]", "count": "1" }]
+            })
+        );
+        assert_eq!(view["possibilities"][1]["probabilityText"], "5/12");
+        assert_eq!(session.inspect("{nowhere}"), Err("operand is not part of one linked Answer".to_owned()));
+    }
+
+    #[test]
+    fn run_returns_the_canonical_result_without_a_graph() {
+        let mut session = SessionCore::default();
+        assert_eq!(session.run("[cat]->[purrs]"), Ok("[cat]->[purrs]".to_owned()));
+        assert_eq!(session.run("{memory} = []"), Ok("[]".to_owned()));
+        assert!(session.run("[cat]->").is_err());
+        assert!(session.current.is_none(), "run leaves the workbench's current result alone");
     }
 
     #[test]
