@@ -301,7 +301,7 @@ A Percept populated through `~=` remains a reference when another experience men
 
 At the interactive CLI prompt and in the pangine.com workbench, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. `seed n` restarts the generator that `^~` draws from, and `help` prints the console reference. They are console commands, not `.pae` syntax.
 
-See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference and [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts.
+See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference, [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts, and [pangine.com/demos.html](https://pangine.com/demos.html) for graded questions you can change in the browser.
 
 ## Current scope
 
