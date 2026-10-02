@@ -65,6 +65,8 @@ Relevance and choice:
   from separate experiences weighs the product of their counts. A graded @~
   answer interpolates its probabilities from exact rows toward composed ones,
   then toward single cases that differ from the question in a few names.
+  Evidence that @+= or @-= imports from a graded answer keeps its grade, and a
+  graded answer cannot itself be adjusted.
 
   ^operand chooses the most probable current result. For output Percepts from
   one question, it removes incompatible answers and refreshes every linked
@@ -119,8 +121,7 @@ impl Pangine {
             let rows = possibility.complete_rows();
             let row_label = if rows == 1 { "row" } else { "rows" };
             let value = self.format_concept(possibility.value(), false);
-            let (numerator, denominator) = possibility.probability_fraction();
-            let probability = format_probability(numerator, denominator);
+            let probability = possibility.probability_value();
             lines.push(format!("  {marker} {:+}, p={probability}, {rows} {row_label}: {value}", possibility.strength().count()));
 
             let mut support = possibility
@@ -255,15 +256,6 @@ impl Pangine {
     }
 }
 
-// Probabilities arrive as reduced fractions.
-fn format_probability(numerator: i128, denominator: i128) -> String {
-    match (numerator, denominator) {
-        (0, _) => "0".to_owned(),
-        (numerator, 1) => numerator.to_string(),
-        (numerator, denominator) => format!("{numerator}/{denominator}"),
-    }
-}
-
 fn debug_console_help(command: &str) -> Option<&'static str> {
     matches!(command, "h" | "help").then_some(DEBUG_CONSOLE_HELP)
 }
@@ -305,6 +297,7 @@ mod tests {
             "subject @~ expression      Graded: compose parts, generalize from cases",
             "seed n           Restart the generator that ^~ draws from",
             "^~{choice}            returns [tea] with probability 2/5",
+            "imports from a graded answer keeps its grade",
             "&operand                   Return the shared answer shape",
             "{target} @+= {evidence} Add matching evidence",
             "{target} @-= {evidence} Subtract matching evidence",
@@ -359,14 +352,6 @@ mod tests {
         }
         assert_eq!(pangine.debug_console_seed("18446744073709551615"), Ok(()));
         assert_eq!(pangine.debug_console_seed("7 "), Ok(()));
-    }
-
-    #[test]
-    fn inspection_probabilities_print_as_fractions() {
-        assert_eq!(format_probability(0, 1), "0");
-        assert_eq!(format_probability(1, 1), "1");
-        assert_eq!(format_probability(1, 2), "1/2");
-        assert_eq!(format_probability(9, 40), "9/40");
     }
 
     #[test]
@@ -444,6 +429,32 @@ mod tests {
                 "      +1 from {games}: [x]->[_]->[o]->[c2]".to_owned(),
                 "    +1, p=1/4, 1 row: [c3]".to_owned(),
                 "      +1 at distance 1 from {games}: [x]->[_]->[_]->[c3]".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn debug_console_inspection_labels_imported_evidence_by_its_grade() {
+        let mut pangine = Pangine::new();
+        for script in [
+            "{options} ~= [hall]->[north]->[left]",
+            "{options} ~= [hall]->[north]->[right]",
+            "{trips} ~= [lobby]->[north]->[left]",
+            "{options} @ [hall]->[north]->{way}",
+            "{trips} @~ [hall]->[north]->{trip-way}",
+            "{way} @+= {trip-way}",
+        ] {
+            assert!(pangine.reference_concept(script).unwrap().is_some(), "expected a Concept from {script}");
+        }
+
+        assert_eq!(
+            pangine.debug_answer_inspection_lines("{way}"),
+            Ok(vec![
+                "  * +2, p=7/12, 1 row: [left]".to_owned(),
+                "      +1 from {options}: [hall]->[north]->[left]".to_owned(),
+                "      +1 at distance 1 from {trips}: [lobby]->[north]->[left]".to_owned(),
+                "    +1, p=5/12, 1 row: [right]".to_owned(),
+                "      +1 from {options}: [hall]->[north]->[right]".to_owned(),
             ])
         );
     }

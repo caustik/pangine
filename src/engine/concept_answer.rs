@@ -302,22 +302,39 @@ fn encode_completion(pangine: &mut Pangine, completion: &Completion) -> ConceptI
             .adjustments()
             .iter()
             .map(|adjustment| {
-                let factor = encode_signed(pangine, adjustment.factor.count());
-                let evidence = encode_evidence_set(pangine, &adjustment.evidence);
-                tagged(pangine, ADJUSTMENT, vec![factor, evidence])
+                let mut fields = vec![encode_signed(pangine, adjustment.factor.count()), encode_evidence_set(pangine, &adjustment.evidence)];
+                fields.extend(encode_grade(pangine, adjustment.grade));
+                tagged(pangine, ADJUSTMENT, fields)
             })
             .collect::<Vec<_>>();
         fields.push(encode_concept_set(pangine, ADJUSTMENTS, adjustments));
     }
-    match completion.grade() {
-        CompletionGrade::Exact => {}
-        CompletionGrade::Composed => fields.push(tagged(pangine, COMPOSED, Vec::new())),
+    fields.extend(encode_grade(pangine, completion.grade()));
+    tagged(pangine, ROW, fields)
+}
+
+// An exact grade is the default and is omitted.
+fn encode_grade(pangine: &mut Pangine, grade: CompletionGrade) -> Option<ConceptId> {
+    match grade {
+        CompletionGrade::Exact => None,
+        CompletionGrade::Composed => Some(tagged(pangine, COMPOSED, Vec::new())),
         CompletionGrade::Generalized { distance } => {
             let distance = encode_unsigned(pangine, distance);
-            fields.push(tagged(pangine, GENERALIZED, vec![distance]));
+            Some(tagged(pangine, GENERALIZED, vec![distance]))
         }
     }
-    tagged(pangine, ROW, fields)
+}
+
+fn decode_grade<'a>(pangine: &Pangine, optional: &mut std::iter::Peekable<impl Iterator<Item = &'a ConceptId>>) -> Option<CompletionGrade> {
+    if optional.next_if(|field| tagged_fields(pangine, field, COMPOSED).is_some_and(<[ConceptId]>::is_empty)).is_some() {
+        return Some(CompletionGrade::Composed);
+    }
+    let Some(field) = optional.next_if(|field| fixed_fields::<1>(pangine, field, GENERALIZED).is_some()) else {
+        return Some(CompletionGrade::Exact);
+    };
+    let [distance] = fixed_fields(pangine, field, GENERALIZED)?;
+    let distance = decode_unsigned(pangine, distance)?;
+    (distance != 0).then_some(CompletionGrade::Generalized { distance })
 }
 
 fn decode_completion(pangine: &Pangine, concept: &ConceptId) -> Option<Completion> {
@@ -335,18 +352,7 @@ fn decode_completion(pangine: &Pangine, concept: &ConceptId) -> Option<Completio
         }
         None => Vec::new(),
     };
-    let grade = if optional.next_if(|field| tagged_fields(pangine, field, COMPOSED).is_some_and(<[ConceptId]>::is_empty)).is_some() {
-        CompletionGrade::Composed
-    } else if let Some(field) = optional.next_if(|field| fixed_fields::<1>(pangine, field, GENERALIZED).is_some()) {
-        let [distance] = fixed_fields(pangine, field, GENERALIZED)?;
-        let distance = decode_unsigned(pangine, distance)?;
-        if distance == 0 {
-            return None;
-        }
-        CompletionGrade::Generalized { distance }
-    } else {
-        CompletionGrade::Exact
-    };
+    let grade = decode_grade(pangine, &mut optional)?;
     if optional.next().is_some() {
         return None;
     }
@@ -356,12 +362,18 @@ fn decode_completion(pangine: &Pangine, concept: &ConceptId) -> Option<Completio
 }
 
 fn decode_adjustment(pangine: &Pangine, concept: &ConceptId) -> Option<CompletionAdjustment> {
-    let [factor, evidence] = fixed_fields(pangine, concept, ADJUSTMENT)?;
+    let fields = tagged_fields(pangine, concept, ADJUSTMENT)?;
+    let [factor, evidence] = <&[ConceptId; 2]>::try_from(fields.get(..2)?).ok()?;
     let factor = Relevance::new(decode_signed(pangine, factor)?);
     if factor.is_empty() {
         return None;
     }
-    Some(CompletionAdjustment { factor, evidence: decode_evidence_set(pangine, evidence)? })
+    let mut optional = fields[2..].iter().peekable();
+    let grade = decode_grade(pangine, &mut optional)?;
+    if optional.next().is_some() {
+        return None;
+    }
+    Some(CompletionAdjustment { grade, factor, evidence: decode_evidence_set(pangine, evidence)? })
 }
 
 fn encode_evidence_set(pangine: &mut Pangine, evidence: &[CompletionEvidence]) -> ConceptId {

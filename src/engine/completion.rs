@@ -1,4 +1,4 @@
-use super::interpolation::{interpolated_probabilities, whole_number_shares};
+use super::interpolation::{displayed_shares, interpolated_probabilities};
 use super::{
     choice::Choice, CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment, QuestionSelector,
     QuestionSource, QuestionSourceView,
@@ -356,9 +356,11 @@ impl CompletionEvidence {
 /// Evidence imported into a completion by answer adjustment.
 ///
 /// It keeps one complete derivation of a matching row from another answer,
-/// together with the signed factor that the adjustment applied to it.
+/// the grade that derivation was proven at, and the signed factor that the
+/// adjustment applied to it.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct CompletionAdjustment {
+    pub(super) grade: CompletionGrade,
     pub(super) factor: Relevance,
     pub(super) evidence: Vec<CompletionEvidence>,
 }
@@ -446,11 +448,17 @@ impl Completion {
         &self.adjustments
     }
 
-    /// Iterates over this completion's derivations: its own proof with the
-    /// default factor, then every imported adjustment with its signed factor.
-    pub(super) fn derivations(&self) -> impl Iterator<Item = (Relevance, &[CompletionEvidence])> {
-        std::iter::once((Relevance::DEFAULT, self.evidence.as_slice()))
-            .chain(self.adjustments.iter().map(|adjustment| (adjustment.factor, adjustment.evidence.as_slice())))
+    /// Iterates over this completion's derivations with their grades: its own
+    /// proof at the row's grade with the default factor, then every imported
+    /// adjustment at the grade it was proven at with its signed factor.
+    pub(super) fn derivations(&self) -> impl Iterator<Item = (CompletionGrade, Relevance, &[CompletionEvidence])> {
+        std::iter::once((self.grade, Relevance::DEFAULT, self.evidence.as_slice()))
+            .chain(self.adjustments.iter().map(|adjustment| (adjustment.grade, adjustment.factor, adjustment.evidence.as_slice())))
+    }
+
+    /// Returns whether the row and every derivation imported into it are exact.
+    pub(super) fn is_exact(&self) -> bool {
+        self.grade == CompletionGrade::Exact && self.adjustments.iter().all(|adjustment| adjustment.grade == CompletionGrade::Exact)
     }
 }
 
@@ -677,9 +685,9 @@ impl Pangine {
     ///
     /// A joined row is weighed as the product of its two rows, so every pair
     /// of their derivations becomes one derivation of the joined row. A source
-    /// on both sides still counts once within each joined derivation. The
-    /// joined row takes the less exact grade of the two, and two generalized
-    /// rows add their distances.
+    /// on both sides still counts once within each joined derivation. A joined
+    /// row or derivation takes the less exact grade of its two parts, and two
+    /// generalized parts add their distances.
     pub(super) fn join_completion_results(
         &self,
         left: &CompletionResult,
@@ -701,15 +709,16 @@ impl Pangine {
                     continue;
                 };
                 let mut adjustments = BTreeSet::new();
-                for (left_index, (left_factor, left_evidence)) in left_completion.derivations().enumerate() {
-                    for (right_index, (right_factor, right_evidence)) in right_completion.derivations().enumerate() {
+                for (left_index, (left_grade, left_factor, left_evidence)) in left_completion.derivations().enumerate() {
+                    for (right_index, (right_grade, right_factor, right_evidence)) in right_completion.derivations().enumerate() {
                         if left_index == 0 && right_index == 0 {
                             continue;
                         }
                         let Some(evidence) = joined_evidence(left_evidence, right_evidence, &active_outputs) else {
                             continue;
                         };
-                        adjustments.insert(CompletionAdjustment { factor: left_factor.checked_mul(right_factor)?, evidence });
+                        let grade = left_grade.joined(right_grade);
+                        adjustments.insert(CompletionAdjustment { grade, factor: left_factor.checked_mul(right_factor)?, evidence });
                     }
                 }
                 let grade = left_completion.grade.joined(right_completion.grade);
@@ -722,8 +731,12 @@ impl Pangine {
     /// Imports every derivation of each matching adjustment row into the
     /// target rows, multiplied by `factor`.
     ///
-    /// Importing a derivation that a target row already holds with the same
-    /// factor changes nothing, so repeating an adjustment is idempotent.
+    /// Each imported derivation keeps the grade it was proven at, so evidence
+    /// from a graded answer enters the target below its exact evidence. A
+    /// target with composed or generalized rows cannot be adjusted, because
+    /// each of one value's rows would take the same evidence. Importing a
+    /// derivation that a target row already holds with the same factor changes
+    /// nothing, so repeating an adjustment is idempotent.
     pub(super) fn adjust_completion_result(
         &mut self,
         target: &CompletionResult,
@@ -732,6 +745,9 @@ impl Pangine {
         adjustment_template: &ConceptId,
         factor: Relevance,
     ) -> Option<CompletionResult> {
+        if target.completions.iter().any(|completion| completion.grade != CompletionGrade::Exact) {
+            return None;
+        }
         if factor.is_empty() {
             return Some(target.clone());
         }
@@ -748,8 +764,8 @@ impl Pangine {
             let mut adjusted = target_completion.clone();
 
             for (_, adjustment_completion) in adjustment_candidates.iter().filter(|(candidate, _)| *candidate == target_candidate) {
-                for (derivation_factor, evidence) in adjustment_completion.derivations() {
-                    adjusted.adjustments.push(CompletionAdjustment { factor: factor.checked_mul(derivation_factor)?, evidence: evidence.to_vec() });
+                for (grade, derivation_factor, evidence) in adjustment_completion.derivations() {
+                    adjusted.adjustments.push(CompletionAdjustment { grade, factor: factor.checked_mul(derivation_factor)?, evidence: evidence.to_vec() });
                 }
             }
 
@@ -788,21 +804,21 @@ impl Pangine {
     /// sources, so a source proving several clauses counts once while sources
     /// joined from separate experiences multiply. Alternative routes through
     /// the same sources prove the same derivation of a row only once. Each
-    /// value's derivations are grouped by factor and sources, and their
-    /// weights add across rows.
+    /// value's derivations are grouped by grade, factor, and sources, and
+    /// their weights add across rows.
     pub(super) fn completion_projection_support(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<CompletionProjectionSupport> {
         let mut support = CompletionProjectionSupport::new();
         let mut weighed = BTreeSet::new();
         for completion in &result.completions {
             let candidate = self.instantiate_completion_inner(template, &completion.assignment)?;
             let candidate_support = support.entry(candidate).or_default();
-            for (factor, evidence) in completion.derivations() {
+            for (grade, factor, evidence) in completion.derivations() {
                 let sources = evidence.iter().map(|fragment| fragment.question_source().clone()).collect::<BTreeSet<_>>();
-                if !weighed.insert((&completion.assignment, completion.grade, factor, sources.clone())) {
+                if !weighed.insert((&completion.assignment, grade, factor, sources.clone())) {
                     continue;
                 }
                 let weight = sources.iter().try_fold(factor, |weight, source| weight.checked_mul(source.relevance))?;
-                let total = candidate_support.entry((completion.grade, factor, sources)).or_insert(Relevance::EMPTY);
+                let total = candidate_support.entry((grade, factor, sources)).or_insert(Relevance::EMPTY);
                 *total = total.checked_add(weight)?;
             }
         }
@@ -829,7 +845,7 @@ impl Pangine {
     pub(super) fn try_materialize_completion_projection(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<Option<ConceptId>> {
         let support = self.completion_projection_support(result, template)?;
         let mut candidates = ConceptMap::new();
-        if result.completions.iter().all(|completion| completion.grade == CompletionGrade::Exact) {
+        if result.completions.iter().all(Completion::is_exact) {
             for (candidate, derivations) in support {
                 let strength = projection_strength(&derivations)?;
                 self.add_union_concept(&mut candidates, candidate, false, strength)?;
@@ -837,9 +853,9 @@ impl Pangine {
         } else {
             // A graded projection shows its interpolated probabilities as
             // whole-number shares over their common denominator, so reading the
-            // shares gives the probabilities back.
-            for (candidate, share) in whole_number_shares(interpolated_probabilities(&support)?)? {
-                let share = i64::try_from(share).ok()?;
+            // shares gives the probabilities back. Shares too large for 64-bit
+            // evidence counts become millionths.
+            for (candidate, share) in displayed_shares(&interpolated_probabilities(&support)?) {
                 self.add_union_concept(&mut candidates, candidate, false, Relevance::new(share))?;
             }
         }

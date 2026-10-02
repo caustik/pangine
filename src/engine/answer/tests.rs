@@ -103,7 +103,7 @@ fn deep_adjustment_keeps_binding_context_linear() {
 
     assert_eq!(chain.materialize(&mut pangine), Some(must_ref(&mut pangine, "x8[A]")));
     let completion = &chain.answer().result().completions()[0];
-    let fragments = completion.derivations().flat_map(|(_, evidence)| evidence).collect::<Vec<_>>();
+    let fragments = completion.derivations().flat_map(|(_, _, evidence)| evidence).collect::<Vec<_>>();
     let source_bindings = fragments.iter().map(|evidence| outputs.iter().filter(|output| evidence.binding(output).is_some()).count()).sum::<usize>();
     assert_eq!(completion.evidence().len(), 1);
     assert_eq!(completion.adjustments().len(), DEPTH - 1);

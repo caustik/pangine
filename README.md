@@ -185,6 +185,8 @@ No family mentions Joe, so `@` finds nothing. `@~` compares the question with ea
 
 Each distance forms one more level below the composed answers, and the same interpolation runs down every level. `inspect` marks composed rows with the separate experiences they came from and generalized rows with their distance and case. When nothing fits at any level, `@~` returns `[]`. A graded question with only exact rows answers exactly like `@`.
 
+Probabilities stay exact fractions while their arithmetic fits in 128 bits, which covers every example here. A large graded answer can need more. When `$` would need shares too large for its 64-bit evidence counts, it shows millionths, rounded to add up to one million, and past 128 bits the interpolation continues in fixed point. `inspect` prints a probability as a fraction, or as a six-place decimal when its denominator is above one million or it was computed in fixed point. Every step uses integer arithmetic, so the console and the browser compute the same values.
+
 ## Shared answers
 
 Outputs from one question stay connected to the same complete answer. `&` reveals that answer's question shape, `$` reads it, and `^` removes complete rows that do not fit the chosen result.
@@ -248,6 +250,8 @@ Two linked answers can also affect one another without being copied into ordinar
 ```
 
 These commands assume earlier questions filled the candidate, helpful, and failed Percepts. Each side names the part of one linked answer to compare. Matching helpful rows add their evidence to the candidate rows, matching failed rows subtract theirs, and every linked target output is updated. Only the target changes, so a separate source answer stays unchanged. Either side can be one Percept or a larger shape. An unlinked operand is an error. Ordinary `+=` and `-=` still change ordinary Percept values.
+
+Evidence imported from a graded answer keeps its grade, so a case that only resembles the target counts below the target's own evidence. A graded answer cannot itself be adjusted, because one value can sit in rows of several grades, and each row would take the same evidence.
 
 ## Input Percepts
 

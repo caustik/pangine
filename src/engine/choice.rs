@@ -3,7 +3,7 @@
 //! Sampled choice (`^~`) draws a value with probability equal to its share instead, from a seeded generator that each engine owns.
 
 use super::{
-    interpolation::{interpolated_probabilities, whole_number_shares, Probability},
+    interpolation::{draw_shares, interpolated_probabilities, Probability},
     CompletionProjectionSupport, ConceptId, ConceptKind, LiveConceptAnswer, Pangine,
 };
 use std::collections::BTreeMap;
@@ -89,7 +89,9 @@ impl Pangine {
         let members = concept.0.subconcepts.iter();
         match choice {
             Choice::MostProbable => self.select_greatest_positive(members.map(|(candidate, relevance)| (candidate, relevance.count()))),
-            Choice::Sampled => self.draw_weighted(members.map(|(candidate, relevance)| (candidate.clone(), i128::from(relevance.count())))),
+            Choice::Sampled => {
+                self.draw_weighted(members.filter_map(|(candidate, relevance)| Some((candidate.clone(), u128::try_from(relevance.count()).ok()?))))
+            }
         }
     }
 
@@ -127,7 +129,7 @@ impl Pangine {
         let probabilities = interpolated_probabilities(support)?;
         match choice {
             Choice::MostProbable => self.select_most_probable(probabilities),
-            Choice::Sampled => self.draw_weighted(whole_number_shares(probabilities)?),
+            Choice::Sampled => self.draw_weighted(draw_shares(&probabilities)),
         }
     }
 
@@ -150,17 +152,15 @@ impl Pangine {
         selected.map(|(_, _, candidate)| candidate)
     }
 
-    // Draws one candidate with probability proportional to its positive
-    // weight. The candidates line up in canonical spelling order, so a draw
-    // depends only on the weights and the generator, never on the order in
-    // which an engine allocated its Concepts.
-    fn draw_weighted(&mut self, weights: impl IntoIterator<Item = (ConceptId, i128)>) -> Option<ConceptId> {
+    // Draws one candidate with probability proportional to its weight. The
+    // candidates line up in canonical spelling order, so a draw depends only
+    // on the weights and the generator, never on the order in which an engine
+    // allocated its Concepts.
+    fn draw_weighted(&mut self, weights: impl IntoIterator<Item = (ConceptId, u128)>) -> Option<ConceptId> {
         let mut candidates = weights
             .into_iter()
-            .filter_map(|(candidate, weight)| {
-                let weight = u128::try_from(weight).ok().filter(|weight| *weight > 0)?;
-                Some((self.format_concept(&candidate, false), weight, candidate))
-            })
+            .filter(|(_, weight)| *weight > 0)
+            .map(|(candidate, weight)| (self.format_concept(&candidate, false), weight, candidate))
             .collect::<Vec<_>>();
         candidates.sort_by(|(left, ..), (right, ..)| left.cmp(right));
 

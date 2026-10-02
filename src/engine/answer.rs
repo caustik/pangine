@@ -249,9 +249,9 @@ impl AnswerPossibility {
         self.is_top_tie
     }
 
-    /// Returns the probability as a reduced fraction.
-    pub(super) fn probability_fraction(&self) -> (i128, i128) {
-        self.probability.fraction()
+    /// Returns the probability as an exact fraction or a fixed-point value.
+    pub(super) fn probability_value(&self) -> Probability {
+        self.probability
     }
 }
 

@@ -132,6 +132,72 @@ fn a_case_must_share_a_name_and_supply_each_part_from_its_own_part() {
 }
 
 #[test]
+fn a_graded_answer_with_many_levels_still_answers() {
+    // One exact case and one case at each distance from 1 to 28. Exact shares
+    // would need a 68-bit denominator, more than `$` can store as evidence
+    // counts, so it shows millionths.
+    let mut pangine = Pangine::new();
+    let positions = (1..=29).map(|position| format!("[p{position}]")).collect::<Vec<_>>();
+    for distance in 0..=28 {
+        let cells = positions.iter().enumerate().map(|(index, name)| if index < distance { format!("[q{}]", index + 1) } else { name.clone() });
+        must_ref(&mut pangine, &format!("{{memory}} ~= {}->[a{distance}]", cells.collect::<Vec<_>>().join("->")));
+    }
+    let question = format!("{{memory}} @~ {}->{{x}}", positions.join("->"));
+    must_ref(&mut pangine, &question);
+
+    let millionths = [693_147, 193_147, 68_147, 26_481, 10_856, 4_606, 2_001, 885, 397, 180, 82, 38, 18, 8, 4, 2, 1];
+    let expected = millionths.iter().enumerate().map(|(index, share)| format!("x{share}[a{index}]")).collect::<String>();
+    assert_eq!(must_ref(&mut pangine, "${x}"), must_ref(&mut pangine, &expected));
+    let readings = readings(&mut pangine, "{x}");
+    assert_eq!(readings.len(), 29);
+    assert_eq!(readings[0].0, "[a0]");
+    assert!((readings[0].1 - 0.693_147_180_563_974_2).abs() < 1e-15);
+    assert!(pangine.reference_concept("^~{x}").unwrap().is_some());
+
+    must_ref(&mut pangine, &question);
+    assert_eq!(must_ref(&mut pangine, "^{x}"), must_ref(&mut pangine, "[a0]"));
+}
+
+#[test]
+fn an_adjustment_keeps_the_grade_of_the_evidence_it_imports() {
+    let mut pangine = Pangine::new();
+    must_ref(&mut pangine, "{options} ~= [hall]->[north]->[left]");
+    must_ref(&mut pangine, "{options} ~= [hall]->[north]->[right]");
+    must_ref(&mut pangine, "{trips} ~= [lobby]->[north]->[left]");
+    must_ref(&mut pangine, "{options} @ [hall]->[north]->{way}");
+    must_ref(&mut pangine, "{trips} @~ [hall]->[north]->{trip-way}");
+
+    // The trip through the lobby supports left at distance 1, so it enters
+    // below the hall's own options instead of counting as one of them.
+    assert_eq!(must_ref(&mut pangine, "{way} @+= {trip-way}"), must_ref(&mut pangine, "x7[left]x5[right]"));
+    assert_eq!(readings(&mut pangine, "{way}"), vec![("[left]".to_owned(), 7.0 / 12.0), ("[right]".to_owned(), 5.0 / 12.0)]);
+    assert_eq!(
+        support_grades(&mut pangine, "{way}"),
+        vec![vec![CompletionGrade::Exact, CompletionGrade::Generalized { distance: 1 }], vec![CompletionGrade::Exact]]
+    );
+
+    // The imported grade crosses an engine boundary with the answer.
+    let way = pangine.reference_percept("way");
+    let value = pangine.linked_answer_value(&way).expect("adjusted answer value");
+    let spelling = pangine.format_concept(&value, false);
+    let mut restored = Pangine::new();
+    let transported = must_ref(&mut restored, &spelling);
+    assert!(restored.install_answer_value(&transported));
+    assert_eq!(readings(&mut restored, "{way}"), readings(&mut pangine, "{way}"));
+    assert_eq!(support_grades(&mut restored, "{way}"), support_grades(&mut pangine, "{way}"));
+
+    // Exact counterevidence still applies at the exact level.
+    must_ref(&mut pangine, "{dead-ends} ~= [hall]->[north]->[right]");
+    must_ref(&mut pangine, "{dead-ends} @ [hall]->[north]->{dead-end}");
+    must_ref(&mut pangine, "{way} @-= {dead-end}");
+    assert_eq!(readings(&mut pangine, "{way}"), vec![("[left]".to_owned(), 1.0), ("[right]".to_owned(), 0.0)]);
+
+    // A graded answer itself cannot be adjusted: each of one value's rows at
+    // different grades would take the same evidence.
+    assert!(pangine.reference_concept("{trip-way} @+= {way}").is_err());
+}
+
+#[test]
 fn a_graded_question_with_only_exact_rows_answers_like_the_exact_question() {
     let mut pangine = Pangine::new();
     for (experience, repetitions) in [("[morning]->[birds]", 2), ("[morning]->[traffic]", 1)] {
