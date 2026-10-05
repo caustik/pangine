@@ -20,6 +20,8 @@ mod interpolation;
 mod parser;
 mod question;
 mod question_index;
+#[cfg(test)]
+mod test_rng;
 
 pub use answer::{Answer, AnswerChoice, AnswerPossibility, AnswerSource, AnswerSupport, AnswerView};
 use choice::SampleGenerator;

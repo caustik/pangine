@@ -108,6 +108,10 @@ impl SessionCore {
         Ok(concept.map_or_else(|| "[]".to_owned(), |concept| self.engine.format_concept(&concept, false)))
     }
 
+    fn perform(&mut self, command: &str) -> Result<bool, String> {
+        Ok(self.engine.reference_concept(command).map_err(|error| error.to_string())?.is_some())
+    }
+
     fn inspect(&mut self, operand: &str) -> Result<String, String> {
         let projection =
             self.engine.reference_concept(operand).map_err(|error| error.to_string())?.ok_or_else(|| "inspect expects one linked Answer operand".to_owned())?;
@@ -269,6 +273,13 @@ impl PangineSession {
     /// without building the graph view or console output.
     pub fn run(&mut self, command: &str) -> Result<String, JsValue> {
         self.core.run(command).map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Runs Pangine syntax without formatting its result and returns whether
+    /// it produced a Concept. Use it when only that matters: `~=` returns the
+    /// whole memory, and a question that finds nothing returns `[]`.
+    pub fn perform(&mut self, command: &str) -> Result<bool, JsValue> {
+        self.core.perform(command).map_err(|error| JsValue::from_str(&error))
     }
 
     /// Inspects one linked answer and returns its possibilities as JSON, most
@@ -508,6 +519,17 @@ mod tests {
         assert_eq!(session.run("{memory} = []"), Ok("[]".to_owned()));
         assert!(session.run("[cat]->").is_err());
         assert!(session.current.is_none(), "run leaves the workbench's current result alone");
+    }
+
+    #[test]
+    fn perform_reports_whether_a_command_produced_a_concept() {
+        let mut session = SessionCore::default();
+        assert_eq!(session.perform("{memory} ~= [cat]->[purrs]"), Ok(true));
+        assert_eq!(session.perform("{memory} @ [dog]->{sound}"), Ok(false));
+        assert_eq!(session.perform("{memory} @ [cat]->{sound}"), Ok(true));
+        assert_eq!(session.run("${sound}"), Ok("[purrs]".to_owned()));
+        assert!(session.perform("[cat]->").is_err());
+        assert!(session.current.is_none(), "perform leaves the workbench's current result alone");
     }
 
     #[test]

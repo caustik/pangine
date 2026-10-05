@@ -1,6 +1,9 @@
 use super::{ConceptId, ConceptKind, ConceptShape};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A name at one position of an ordered Concept of one width.
+type OrderedPosition = (usize, usize, ConceptId);
+
 /// Recursive lookup postings for the complete sources retained by one Percept.
 ///
 /// The postings are intentionally source preserving. Recursive Concepts and
@@ -10,7 +13,14 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct PerceptQuestionIndex {
     sources: BTreeSet<ConceptId>,
     sources_by_shape: BTreeMap<ConceptShape, BTreeSet<ConceptId>>,
+    // Sources holding an ordered Concept longer than the width, so a window
+    // of that width can match an ordered question.
+    sources_by_window_width: BTreeMap<usize, BTreeSet<ConceptId>>,
     sources_by_anchor: BTreeMap<ConceptId, BTreeSet<ConceptId>>,
+    // Sources holding an ordered Concept whose width and position place one
+    // name. An ordered question that fixes a name at a position can only match
+    // a view of its own width with that name there.
+    sources_by_position: BTreeMap<OrderedPosition, BTreeSet<ConceptId>>,
 }
 
 impl PerceptQuestionIndex {
@@ -31,10 +41,6 @@ impl PerceptQuestionIndex {
         self.insert_source_concept(source, source, &mut visited);
     }
 
-    pub(super) fn contains_source(&self, source: &ConceptId) -> bool {
-        self.sources.contains(source)
-    }
-
     pub(super) fn candidate_sources(&self, patterns: &BTreeSet<ConceptId>) -> BTreeSet<ConceptId> {
         if patterns.iter().any(|pattern| matches!(pattern.0.kind, ConceptKind::Percept { .. })) {
             return self.sources.clone();
@@ -42,28 +48,23 @@ impl PerceptQuestionIndex {
 
         let mut candidates = BTreeSet::new();
         for pattern in patterns {
-            let Some(shape_sources) = self.sources_by_shape.get(&pattern.0.shape()) else {
+            let Some(anchor_postings) = required_anchors(pattern).iter().map(|anchor| self.sources_by_anchor.get(anchor)).collect::<Option<Vec<_>>>() else {
                 continue;
             };
-            let anchors = required_anchors(pattern);
 
-            let mut postings = vec![shape_sources];
-            let mut missing_anchor = false;
-            for anchor in &anchors {
-                let Some(anchor_sources) = self.sources_by_anchor.get(anchor) else {
-                    missing_anchor = true;
-                    break;
-                };
-                postings.push(anchor_sources);
+            if let Some(shape_sources) = self.sources_by_shape.get(&pattern.0.shape()) {
+                let position_postings = ordered_positions(pattern).map(|position| self.sources_by_position.get(&position)).collect::<Option<Vec<_>>>();
+                if let Some(position_postings) = position_postings {
+                    candidates.extend(intersection(std::iter::once(shape_sources).chain(anchor_postings.iter().copied()).chain(position_postings)));
+                }
             }
-            if missing_anchor {
-                continue;
+            // A window of a longer ordered Concept starts at any offset, so
+            // only the pattern's names narrow it.
+            if let ConceptShape::Ordered(width) = pattern.0.shape() {
+                if let Some(window_sources) = self.sources_by_window_width.get(&width) {
+                    candidates.extend(intersection(std::iter::once(window_sources).chain(anchor_postings.iter().copied())));
+                }
             }
-
-            postings.sort_by_key(|posting| posting.len());
-            let mut pattern_candidates = postings[0].clone();
-            pattern_candidates.retain(|source| postings[1..].iter().all(|posting| posting.contains(source)));
-            candidates.extend(pattern_candidates);
         }
         candidates
     }
@@ -80,7 +81,10 @@ impl PerceptQuestionIndex {
             }
             ConceptKind::Ordered { components } => {
                 for width in 2..components.len() {
-                    self.sources_by_shape.entry(ConceptShape::Ordered(width)).or_default().insert(source.clone());
+                    self.sources_by_window_width.entry(width).or_default().insert(source.clone());
+                }
+                for position in ordered_positions(concept) {
+                    self.sources_by_position.entry(position).or_default().insert(source.clone());
                 }
             }
             ConceptKind::Percept { .. } | ConceptKind::Unordered => {}
@@ -90,6 +94,27 @@ impl PerceptQuestionIndex {
             self.insert_source_concept(source, child, visited);
         }
     }
+}
+
+// The names an ordered Concept holds at each of its positions. Only a name
+// must match a name in place; a composite component can match with a
+// remainder, and a Percept matches anything.
+fn ordered_positions(concept: &ConceptId) -> impl Iterator<Item = OrderedPosition> + '_ {
+    let components = concept.0.ordered_components().unwrap_or_default();
+    components
+        .iter()
+        .enumerate()
+        .filter(|(_, component)| matches!(component.0.kind, ConceptKind::Named(_)))
+        .map(move |(position, component)| (components.len(), position, component.clone()))
+}
+
+fn intersection<'a>(postings: impl IntoIterator<Item = &'a BTreeSet<ConceptId>>) -> BTreeSet<ConceptId> {
+    let mut postings = postings.into_iter().collect::<Vec<_>>();
+    postings.sort_by_key(|posting| posting.len());
+    let Some((smallest, rest)) = postings.split_first() else {
+        return BTreeSet::new();
+    };
+    smallest.iter().filter(|source| rest.iter().all(|posting| posting.contains(*source))).cloned().collect()
 }
 
 fn required_anchors(concept: &ConceptId) -> BTreeSet<ConceptId> {

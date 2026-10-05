@@ -15,6 +15,13 @@ const FAILED_QUESTION: &str = "
     ({failed-episode}->[tool]->{failed-tool})
     ({failed-episode}->[outcome]->[failed])";
 
+const RETAINED_HELPFUL_QUESTION: &str = "
+    ({retained-episode}->[action]->{retained-action})
+    ({retained-episode}->[tool]->{retained-tool})
+    ({retained-episode}->[outcome]->[helpful])";
+
+const CANDIDATES: [(&str, &str); 3] = [("inspect-symbols", "dumpbin"), ("inspect-symbols", "link-map"), ("reconfigure", "cmake")];
+
 #[test]
 fn repeated_outcomes_change_a_later_complete_choice_without_removing_untried_possibilities() {
     let mut pangine = Pangine::new();
@@ -148,6 +155,135 @@ fn the_same_answer_cycle_handles_three_outputs_in_an_unordered_shape() {
     assert_eq!(must_ref(&mut pangine, "${scope}"), must_ref(&mut pangine, "x2[installed-payload]"));
 }
 
+#[test]
+fn answers_carried_across_append_only_cycles_match_answers_asked_again_over_all_history() {
+    const CYCLES: usize = 200;
+    let mut replay = Pangine::new();
+    let mut carried = Pangine::new();
+    for pangine in [&mut replay, &mut carried] {
+        remember_candidates(pangine);
+    }
+    must_ref(&mut carried, &format!("{{candidates}} @ {DECISION_QUESTION}"));
+
+    let mut choices = BTreeSet::new();
+    for cycle in 0..CYCLES {
+        // Each cycle appends one new episode. In each block of ten cycles one
+        // candidate fails and the others help, so the choice keeps moving.
+        let candidate = cycle % CANDIDATES.len();
+        let outcome = if (cycle / 10) % CANDIDATES.len() == candidate { "failed" } else { "helpful" };
+        let (action, tool) = CANDIDATES[candidate];
+        let id = format!("episode-{cycle}");
+        let fields = [("action", action), ("tool", tool)];
+
+        remember(&mut replay, "episodes", &id, &fields, Some(outcome));
+        let expected = replayed_reading(&mut replay, "episodes");
+
+        // The carried answer takes only the new episode's evidence.
+        carried.reference_concept("{new} = []").expect("cleared new episodes");
+        remember(&mut carried, "new", &id, &fields, Some(outcome));
+        adjust_by_outcomes(&mut carried, "new");
+
+        assert_eq!(reading(&mut carried), expected, "cycle {cycle}");
+        choices.extend(expected.selected);
+    }
+    assert!(choices.len() > 1, "the outcomes must change the choice: {choices:?}");
+}
+
+#[test]
+fn a_carried_answer_keeps_cancelled_proof_when_a_source_is_replaced() {
+    let original = relations("revisable-episode", &[("action", "inspect-symbols"), ("tool", "dumpbin")], Some("helpful"));
+    let replacement = relations("revisable-episode", &[("action", "inspect-symbols"), ("tool", "link-map")], Some("failed"));
+    let mut replay = Pangine::new();
+    let mut carried = Pangine::new();
+    for pangine in [&mut replay, &mut carried] {
+        remember_candidates(pangine);
+    }
+
+    // The carried answer counts the original episode and keeps its evidence
+    // under separate outputs, so it can withdraw that evidence later.
+    must_ref(&mut carried, &format!("{{revisable}} = {original}"));
+    must_ref(&mut carried, &format!("{{candidates}} @ {DECISION_QUESTION}"));
+    adjust_by_outcomes(&mut carried, "revisable");
+    must_ref(&mut carried, &format!("{{revisable}} @ {RETAINED_HELPFUL_QUESTION}"));
+
+    // After the replacement, replay asks again over the replaced source, while
+    // the carried answer withdraws the old evidence and adds the new.
+    must_ref(&mut carried, &format!("{{revisable}} = {replacement}"));
+    carried.reference_concept("{action}->{tool} @-= {retained-action}->{retained-tool}").expect("withdrawn evidence");
+    adjust_by_outcomes(&mut carried, "revisable");
+    must_ref(&mut replay, &format!("{{revisable}} = {replacement}"));
+    assert_eq!(reading(&mut carried), replayed_reading(&mut replay, "revisable"));
+
+    // The readings match, but the carried answer still holds the withdrawn
+    // proof, once added and once subtracted, so replay stays the exact operation.
+    let dumpbin_support = |pangine: &mut Pangine| {
+        let shape = must_ref(pangine, "{action}->{tool}");
+        let answer = pangine.answer_view(&shape).expect("decision answer");
+        let possibilities = inspect(pangine, &answer);
+        let dumpbin = &possibilities["[inspect-symbols]->[dumpbin]"];
+        dumpbin.sources.iter().filter(|source| source.concept.contains("revisable-episode")).map(|source| source.weight).collect::<Vec<_>>()
+    };
+    assert_eq!(dumpbin_support(&mut replay), Vec::<i64>::new());
+    let mut carried_weights = dumpbin_support(&mut carried);
+    carried_weights.sort_unstable();
+    assert_eq!(carried_weights, vec![-1, 1]);
+}
+
+/// What a program reads from the decision answer: its `$` value, each
+/// possibility's strength, probability, and tie, and what `^` would choose.
+#[derive(Debug, PartialEq)]
+struct Reading {
+    value: String,
+    possibilities: Vec<(String, i64, String, bool)>,
+    selected: Option<String>,
+}
+
+fn reading(pangine: &mut Pangine) -> Reading {
+    let value = pangine.reference_concept("$({action}->{tool})").expect("readable decision answer");
+    let value = value.map_or_else(|| "[]".to_owned(), |value| pangine.format_concept(&value, false));
+    let shape = must_ref(pangine, "{action}->{tool}");
+    let answer = pangine.answer_view(&shape).expect("decision answer");
+    let possibilities = answer
+        .possibilities(pangine)
+        .expect("inspectable decision answer")
+        .iter()
+        .map(|possibility| {
+            (
+                pangine.format_concept(possibility.value(), false),
+                possibility.strength().count(),
+                possibility.probability().to_string(),
+                possibility.is_top_tie(),
+            )
+        })
+        .collect();
+    let selected = answer.choose(pangine).map(|choice| pangine.format_concept(choice.selected(), false));
+    Reading { value, possibilities, selected }
+}
+
+/// Asks the decision question again and adjusts it by every outcome in `source`.
+fn replayed_reading(pangine: &mut Pangine, source: &str) -> Reading {
+    must_ref(pangine, &format!("{{candidates}} @ {DECISION_QUESTION}"));
+    adjust_by_outcomes(pangine, source);
+    reading(pangine)
+}
+
+/// Adds the helpful outcomes in `source` to the decision answer and subtracts
+/// the failed ones. A question that finds nothing leaves no answer to adjust by.
+fn adjust_by_outcomes(pangine: &mut Pangine, source: &str) {
+    if pangine.reference_concept(&format!("{{{source}}} @ {HELPFUL_QUESTION}")).expect("helpful question").is_some() {
+        pangine.reference_concept("{action}->{tool} @+= {helpful-action}->{helpful-tool}").expect("helpful outcomes");
+    }
+    if pangine.reference_concept(&format!("{{{source}}} @ {FAILED_QUESTION}")).expect("failed question").is_some() {
+        pangine.reference_concept("{action}->{tool} @-= {failed-action}->{failed-tool}").expect("failed outcomes");
+    }
+}
+
+fn remember_candidates(pangine: &mut Pangine) {
+    for (index, (action, tool)) in CANDIDATES.iter().enumerate() {
+        remember(pangine, "candidates", &format!("candidate-{index}"), &[("action", action), ("tool", tool)], None);
+    }
+}
+
 struct Round {
     selected: ConceptId,
     possibilities: BTreeMap<String, Possibility>,
@@ -240,11 +376,15 @@ fn ask_three_output_answers(pangine: &mut Pangine) {
 }
 
 fn remember(pangine: &mut Pangine, owner: &str, id: &str, fields: &[(&str, &str)], outcome: Option<&str>) {
+    must_ref(pangine, &format!("{{{owner}}} ~= {}", relations(id, fields, outcome)));
+}
+
+fn relations(id: &str, fields: &[(&str, &str)], outcome: Option<&str>) -> String {
     let mut relations = fields.iter().map(|(name, value)| format!("([{id}]->[{name}]->[{value}])")).collect::<String>();
     if let Some(outcome) = outcome {
         relations.push_str(&format!("([{id}]->[outcome]->[{outcome}])"));
     }
-    must_ref(pangine, &format!("{{{owner}}} ~= {relations}"));
+    relations
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

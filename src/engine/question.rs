@@ -121,7 +121,6 @@ impl Pangine {
         let sources = percepts
             .iter()
             .flat_map(|percept| {
-                let index = percept.index();
                 let subconcepts = self.question_source_map(percept);
                 let candidates = if self.is_global_percept(percept) {
                     subconcepts
@@ -129,7 +128,13 @@ impl Pangine {
                         .map(|subconcepts| PerceptQuestionIndex::from_sources(subconcepts.keys()).candidate_sources(&patterns))
                         .unwrap_or_default()
                 } else {
-                    self.percept_question_indexes.get(&index).map(|index| index.candidate_sources(&patterns)).unwrap_or_default()
+                    // Indexes are disposable: the first question over a
+                    // Percept builds its index, and any change but new
+                    // experience drops it.
+                    self.percept_question_indexes
+                        .entry(percept.index())
+                        .or_insert_with(|| PerceptQuestionIndex::from_sources(subconcepts.iter().flat_map(ConceptMap::keys)))
+                        .candidate_sources(&patterns)
                 };
                 candidates
                     .into_iter()
@@ -443,6 +448,7 @@ impl Pangine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::test_rng::Rng;
 
     fn full_question_snapshot(pangine: &mut Pangine, percepts: &[ConceptId], question: &ConceptId) -> QuestionSnapshot {
         let sources = percepts
@@ -614,5 +620,95 @@ mod tests {
         assert_eq!(pangine.question_source_visits, 2);
         assert_eq!(result.completions().len(), 1);
         assert_eq!(result.completions()[0].binding(&middle).map(|concept| pangine.format_concept(concept, false)), Some("[human]".to_owned()));
+    }
+
+    #[test]
+    fn positional_names_narrow_a_question_whose_names_every_experience_holds() {
+        let mut pangine = Pangine::new();
+        let mut rng = Rng::new(7);
+        for _ in 0..256 {
+            let cells = (0..4).map(|_| ["[x]", "[o]"][rng.below(2)]).collect::<Vec<_>>().join("->");
+            pangine.reference_concept(&format!("{{boards}} ~= [x]->[o]->{cells}")).unwrap();
+        }
+        let boards = pangine.reference_percept("boards");
+        let question = pangine.reference_concept("[x]->[o]->[x]->[o]->{third}->{fourth}").unwrap().unwrap();
+        let matching =
+            pangine.get_relevance_map(&boards).iter().filter(|(_, board)| pangine.format_concept(board, false).starts_with("[x]->[o]->[x]->[o]->")).count();
+
+        pangine.question_source_visits = 0;
+        let result = pangine.complete_question(std::slice::from_ref(&boards), &question).unwrap();
+        // Every board holds both names, so only their positions narrow the question.
+        assert_eq!((pangine.get_relevance_map(&boards).len(), matching), (16, 4));
+        assert_eq!(pangine.question_source_visits, matching);
+        assert_eq!(result.completions().len(), matching);
+    }
+
+    #[test]
+    fn indexed_questions_find_every_completion_a_full_scan_finds() {
+        const NAMES: [&str; 4] = ["[a]", "[b]", "[c]", "[d]"];
+        fn random_name(rng: &mut Rng) -> String {
+            NAMES[rng.below(NAMES.len())].to_owned()
+        }
+        fn random_sequence(rng: &mut Rng) -> String {
+            let width = 2 + rng.below(4);
+            (0..width).map(|_| random_name(rng)).collect::<Vec<_>>().join("->")
+        }
+        fn random_experience(rng: &mut Rng) -> String {
+            match rng.below(8) {
+                0 => format!("{}->({}->{})->{}", random_name(rng), random_name(rng), random_name(rng), random_name(rng)),
+                1 => format!("({})({})", random_sequence(rng), random_sequence(rng)),
+                2 => format!("x2({})", random_sequence(rng)),
+                3 => format!("!({})", random_sequence(rng)),
+                4 => format!("{}->x2{}->{}", random_name(rng), random_name(rng), random_name(rng)),
+                5 => format!("{}->({}{})->{}", random_name(rng), random_name(rng), random_name(rng), random_name(rng)),
+                _ => random_sequence(rng),
+            }
+        }
+        // Every clause holds a blank, since a question without one selects no sources.
+        fn random_clause(rng: &mut Rng, blank: usize) -> String {
+            let width = 2 + rng.below(3);
+            let blank_position = rng.below(width);
+            (0..width)
+                .map(|position| match (position == blank_position, rng.below(10)) {
+                    (true, _) => format!("{{p{blank}}}"),
+                    (false, 0..=4) => random_name(rng),
+                    (false, 5..=8) => format!("{{p{}}}", rng.below(3)),
+                    (false, _) => format!("({}->{{p{}}})", random_name(rng), rng.below(3)),
+                })
+                .collect::<Vec<_>>()
+                .join("->")
+        }
+
+        let (mut narrowed, mut rows) = (0, 0);
+        for seed in 0..64 {
+            let mut rng = Rng::new(seed);
+            let mut pangine = Pangine::new();
+            for _ in 0..24 {
+                let experience = random_experience(&mut rng);
+                pangine.reference_concept(&format!("{{memory}} ~= {experience}")).unwrap();
+            }
+            let memory = pangine.reference_percept("memory");
+            let sources = pangine.get_relevance_map(&memory).len();
+            for _ in 0..16 {
+                let question_text = if rng.below(3) == 0 {
+                    let (first, second_blank) = (random_clause(&mut rng, 0), rng.below(2));
+                    format!("({first})({})", random_clause(&mut rng, second_blank))
+                } else {
+                    random_clause(&mut rng, 0)
+                };
+                let question = pangine.reference_concept(&question_text).unwrap().unwrap();
+                pangine.question_source_visits = 0;
+                let indexed = pangine.question_snapshot(std::slice::from_ref(&memory), &question);
+                narrowed += usize::from(pangine.question_source_visits < sources);
+                let full = full_question_snapshot(&mut pangine, std::slice::from_ref(&memory), &question);
+                for graded in [false, true] {
+                    let indexed_results = pangine.complete_question_snapshot(&question, &indexed, graded);
+                    let full_results = pangine.complete_question_snapshot(&question, &full, graded);
+                    assert!(indexed_results.completions() == full_results.completions(), "seed {seed}: {question_text}");
+                    rows += full_results.completions().len();
+                }
+            }
+        }
+        assert!(narrowed > 0 && rows > 0, "the generated cases must narrow some questions and complete some rows: {narrowed} narrowed, {rows} rows");
     }
 }

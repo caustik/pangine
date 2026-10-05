@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::engine::completion::projection_strength;
+use crate::engine::test_rng::Rng;
 use crate::engine::ConceptMap;
 
 const SEEDS: u64 = 48;
@@ -409,32 +410,4 @@ fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {
         .reference_concept(input)
         .unwrap_or_else(|error| panic!("failed to parse {input:?}: {error}"))
         .unwrap_or_else(|| panic!("expected non-null Concept for {input:?}"))
-}
-
-/// A small deterministic generator (splitmix64), so every case is reproducible
-/// from its seed without a property-testing dependency.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut value = self.0;
-        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        value ^ (value >> 31)
-    }
-
-    fn below(&mut self, bound: usize) -> usize {
-        (self.next() % bound as u64) as usize
-    }
-
-    fn shuffle<T>(&mut self, items: &mut [T]) {
-        for index in (1..items.len()).rev() {
-            items.swap(index, self.below(index + 1));
-        }
-    }
 }

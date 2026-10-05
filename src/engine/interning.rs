@@ -1,8 +1,6 @@
 //! Canonical Concept interning, engine ownership, and retained Percept state.
 
-use super::{
-    ConceptId, ConceptKind, ConceptMap, LiveConceptAnswer, Pangine, ParseError, ParseResult, ParsedUnionOperand, PerceptQuestionIndex, GLOBAL_PERCEPT_NAME,
-};
+use super::{ConceptId, ConceptKind, ConceptMap, LiveConceptAnswer, Pangine, ParseError, ParseResult, ParsedUnionOperand, GLOBAL_PERCEPT_NAME};
 use crate::Relevance;
 use std::collections::{hash_map::DefaultHasher, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -171,15 +169,14 @@ impl Pangine {
         let index = percept.index();
         let value_map = self.materialized_percept_map(&subconcepts)?;
         let value = Self::sole_default_concept(&subconcepts).cloned().or_else(|| self.reference_map(&value_map));
+        // The next question over this Percept rebuilds its index.
+        self.percept_question_indexes.remove(&index);
         if subconcepts.is_empty() {
             self.percept_subconcepts.remove(&index);
-            self.percept_question_indexes.remove(&index);
             self.percept_value_maps.remove(&index);
             self.percept_values.remove(&index);
         } else {
-            let question_index = PerceptQuestionIndex::from_sources(subconcepts.keys());
             self.percept_subconcepts.insert(index, subconcepts);
-            self.percept_question_indexes.insert(index, question_index);
             self.percept_value_maps.insert(index, value_map);
             match value.clone() {
                 Some(value) => {
@@ -196,8 +193,8 @@ impl Pangine {
     pub(super) fn write_current_percept_value(&mut self, percept: &ConceptId, value: Option<ConceptId>) {
         if let Some(value) = value.as_ref() {
             if let Some(live) = LiveConceptAnswer::decode_validated(self, value) {
-                if let Some(projection) = live.projection(percept) {
-                    let _ = self.write_live_answer_value(percept, value, projection);
+                if live.projection(percept).is_some() {
+                    let _ = self.write_live_answer_value(percept, value);
                     return;
                 }
             }
@@ -239,28 +236,23 @@ impl Pangine {
         Some((value, live))
     }
 
-    fn write_live_answer_value(&mut self, output: &ConceptId, value: &ConceptId, projection: Option<ConceptId>) -> Option<()> {
+    // A question over an output reads its projection, so its index covers the
+    // projection rather than the stored answer value.
+    fn write_live_answer_value(&mut self, output: &ConceptId, value: &ConceptId) -> Option<()> {
         let mut subconcepts = ConceptMap::new();
         subconcepts.insert(value.clone(), Relevance::DEFAULT);
         self.set_percept_subconcepts(output, subconcepts)?;
-        match projection {
-            Some(projection) => {
-                self.percept_question_indexes.insert(output.index(), PerceptQuestionIndex::from_sources([&projection]));
-            }
-            None => {
-                self.percept_question_indexes.remove(&output.index());
-            }
-        }
         self.current_value_percepts.insert(output.index());
         Some(())
     }
 
     pub(super) fn install_live_answer(&mut self, live: LiveConceptAnswer) -> Option<ConceptId> {
-        let projections =
-            live.answer.outputs.iter().map(|output| live.projection(output).map(|projection| (output.clone(), projection))).collect::<Option<Vec<_>>>()?;
+        if live.answer.outputs.iter().any(|output| live.projection(output).is_none()) {
+            return None;
+        }
         let value = live.encode(self);
-        for (output, projection) in projections {
-            self.write_live_answer_value(&output, &value, projection)?;
+        for output in &live.answer.outputs {
+            self.write_live_answer_value(output, &value)?;
         }
         Some(value)
     }
@@ -273,29 +265,21 @@ impl Pangine {
         let index = percept.index();
         let current_relevance = self.percept_subconcepts.get(&index).and_then(|subconcepts| subconcepts.get(experience)).copied().unwrap_or(Relevance::EMPTY);
         let next_relevance = current_relevance.checked_add(Relevance::DEFAULT)?;
-        let incremental_value_map = if current_relevance.is_empty() {
-            let mut value_map = if let Some(value_map) = self.percept_value_maps.remove(&index) {
-                value_map
-            } else {
-                let subconcepts = self.percept_subconcepts.get(&index).cloned().unwrap_or_default();
-                self.materialized_percept_map(&subconcepts)?
-            };
-            self.add_union_concept(&mut value_map, experience.clone(), false, Relevance::DEFAULT)?;
-            Some(value_map)
-        } else {
-            None
-        };
-        self.percept_subconcepts.entry(index).or_default().insert(experience.clone(), next_relevance);
-        let question_index = self.percept_question_indexes.entry(index).or_default();
-        if current_relevance.is_empty() || !question_index.contains_source(experience) {
-            question_index.insert_source(experience);
-        }
-        let value_map = if let Some(value_map) = incremental_value_map {
+        // The materialized value adds the experience once more, whether it is
+        // new or repeated, so recording never rebuilds the whole value.
+        let mut value_map = if let Some(value_map) = self.percept_value_maps.remove(&index) {
             value_map
         } else {
-            let subconcepts = self.percept_subconcepts[&index].clone();
+            let subconcepts = self.percept_subconcepts.get(&index).cloned().unwrap_or_default();
             self.materialized_percept_map(&subconcepts)?
         };
+        self.add_union_concept(&mut value_map, experience.clone(), false, Relevance::DEFAULT)?;
+        self.percept_subconcepts.entry(index).or_default().insert(experience.clone(), next_relevance);
+        // An index that a question already built stays current; otherwise the
+        // next question builds one from every source.
+        if let Some(question_index) = self.percept_question_indexes.get_mut(&index) {
+            question_index.insert_source(experience);
+        }
         self.percept_value_maps.insert(index, value_map);
         self.percept_values.remove(&index);
         Some(())
