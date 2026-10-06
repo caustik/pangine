@@ -1,3 +1,4 @@
+use super::concept_answer::PartialAnswer;
 use super::interpolation::{displayed_shares, interpolated_probabilities};
 use super::{
     choice::Choice, CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment, QuestionSelector,
@@ -557,22 +558,15 @@ impl Pangine {
         self.complete_structural_subject(subject, question, false)
     }
 
+    // A question over memories held by partition engines maps to them.
+    // Otherwise this engine answers as the only partition: it maps the
+    // question over its own experience and reduces that one partial answer.
     fn complete_percepts(&mut self, sources: &[ConceptId], question: &ConceptId, graded: bool) -> Option<CompletionResult> {
-        if sources.is_empty()
-            || !self.owns(question)
-            || sources.iter().any(|source| !self.is_percept(source))
-            || sources.iter().collect::<BTreeSet<_>>().len() != sources.len()
-        {
-            return None;
+        if self.selects_partitioned_memory(sources) {
+            return self.complete_partitioned(sources, question, graded);
         }
-
-        let snapshot = self.question_snapshot(sources, question);
-        let mut result = self.complete_question_snapshot(question, &snapshot, graded);
-        if graded {
-            let generalized = self.generalized_completions(question, |pangine, opened| pangine.question_snapshot(sources, opened))?;
-            result.add_completions(generalized);
-        }
-        Some(result)
+        let part = self.partial_answer(sources, question, graded)?;
+        self.reduce_partial_answers(question, [part], graded)
     }
 
     // The complete subject is treated as one source Concept with default
@@ -583,17 +577,112 @@ impl Pangine {
             return None;
         }
 
-        let snapshot = self.subject_question_snapshot(subject, question);
-        let mut result = self.complete_question_snapshot(question, &snapshot, graded);
+        let part = self.partial_answer_over(question, graded, |pangine, question| pangine.subject_question_snapshot(subject, question))?;
+        self.reduce_partial_answers(question, [part], graded)
+    }
+
+    /// Answers a question over the experience that these Percepts hold in this
+    /// engine, as one partition's share for a reducer: every clause's
+    /// evidence, and for a graded question the generalized rows.
+    pub(super) fn partial_answer(&mut self, sources: &[ConceptId], question: &ConceptId, graded: bool) -> Option<PartialAnswer> {
+        if !self.valid_question_sources(sources, question) {
+            return None;
+        }
+
+        self.partial_answer_over(question, graded, |pangine, question| pangine.question_snapshot(sources, question))
+    }
+
+    // A question selects one or more distinct Percepts of this engine.
+    pub(super) fn valid_question_sources(&self, sources: &[ConceptId], question: &ConceptId) -> bool {
+        !sources.is_empty()
+            && self.owns(question)
+            && sources.iter().all(|source| self.is_percept(source))
+            && sources.iter().collect::<BTreeSet<_>>().len() == sources.len()
+    }
+
+    // Each source view is matched on its own, so the evidence for experience
+    // divided among partitions is the union of each partition's evidence. A
+    // generalized row comes from one experience, which lives in one partition.
+    fn partial_answer_over(
+        &mut self,
+        question: &ConceptId,
+        graded: bool,
+        snapshot: impl Fn(&mut Self, &ConceptId) -> super::QuestionSnapshot,
+    ) -> Option<PartialAnswer> {
+        let clauses = question_clauses(question);
+        let shared_percepts = self.shared_clause_percepts(&clauses);
+        let question_snapshot = snapshot(self, question);
+        let mut evidence = BTreeSet::new();
+        for clause in &clauses {
+            evidence.extend(self.clause_evidence(clause, &question_snapshot, &shared_percepts));
+        }
+        let generalized = if graded { self.generalized_completions(question, snapshot)?.into_iter().collect() } else { BTreeSet::new() };
+        Some(PartialAnswer { evidence, generalized })
+    }
+
+    /// Reduces partial answers from every partition to the result that one
+    /// engine holding all of their experience gives: the merged evidence joins
+    /// clause by clause, the joined rows are graded, and the generalized rows
+    /// are added.
+    pub(super) fn reduce_partial_answers(
+        &self,
+        question: &ConceptId,
+        parts: impl IntoIterator<Item = PartialAnswer>,
+        graded: bool,
+    ) -> Option<CompletionResult> {
+        if !self.owns(question) {
+            return None;
+        }
+
+        let merged = parts.into_iter().fold(PartialAnswer::default(), PartialAnswer::merge);
+        let products =
+            join_clauses(&question_clauses(question), |clause| merged.evidence.iter().filter(|fragment| fragment.clause() == clause).cloned().collect());
+        let mut result = self.graded_result(question, products, graded);
         if graded {
-            let generalized = self.generalized_completions(question, |pangine, opened| pangine.subject_question_snapshot(subject, opened))?;
-            result.add_completions(generalized);
+            result.add_completions(merged.generalized.into_iter().collect());
         }
         Some(result)
     }
 
+    /// Completes a question over one snapshot of source views, matching each
+    /// clause only while rows remain.
     pub(super) fn complete_question_snapshot(&mut self, question: &ConceptId, snapshot: &super::QuestionSnapshot, graded: bool) -> CompletionResult {
         let clauses = question_clauses(question);
+        let shared_percepts = self.shared_clause_percepts(&clauses);
+        let products = join_clauses(&clauses, |clause| self.clause_evidence(clause, snapshot, &shared_percepts));
+        self.graded_result(question, products, graded)
+    }
+
+    // Matches one clause against every source view in a snapshot.
+    fn clause_evidence(
+        &mut self,
+        clause: &ConceptId,
+        snapshot: &super::QuestionSnapshot,
+        shared_percepts: &BTreeSet<ConceptId>,
+    ) -> BTreeSet<CompletionEvidence> {
+        let mut clause_evidence = BTreeSet::new();
+        for ((source, matched, _), routes) in snapshot {
+            for completion in self.source_view_completions(matched, clause) {
+                let routes = routes_with_binding_origins(routes, &completion.binding_paths);
+                let source_route_products = source_route_constraints(&routes, shared_percepts);
+                clause_evidence.insert(CompletionEvidence {
+                    source: Rc::new(CompletionEvidenceSource {
+                        clause: clause.clone(),
+                        source_route_products,
+                        source_view: QuestionSourceView { source: source.clone(), matched: matched.clone(), routes },
+                        assignment: completion.assignment,
+                        remainders: completion.remainders,
+                    }),
+                });
+            }
+        }
+        clause_evidence
+    }
+
+    // Keeps the joined rows that bind every output. A row whose unconnected
+    // clause groups come from separate experiences is not exact. A graded
+    // question keeps it as a composed row.
+    fn graded_result(&self, question: &ConceptId, products: BTreeSet<Completion>, graded: bool) -> CompletionResult {
         let clause_groups = question_clause_groups(question);
         let clause_group_count = clause_groups.len();
         let group_by_clause = clause_groups
@@ -601,71 +690,8 @@ impl Pangine {
             .enumerate()
             .flat_map(|(group, clauses)| clauses.into_iter().map(move |clause| (clause, group)))
             .collect::<BTreeMap<_, _>>();
-        let shared_percepts = self.shared_clause_percepts(&clauses);
-        let mut products = BTreeSet::from([Completion {
-            assignment: ProjectionAssignment::new(),
-            evidence: Vec::new(),
-            adjustments: Vec::new(),
-            grade: CompletionGrade::Exact,
-        }]);
-
-        for clause in clauses {
-            let mut clause_evidence = BTreeSet::new();
-            for ((source, matched, _), routes) in snapshot {
-                for completion in self.source_view_completions(matched, &clause) {
-                    let routes = routes_with_binding_origins(routes, &completion.binding_paths);
-                    let source_route_products = source_route_constraints(&routes, &shared_percepts);
-                    clause_evidence.insert(CompletionEvidence {
-                        source: Rc::new(CompletionEvidenceSource {
-                            clause: clause.clone(),
-                            source_route_products,
-                            source_view: QuestionSourceView { source: source.clone(), matched: matched.clone(), routes },
-                            assignment: completion.assignment,
-                            remainders: completion.remainders,
-                        }),
-                    });
-                }
-            }
-
-            let mut next = BTreeSet::new();
-            for product in products {
-                for evidence in &clause_evidence {
-                    let Some(assignment) = Self::merge_projection_assignments(&product.assignment, &evidence.source.assignment) else {
-                        continue;
-                    };
-                    let mut joined_evidence = product.evidence.clone();
-                    let existing_routes = joined_evidence
-                        .iter()
-                        .find(|joined| joined.source.source_view.source == evidence.source.source_view.source)
-                        .map(|joined| &joined.source.source_route_products);
-                    let source_route_products = match existing_routes {
-                        Some(existing_routes) => join_source_route_relations(existing_routes, &evidence.source.source_route_products),
-                        None => evidence.source.source_route_products.clone(),
-                    };
-                    if source_route_products.is_empty() {
-                        continue;
-                    }
-                    for joined in &mut joined_evidence {
-                        if joined.source.source_view.source == evidence.source.source_view.source {
-                            Rc::make_mut(&mut joined.source).source_route_products = source_route_products.clone();
-                        }
-                    }
-                    let mut evidence = evidence.clone();
-                    Rc::make_mut(&mut evidence.source).source_route_products = source_route_products;
-                    joined_evidence.push(evidence);
-                    next.insert(Completion { assignment, evidence: joined_evidence, adjustments: Vec::new(), grade: CompletionGrade::Exact });
-                }
-            }
-            products = next;
-            if products.is_empty() {
-                break;
-            }
-        }
-
         let mut outputs = BTreeSet::new();
         self.collect_output_percepts(question, &mut outputs);
-        // A row whose unconnected clause groups come from separate experiences
-        // is not exact. A graded question keeps it as a composed row.
         let completions = products
             .into_iter()
             .filter(|completion| outputs.iter().all(|output| completion.assignment.contains_key(output)))
@@ -1127,6 +1153,55 @@ fn refresh_completion_evidence_routes(evidence: &mut [CompletionEvidence], activ
         }
     }
     true
+}
+
+// Joins the clauses in question order, asking for each clause's evidence only
+// while rows remain.
+fn join_clauses(clauses: &[ConceptId], mut clause_evidence: impl FnMut(&ConceptId) -> BTreeSet<CompletionEvidence>) -> BTreeSet<Completion> {
+    let mut products =
+        BTreeSet::from([Completion { assignment: ProjectionAssignment::new(), evidence: Vec::new(), adjustments: Vec::new(), grade: CompletionGrade::Exact }]);
+    for clause in clauses {
+        products = join_clause_evidence(products, &clause_evidence(clause));
+        if products.is_empty() {
+            break;
+        }
+    }
+    products
+}
+
+// Extends every row with each compatible fragment proving the next clause.
+// Fragments from one source must agree on the routes through that source.
+fn join_clause_evidence(products: BTreeSet<Completion>, clause_evidence: &BTreeSet<CompletionEvidence>) -> BTreeSet<Completion> {
+    let mut next = BTreeSet::new();
+    for product in products {
+        for evidence in clause_evidence {
+            let Some(assignment) = Pangine::merge_projection_assignments(&product.assignment, &evidence.source.assignment) else {
+                continue;
+            };
+            let mut joined_evidence = product.evidence.clone();
+            let existing_routes = joined_evidence
+                .iter()
+                .find(|joined| joined.source.source_view.source == evidence.source.source_view.source)
+                .map(|joined| &joined.source.source_route_products);
+            let source_route_products = match existing_routes {
+                Some(existing_routes) => join_source_route_relations(existing_routes, &evidence.source.source_route_products),
+                None => evidence.source.source_route_products.clone(),
+            };
+            if source_route_products.is_empty() {
+                continue;
+            }
+            for joined in &mut joined_evidence {
+                if joined.source.source_view.source == evidence.source.source_view.source {
+                    Rc::make_mut(&mut joined.source).source_route_products = source_route_products.clone();
+                }
+            }
+            let mut evidence = evidence.clone();
+            Rc::make_mut(&mut evidence.source).source_route_products = source_route_products;
+            joined_evidence.push(evidence);
+            next.insert(Completion { assignment, evidence: joined_evidence, adjustments: Vec::new(), grade: CompletionGrade::Exact });
+        }
+    }
+    next
 }
 
 fn question_clauses(question: &ConceptId) -> Vec<ConceptId> {

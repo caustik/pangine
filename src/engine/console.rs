@@ -9,6 +9,8 @@ Commands:
   help, h          Show this help
   inspect operand  Show linked values, their probabilities, and their sources
   seed n           Restart the generator that ^~ draws from at seed n
+  partitions [n]   Show the partitions, or divide remembered experience among n
+  drop partition k Lose partition k and the experience it holds
   quit, q          Exit the command-line console
 
 Concept syntax:
@@ -166,8 +168,52 @@ impl Pangine {
         Ok(())
     }
 
-    /// Runs one console command: `help` or `h`, `inspect operand`, or
-    /// `seed n`.
+    fn debug_console_partitions(&mut self, operand: &str) -> Result<Vec<String>, String> {
+        let operand = operand.trim_end();
+        if !operand.is_empty() {
+            let count = operand.parse().ok().filter(|count| *count > 0).ok_or_else(|| "partitions expects a whole number of at least 1".to_owned())?;
+            self.set_partitions(count);
+        }
+        Ok(self.debug_partition_lines())
+    }
+
+    fn debug_console_drop_partition(&mut self, operand: &str) -> Result<Vec<String>, String> {
+        let count = self.partition_count();
+        let expected = || {
+            if count > 1 {
+                format!("drop partition expects a partition number from 0 to {}", count - 1)
+            } else {
+                "only divided memory has a partition to lose; use partitions n first".to_owned()
+            }
+        };
+        let index = debug_console_command_operand(operand, "partition").and_then(|index| index.trim_end().parse().ok()).ok_or_else(expected)?;
+        if !self.drop_partition(index) {
+            return Err(expected());
+        }
+        Ok(self.debug_partition_lines())
+    }
+
+    // Lists the partitions and how many distinct experiences each memory
+    // holds in each one.
+    fn debug_partition_lines(&mut self) -> Vec<String> {
+        let contents = self.partition_contents();
+        let mut lines = vec![if contents.len() == 1 { "  1 partition".to_owned() } else { format!("  {} partitions", contents.len()) }];
+        for (index, memories) in contents.iter().enumerate() {
+            let held = memories
+                .iter()
+                .map(|(memory, experiences)| {
+                    let spelling = self.percepts.get(memory).map_or_else(|| format!("{{{memory}}}"), |percept| self.format_concept(percept, false));
+                    format!("{spelling} {experiences} {}", if *experiences == 1 { "experience" } else { "experiences" })
+                })
+                .collect::<Vec<_>>();
+            let held = if held.is_empty() { "no remembered experience".to_owned() } else { held.join(", ") };
+            lines.push(format!("  partition {index}: {held}"));
+        }
+        lines
+    }
+
+    /// Runs one console command: `help` or `h`, `inspect operand`, `seed n`,
+    /// `partitions` or `partitions n`, or `drop partition k`.
     ///
     /// Returns the lines the command prints, or its message when it fails.
     /// Returns none when `line` is not a console command, so the caller can run
@@ -179,6 +225,12 @@ impl Pangine {
         }
         if let Some(operand) = debug_console_command_operand(line, "inspect") {
             return Some(self.debug_answer_inspection_lines(operand));
+        }
+        if let Some(operand) = debug_console_command_operand(line, "partitions") {
+            return Some(self.debug_console_partitions(operand));
+        }
+        if let Some(operand) = debug_console_command_operand(line, "drop") {
+            return Some(self.debug_console_drop_partition(operand));
         }
         let operand = debug_console_command_operand(line, "seed")?;
         Some(self.debug_console_seed(operand).map(|()| Vec::new()))
@@ -294,6 +346,8 @@ mod tests {
             "{a}{b} @ expression   Complete several retained sources together",
             "subject @~ expression      Graded: compose parts, generalize from cases",
             "seed n           Restart the generator that ^~ draws from",
+            "partitions [n]   Show the partitions, or divide remembered experience among n",
+            "drop partition k Lose partition k and the experience it holds",
             "^~{choice}            returns [tea] with probability 2/5",
             "imports from a graded answer keeps its grade",
             "&operand                   Return the shared answer shape",
@@ -340,6 +394,53 @@ mod tests {
         assert!(matches!(pangine.debug_console_command("seed seven"), Some(Err(_))));
         for line in ["quit", "q", "seeds 7", "inspector", "[help]"] {
             assert_eq!(pangine.debug_console_command(line), None, "{line} is not a shared console command");
+        }
+    }
+
+    #[test]
+    fn partition_commands_divide_memory_and_lose_a_partition() {
+        let mut pangine = Pangine::new();
+        for script in ["{world} ~= [morning]->[birds]", "{world} ~= [morning]->[birds]", "{world} ~= [morning]->[traffic]", "{world} ~= [evening]->[crickets]"]
+        {
+            pangine.reference_concept(script).unwrap();
+        }
+        let lines = |lines: &[&str]| Some(Ok(lines.iter().map(|line| (*line).to_owned()).collect::<Vec<_>>()));
+        assert_eq!(pangine.debug_console_command("partitions"), lines(&["  1 partition", "  partition 0: {world} 3 experiences"]));
+        assert_eq!(
+            pangine.debug_console_command("partitions 3"),
+            lines(&[
+                "  3 partitions",
+                "  partition 0: no remembered experience",
+                "  partition 1: {world} 1 experience",
+                "  partition 2: {world} 2 experiences"
+            ])
+        );
+        assert_eq!(
+            pangine.debug_console_command("drop partition 2"),
+            lines(&[
+                "  3 partitions",
+                "  partition 0: no remembered experience",
+                "  partition 1: {world} 1 experience",
+                "  partition 2: no remembered experience"
+            ])
+        );
+        let answer = pangine.reference_concept("{world} @ {time}->{sound}").unwrap().unwrap();
+        assert_eq!(pangine.format_concept(&answer, false), "[evening]->[crickets]", "the lost partition held both morning experiences");
+
+        let count_error = Some(Err("partitions expects a whole number of at least 1".to_owned()));
+        assert_eq!(pangine.debug_console_command("partitions 0"), count_error);
+        assert_eq!(pangine.debug_console_command("partitions three"), count_error);
+        let index_error = Some(Err("drop partition expects a partition number from 0 to 2".to_owned()));
+        for line in ["drop partition 3", "drop partition", "drop", "drop partitions 1"] {
+            assert_eq!(pangine.debug_console_command(line), index_error, "{line}");
+        }
+        assert_eq!(pangine.debug_console_command("partitions 1"), lines(&["  1 partition", "  partition 0: {world} 1 experience"]));
+        assert_eq!(
+            pangine.debug_console_command("drop partition 0"),
+            Some(Err("only divided memory has a partition to lose; use partitions n first".to_owned()))
+        );
+        for line in ["dropped", "partitionsX", "[drop]"] {
+            assert_eq!(pangine.debug_console_command(line), None, "{line} is not a console command");
         }
     }
 

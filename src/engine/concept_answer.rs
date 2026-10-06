@@ -52,6 +52,8 @@ const ADJUSTMENTS: &str = "pangine-answer-adjustments";
 const ADJUSTMENT: &str = "pangine-answer-adjustment";
 const COMPOSED: &str = "pangine-answer-composed";
 const GENERALIZED: &str = "pangine-answer-generalized";
+const PARTIAL: &str = "pangine-partial-answer";
+const PARTIAL_GENERALIZED: &str = "pangine-partial-generalized";
 const LIVE_ANSWER: &str = "pangine-live-answer";
 const LIVE_PROJECTIONS: &str = "pangine-answer-live-projections";
 const LIVE_PROJECTION: &str = "pangine-answer-live-projection";
@@ -65,6 +67,39 @@ pub(super) struct ConceptAnswer {
     pub(super) questions: BTreeSet<ConceptId>,
     pub(super) outputs: BTreeSet<ConceptId>,
     rows: Vec<Completion>,
+}
+
+/// One partition's share of an answer: the evidence its own experiences
+/// prove for each clause, and for a graded question its generalized rows. A
+/// reducer joins the clauses only after every partition's share merges.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct PartialAnswer {
+    pub(super) evidence: BTreeSet<CompletionEvidence>,
+    pub(super) generalized: BTreeSet<Completion>,
+}
+
+impl PartialAnswer {
+    /// Merges two shares by the union of their evidence and rows, so merging
+    /// is associative, commutative, and idempotent.
+    pub(super) fn merge(mut self, mut other: Self) -> Self {
+        self.evidence.append(&mut other.evidence);
+        self.generalized.append(&mut other.generalized);
+        self
+    }
+
+    pub(super) fn encode(&self, pangine: &mut Pangine) -> ConceptId {
+        let evidence = encode_evidence_set(pangine, &self.evidence.iter().cloned().collect::<Vec<_>>());
+        let generalized = self.generalized.iter().map(|row| encode_completion(pangine, row)).collect::<Vec<_>>();
+        let generalized = encode_concept_set(pangine, PARTIAL_GENERALIZED, generalized);
+        tagged(pangine, PARTIAL, vec![evidence, generalized])
+    }
+
+    pub(super) fn decode(pangine: &Pangine, concept: &ConceptId) -> Option<Self> {
+        let [evidence, generalized] = fixed_fields(pangine, concept, PARTIAL)?;
+        let evidence = decode_evidence_set(pangine, evidence)?.into_iter().collect();
+        let generalized = tagged_fields(pangine, generalized, PARTIAL_GENERALIZED)?.iter().map(|row| decode_completion(pangine, row)).collect::<Option<_>>()?;
+        Some(Self { evidence, generalized })
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -261,15 +296,6 @@ impl ConceptAnswer {
         }
         answer.rows = Self::from_result(pangine, &result).rows;
         Some(answer)
-    }
-
-    #[cfg(test)]
-    fn merge_partitions(&self, other: &Self) -> Option<Self> {
-        if self.questions != other.questions || self.outputs != other.outputs {
-            return None;
-        }
-        let rows = self.rows.iter().chain(&other.rows).cloned().collect::<BTreeSet<_>>().into_iter().collect();
-        Some(Self { questions: self.questions.clone(), outputs: self.outputs.clone(), rows })
     }
 
     pub(super) fn detach(&self, pangine: &Pangine, output: &ConceptId) -> Option<Self> {
@@ -911,31 +937,35 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_concept_answers_reduce_deterministically_and_cross_an_engine_boundary() {
+    fn partial_answers_reduce_deterministically_and_cross_an_engine_boundary() {
         let mut mapper = Pangine::new();
         remember(&mut mapper, "part-a", "([episode]->[a])([pair]->[cat]->[fish])");
         remember(&mut mapper, "part-b", "([episode]->[b])([pair]->[cat]->[milk])");
         remember(&mut mapper, "part-c", "([episode]->[c])([pair]->[dog]->[fish])");
-        let question = "[pair]->{animal}->{food}";
-        let mapped = ["part-a", "part-b", "part-c"].map(|source| complete_answer(&mut mapper, &[source], question));
-        let full = complete_answer(&mut mapper, &["part-a", "part-b", "part-c"], question);
-        let mapped_text = mapped.map(|answer| mapper.format_concept(&answer, false));
-        let full_text = mapper.format_concept(&full, false);
+        let question = must_ref(&mut mapper, "[pair]->{animal}->{food}");
+        let parts = ["part-a", "part-b", "part-c"].map(|source| {
+            let source = mapper.reference_percept(source);
+            let part = mapper.partial_answer(&[source], &question, false).expect("valid partial question");
+            part.encode(&mut mapper)
+        });
+        let full = complete_answer(&mut mapper, &["part-a", "part-b", "part-c"], "[pair]->{animal}->{food}");
 
         let mut reducer = Pangine::new();
-        let mapped = mapped_text.map(|answer| must_ref(&mut reducer, &answer));
-        let full = must_ref(&mut reducer, &full_text);
-        let a = ConceptAnswer::decode(&reducer, &mapped[0]).unwrap();
-        let b = ConceptAnswer::decode(&reducer, &mapped[1]).unwrap();
-        let c = ConceptAnswer::decode(&reducer, &mapped[2]).unwrap();
-        let forward = a.merge_partitions(&b).unwrap().merge_partitions(&c).unwrap();
-        let reverse = c.merge_partitions(&b).unwrap().merge_partitions(&a).unwrap();
-        let full = ConceptAnswer::decode(&reducer, &full).unwrap();
+        let parts = parts.map(|part| {
+            let part = reducer.import_graph(&mapper.export_graph(&part).unwrap()).unwrap();
+            PartialAnswer::decode(&reducer, &part).unwrap()
+        });
+        let full = reducer.import_graph(&mapper.export_graph(&full).unwrap()).unwrap();
+        let question = must_ref(&mut reducer, "[pair]->{animal}->{food}");
+        let forward = reducer.reduce_partial_answers(&question, parts.clone(), false).unwrap();
+        let reverse = reducer.reduce_partial_answers(&question, parts.into_iter().rev(), false).unwrap();
+        let forward = ConceptAnswer::from_result(&reducer, &forward).encode(&mut reducer);
+        let reverse = ConceptAnswer::from_result(&reducer, &reverse).encode(&mut reducer);
 
-        assert!(forward == reverse);
-        assert!(forward == full);
-        assert_eq!(forward.encode(&mut reducer), full.encode(&mut reducer));
+        assert_eq!(forward, reverse);
+        assert_eq!(forward, full);
         let animal = reducer.reference_percept("animal");
+        let forward = ConceptAnswer::decode(&reducer, &forward).unwrap();
         assert_eq!(forward.materialize(&mut reducer, &animal), Some(must_ref(&mut reducer, "x2[cat][dog]")));
     }
 

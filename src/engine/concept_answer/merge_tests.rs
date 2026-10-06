@@ -1,21 +1,28 @@
-//! Seeded property checks for the merge contract: dividing experience across
-//! partitions, changing its arrival order, or regrouping partial answers must
-//! not change an answer.
+//! Seeded property checks for the partition contract: dividing experience
+//! among partitions, changing its arrival order, or regrouping partial answers
+//! must not change an answer.
 
 use super::*;
-use crate::engine::completion::projection_strength;
 use crate::engine::test_rng::Rng;
 use crate::engine::ConceptMap;
 
 const SEEDS: u64 = 48;
 const NODES: [&str; 4] = ["a", "b", "c", "d"];
 const RELATIONS: [&str; 2] = ["r", "s"];
-/// Questions every partition answers whole: single clauses, and clause groups
-/// that share no blank, which only one experience can connect.
-const WHOLE_QUESTIONS: [&str; 4] = ["{x}->[r]->{y}", "[a]->{relation}->{object}", "{whole}", "({x}->[r]->{y})({z}->[s]->{w})"];
-/// Clauses joined by a shared blank, answered clause by clause in each
-/// partition and joined after the clause answers merge.
-const JOINED_QUESTIONS: [(&str, &str); 2] = [("{x}->[r]->{y}", "{y}->[s]->{z}"), ("{x}->[r]->{y}", "{x}->[s]->{z}")];
+/// Single clauses, clause groups that share no blank, and clauses joined by a
+/// shared blank.
+const QUESTIONS: [&str; 6] = [
+    "{x}->[r]->{y}",
+    "[a]->{relation}->{object}",
+    "{whole}",
+    "({x}->[r]->{y})({z}->[s]->{w})",
+    "({x}->[r]->{y})({y}->[s]->{z})",
+    "({x}->[r]->{y})({x}->[s]->{z})",
+];
+/// Two clause groups, one of which joins two clauses through a shared blank.
+/// One experience can connect the groups while another experience supplies
+/// one of the joined clauses.
+const JOINED_GROUP_QUESTIONS: [&str; 2] = ["({x}->[r]->{y})({y}->[s]->{z})({w}->[r]->{v})", "({x}->[r]->{y})({y}->[s]->{z})({w}->[s]->{v})"];
 
 #[test]
 fn arrival_order_does_not_change_memory_or_answers() {
@@ -30,105 +37,74 @@ fn arrival_order_does_not_change_memory_or_answers() {
 
         let mut reducer = Pangine::new();
         assert_eq!(memory_spelling(&mut ordered), memory_spelling(&mut shuffled), "seed {seed}");
-        for question in WHOLE_QUESTIONS {
-            let expected = transported_answer(&mut ordered, question, &mut reducer);
-            let actual = transported_answer(&mut shuffled, question, &mut reducer);
-            assert!(expected == actual, "seed {seed}: {question}");
-        }
-        for (first, second) in JOINED_QUESTIONS {
-            let question = format!("({first})({second})");
-            let expected = transported_answer(&mut ordered, &question, &mut reducer);
-            let actual = transported_answer(&mut shuffled, &question, &mut reducer);
-            assert!(expected == actual, "seed {seed}: {question}");
-        }
-    }
-}
-
-#[test]
-fn partitioned_answers_merge_into_the_single_engine_answer_in_any_grouping() {
-    let mut rows = [0; WHOLE_QUESTIONS.len()];
-    for seed in 0..SEEDS {
-        let experiences = generate(seed);
-        let partitions = 2 + (seed as usize % 3);
-        let (mut full, mut shards) = partitioned_engines(&experiences, partitions);
-        let mut reducer = Pangine::new();
-
-        for (index, question) in WHOLE_QUESTIONS.into_iter().enumerate() {
-            let expected = transported_answer(&mut full, question, &mut reducer);
-            rows[index] += expected.rows.len();
-            let parts = shards.iter_mut().map(|shard| transported_answer(shard, question, &mut reducer)).collect::<Vec<_>>();
-
-            let forward = merge_all(parts.iter());
-            let reverse = merge_all(parts.iter().rev());
-            let mut shuffled = parts.clone();
-            Rng::new(seed).shuffle(&mut shuffled);
-            let tree = merge_tree(&shuffled);
-            assert!(forward == expected, "seed {seed}: {question} merged forward");
-            assert!(reverse == expected, "seed {seed}: {question} merged in reverse");
-            assert!(tree == expected, "seed {seed}: {question} merged as a tree");
-            assert_eq!(forward.encode(&mut reducer), expected.encode(&mut reducer), "seed {seed}: {question} encoding");
-
-            for (position, part) in parts.iter().enumerate() {
-                assert!(part.merge_partitions(part).as_ref() == Some(part), "seed {seed}: merging is idempotent");
-                let other = &parts[(position + 1) % parts.len()];
-                assert!(part.merge_partitions(other) == other.merge_partitions(part), "seed {seed}: merging is commutative");
+        for question in all_questions() {
+            for graded in [false, true] {
+                let expected = transported_answer(&mut ordered, question, graded, &mut reducer);
+                let actual = transported_answer(&mut shuffled, question, graded, &mut reducer);
+                assert!(expected == actual, "seed {seed}: {question}, graded {graded}");
             }
         }
     }
-    assert!(rows.iter().all(|rows| *rows > 0), "every question must have rows in some generated case: {rows:?}");
 }
 
 #[test]
-fn joined_questions_reduce_from_partitioned_clause_answers() {
-    let mut rows_across_partitions = 0;
-    let mut rows_within_one_experience = 0;
+fn partial_answers_reduce_to_the_single_engine_answer_in_any_grouping() {
+    let mut coverage = Coverage::default();
     for seed in 0..SEEDS {
-        let partitions = 2 + (seed as usize % 3);
         let experiences = generate(seed);
+        let partitions = 2 + (seed as usize % 6);
         let (mut full, mut shards) = partitioned_engines(&experiences, partitions);
         let mut reducer = Pangine::new();
 
-        for (first, second) in JOINED_QUESTIONS {
-            let question = format!("({first})({second})");
-            let expected = transported_answer(&mut full, &question, &mut reducer);
-            for row in &expected.rows {
-                let sources = row.evidence().iter().map(|evidence| reducer.format_concept(evidence.source_concept(), false)).collect::<BTreeSet<_>>();
-                if sources.len() == 1 {
-                    rows_within_one_experience += 1;
-                } else if sources.iter().map(|source| route(source, partitions)).collect::<BTreeSet<_>>().len() > 1 {
-                    rows_across_partitions += 1;
+        for question in all_questions() {
+            for graded in [false, true] {
+                let expected = transported_answer(&mut full, question, graded, &mut reducer);
+                let parts = shards.iter_mut().map(|shard| transported_part(shard, question, graded, &mut reducer)).collect::<Vec<_>>();
+                assert!(reduce(&mut reducer, question, parts.clone(), graded) == expected, "seed {seed}: {question}, graded {graded}");
+
+                let mut shuffled = parts.clone();
+                Rng::new(seed).shuffle(&mut shuffled);
+                assert!(reduce(&mut reducer, question, [merge_tree(&shuffled)], graded) == expected, "seed {seed}: {question} merged as a tree");
+                for (position, part) in parts.iter().enumerate() {
+                    let other = &parts[(position + 1) % parts.len()];
+                    assert!(part.clone().merge(part.clone()) == *part, "seed {seed}: merging is idempotent");
+                    assert!(part.clone().merge(other.clone()) == other.clone().merge(part.clone()), "seed {seed}: merging is commutative");
                 }
+                coverage.count(&reducer, &expected, partitions, JOINED_GROUP_QUESTIONS.contains(&question));
             }
-            let first_parts = shards.iter_mut().map(|shard| transported_answer(shard, first, &mut reducer)).collect::<Vec<_>>();
-            let second_parts = shards.iter_mut().map(|shard| transported_answer(shard, second, &mut reducer)).collect::<Vec<_>>();
-            let first_answer = merge_all(first_parts.iter());
-            let second_answer = merge_all(second_parts.iter());
-            let Some(joined) = first_answer.join(&mut reducer, &second_answer) else {
-                assert!(expected.rows.is_empty(), "seed {seed}: {question} joined to nothing");
-                continue;
-            };
-
-            let shape = must_ref(&mut reducer, &question);
-            let mut templates = vec![shape];
-            templates.extend(expected.outputs.iter().cloned());
-            for template in &templates {
-                let label = reducer.format_concept(template, false);
-                assert_eq!(readings(&mut reducer, &joined, template), readings(&mut reducer, &expected, template), "seed {seed}: {question} read as {label}");
-            }
-            assert_eq!(row_assignments(&reducer, &joined), row_assignments(&reducer, &expected), "seed {seed}: {question} rows");
         }
     }
-    assert!(
-        rows_across_partitions > 0 && rows_within_one_experience > 0,
-        "the generated cases must join experiences across partitions and within one experience"
-    );
+    coverage.assert_complete();
+}
+
+#[test]
+fn partial_answers_keep_an_exact_row_that_whole_question_answers_lose() {
+    let question = "({x}->[r]->{y})({y}->[s]->{z})({w}->[t]->[q])";
+    let mut full = Pangine::new();
+    let mut shards = ["[a]->[r]->[b]", "([b]->[s]->[c])([d]->[t]->[q])"].map(|experience| {
+        remember(&mut full, "memory", experience);
+        let mut shard = Pangine::new();
+        remember(&mut shard, "memory", experience);
+        shard
+    });
+    let mut reducer = Pangine::new();
+
+    // The second experience connects the two clause groups, and the first
+    // supplies the [r] clause through the shared blank.
+    let expected = transported_answer(&mut full, question, false, &mut reducer);
+    assert_eq!(expected.rows.iter().map(Completion::grade).collect::<Vec<_>>(), [CompletionGrade::Exact]);
+    for shard in &mut shards {
+        assert!(transported_answer(shard, question, false, &mut reducer).rows.is_empty(), "neither partition alone can answer the whole question");
+    }
+    let parts = shards.iter_mut().map(|shard| transported_part(shard, question, false, &mut reducer)).collect::<Vec<_>>();
+    assert!(reduce(&mut reducer, question, parts, false) == expected);
 }
 
 #[test]
 fn losing_a_partition_leaves_the_answer_to_the_remaining_experience() {
     for seed in 0..SEEDS {
         let experiences = generate(seed);
-        let partitions = 2 + (seed as usize % 3);
+        let partitions = 2 + (seed as usize % 6);
         let lost = seed as usize % partitions;
         let (_, mut shards) = partitioned_engines(&experiences, partitions);
         let remaining = experiences.iter().filter(|(experience, _)| route(experience, partitions) != lost).cloned().collect::<Vec<_>>();
@@ -136,15 +112,17 @@ fn losing_a_partition_leaves_the_answer_to_the_remaining_experience() {
         record_experiences(&mut survivor, &remaining);
         let mut reducer = Pangine::new();
 
-        for question in WHOLE_QUESTIONS {
-            let expected = transported_answer(&mut survivor, question, &mut reducer);
-            let parts = shards
-                .iter_mut()
-                .enumerate()
-                .filter(|(index, _)| *index != lost)
-                .map(|(_, shard)| transported_answer(shard, question, &mut reducer))
-                .collect::<Vec<_>>();
-            assert!(merge_all(parts.iter()) == expected, "seed {seed}: {question} without partition {lost}");
+        for question in all_questions() {
+            for graded in [false, true] {
+                let expected = transported_answer(&mut survivor, question, graded, &mut reducer);
+                let parts = shards
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(index, _)| *index != lost)
+                    .map(|(_, shard)| transported_part(shard, question, graded, &mut reducer))
+                    .collect::<Vec<_>>();
+                assert!(reduce(&mut reducer, question, parts, graded) == expected, "seed {seed}: {question}, graded {graded}, without partition {lost}");
+            }
         }
     }
 }
@@ -153,24 +131,25 @@ fn losing_a_partition_leaves_the_answer_to_the_remaining_experience() {
 fn adjustment_by_merged_evidence_matches_adjustment_by_each_partition_in_any_order() {
     for seed in 0..SEEDS {
         let experiences = generate(seed);
-        let partitions = 2 + (seed as usize % 3);
+        let partitions = 2 + (seed as usize % 6);
         let (mut full, mut shards) = partitioned_engines(&experiences, partitions);
         let mut reducer = Pangine::new();
 
-        let target = transported_answer(&mut full, "{x}->[r]->{y}", &mut reducer);
-        let parts = shards.iter_mut().map(|shard| transported_answer(shard, "{p}->[r]->{q}", &mut reducer)).collect::<Vec<_>>();
+        let target = transported_answer(&mut full, "{x}->[r]->{y}", false, &mut reducer);
+        let parts = shards.iter_mut().map(|shard| transported_part(shard, "{p}->[r]->{q}", false, &mut reducer)).collect::<Vec<_>>();
+        let each = parts.iter().map(|part| reduce(&mut reducer, "{p}->[r]->{q}", [part.clone()], false)).collect::<Vec<_>>();
+        let merged = reduce(&mut reducer, "{p}->[r]->{q}", parts, false);
         let target_template = must_ref(&mut reducer, "{x}->{y}");
         let adjustment_template = must_ref(&mut reducer, "{p}->{q}");
         let factor = if seed % 2 == 0 { Relevance::DEFAULT } else { Relevance::new(-1) };
 
-        let merged = merge_all(parts.iter());
         let at_once = target.adjust(&mut reducer, &target_template, &merged, &adjustment_template, factor).expect("adjustment by merged evidence");
         let mut forward = target.clone();
-        for part in &parts {
+        for part in &each {
             forward = forward.adjust(&mut reducer, &target_template, part, &adjustment_template, factor).expect("adjustment by one partition");
         }
         let mut reverse = target.clone();
-        for part in parts.iter().rev() {
+        for part in each.iter().rev() {
             reverse = reverse.adjust(&mut reducer, &target_template, part, &adjustment_template, factor).expect("adjustment by one partition");
         }
         assert!(forward == at_once, "seed {seed}: forward adjustment");
@@ -186,7 +165,7 @@ fn memories_split_in_any_way_merge_by_adding_counts() {
         record_experiences(&mut full, &experiences);
         // Unlike answers, memories need no routing: every repetition may land
         // in any partition, because merging adds the counts back together.
-        let partitions = 2 + (seed as usize % 3);
+        let partitions = 2 + (seed as usize % 6);
         let mut rng = Rng::new(seed ^ 0x5A5A);
         let mut shards = (0..partitions).map(|_| Pangine::new()).collect::<Vec<_>>();
         for (experience, repetitions) in &experiences {
@@ -200,8 +179,7 @@ fn memories_split_in_any_way_merge_by_adding_counts() {
         for shard in &mut shards {
             let shard_memory = shard.reference_percept("memory");
             for (relevance, experience) in shard.get_relevance_map(&shard_memory) {
-                let spelling = shard.format_concept(&experience, false);
-                let experience = must_ref(&mut merged, &spelling);
+                let experience = transport(shard, &experience, &mut merged);
                 let current = subconcepts.get(&experience).copied().unwrap_or(Relevance::EMPTY);
                 subconcepts.insert(experience, current.checked_add(relevance).expect("merged count"));
             }
@@ -211,16 +189,18 @@ fn memories_split_in_any_way_merge_by_adding_counts() {
 
         // The merged engine rebuilds its question index from the merged counts.
         let mut reducer = Pangine::new();
-        for question in WHOLE_QUESTIONS.into_iter().chain(["({x}->[r]->{y})({y}->[s]->{z})"]) {
-            let expected = transported_answer(&mut full, question, &mut reducer);
-            let actual = transported_answer(&mut merged, question, &mut reducer);
-            assert!(actual == expected, "seed {seed}: {question} over merged memory");
+        for question in all_questions() {
+            for graded in [false, true] {
+                let expected = transported_answer(&mut full, question, graded, &mut reducer);
+                let actual = transported_answer(&mut merged, question, graded, &mut reducer);
+                assert!(actual == expected, "seed {seed}: {question}, graded {graded}, over merged memory");
+            }
         }
     }
 }
 
 #[test]
-fn answer_merging_requires_each_experience_in_one_partition() {
+fn partial_answers_require_each_experience_in_one_partition() {
     let mut full = Pangine::new();
     let mut routed = Pangine::new();
     let mut halves = [Pangine::new(), Pangine::new()];
@@ -231,27 +211,27 @@ fn answer_merging_requires_each_experience_in_one_partition() {
             remember(&mut routed, "memory", "[a]->[r]->[b]");
         }
     }
+    let question = "{x}->[r]->{y}";
     let mut reducer = Pangine::new();
-    let expected = transported_answer(&mut full, "{x}->[r]->{y}", &mut reducer);
     let y = reducer.reference_percept("y");
+    let expected = transported_answer(&mut full, question, false, &mut reducer);
     assert_eq!(expected.materialize(&mut reducer, &y), Some(must_ref(&mut reducer, "x4[b]")));
 
-    // Routed whole, the count stays in one partition and the merge keeps it.
-    let empty = transported_answer(&mut Pangine::new(), "{x}->[r]->{y}", &mut reducer);
-    let whole = transported_answer(&mut routed, "{x}->[r]->{y}", &mut reducer);
-    assert_eq!(whole.merge_partitions(&empty).unwrap().materialize(&mut reducer, &y), Some(must_ref(&mut reducer, "x4[b]")));
+    // Routed whole, the count stays in one partition and the reduction keeps it.
+    let whole = [transported_part(&mut routed, question, false, &mut reducer), transported_part(&mut Pangine::new(), question, false, &mut reducer)];
+    assert_eq!(reduce(&mut reducer, question, whole, false).materialize(&mut reducer, &y), Some(must_ref(&mut reducer, "x4[b]")));
 
-    // Split evenly, both halves prove the same row from the same source, so
-    // the set union keeps one of them and undercounts the evidence.
-    let [first, second] = halves.each_mut().map(|half| transported_answer(half, "{x}->[r]->{y}", &mut reducer));
-    assert_eq!(first.merge_partitions(&second).unwrap().materialize(&mut reducer, &y), Some(must_ref(&mut reducer, "x2[b]")));
+    // Split evenly, both halves prove the clause from the same source with the
+    // same count, so the union keeps one fragment and undercounts the evidence.
+    let halves = halves.each_mut().map(|half| transported_part(half, question, false, &mut reducer));
+    assert_eq!(reduce(&mut reducer, question, halves, false).materialize(&mut reducer, &y), Some(must_ref(&mut reducer, "x2[b]")));
 }
 
 #[test]
 fn checked_overflow_is_decided_on_merged_rows_regardless_of_grouping() {
     let near_half = i64::MAX / 2 + 1;
-    let experiences = ["[a]->[r]->[b]", "[c]->[r]->[b]", "[d]->[r]->[b]"];
-    let mut shards = experiences
+    let question = "{x}->[r]->{y}";
+    let mut shards = ["[a]->[r]->[b]", "[c]->[r]->[b]", "[d]->[r]->[b]"]
         .iter()
         .map(|experience| {
             let mut shard = Pangine::new();
@@ -262,18 +242,67 @@ fn checked_overflow_is_decided_on_merged_rows_regardless_of_grouping() {
         })
         .collect::<Vec<_>>();
     let mut reducer = Pangine::new();
-    let parts = shards.iter_mut().map(|shard| transported_answer(shard, "{x}->[r]->{y}", &mut reducer)).collect::<Vec<_>>();
+    let parts = shards.iter_mut().map(|shard| transported_part(shard, question, false, &mut reducer)).collect::<Vec<_>>();
     let y = reducer.reference_percept("y");
 
     for part in &parts {
-        assert!(part.materialize(&mut reducer, &y).is_some(), "one partition's evidence fits");
+        assert!(reduce(&mut reducer, question, [part.clone()], false).materialize(&mut reducer, &y).is_some(), "one partition's evidence fits");
     }
-    let groupings =
-        [merge_all(parts.iter()), merge_all(parts.iter().rev()), parts[1].merge_partitions(&parts[0].merge_partitions(&parts[2]).unwrap()).unwrap()];
+    let groupings = [
+        reduce(&mut reducer, question, parts.clone(), false),
+        reduce(&mut reducer, question, parts.iter().rev().cloned(), false),
+        reduce(&mut reducer, question, [parts[1].clone().merge(parts[0].clone().merge(parts[2].clone()))], false),
+    ];
     for merged in &groupings {
         assert!(merged == &groupings[0]);
         assert!(merged.materialize(&mut reducer, &y).is_none(), "the merged count for [b] exceeds the signed 64-bit range");
     }
+}
+
+/// Counts the kinds of rows the generated cases produce, so the properties
+/// cannot hold vacuously.
+#[derive(Debug, Default)]
+struct Coverage {
+    /// Exact rows proven by experiences in different partitions.
+    exact_across_partitions: usize,
+    /// Exact rows of a joined-group question proven across partitions: the
+    /// rows that answering whole questions in each partition loses.
+    joined_group_across_partitions: usize,
+    composed: usize,
+    generalized: usize,
+}
+
+impl Coverage {
+    fn count(&mut self, reducer: &Pangine, answer: &ConceptAnswer, partitions: usize, joined_group: bool) {
+        for row in &answer.rows {
+            match row.grade() {
+                CompletionGrade::Composed => self.composed += 1,
+                CompletionGrade::Generalized { .. } => self.generalized += 1,
+                CompletionGrade::Exact => {
+                    let routes = row
+                        .evidence()
+                        .iter()
+                        .map(|evidence| route(&reducer.format_concept(evidence.source_concept(), false), partitions))
+                        .collect::<BTreeSet<_>>();
+                    if routes.len() > 1 {
+                        self.exact_across_partitions += 1;
+                        self.joined_group_across_partitions += usize::from(joined_group);
+                    }
+                }
+            }
+        }
+    }
+
+    fn assert_complete(&self) {
+        assert!(
+            self.exact_across_partitions > 0 && self.joined_group_across_partitions > 0 && self.composed > 0 && self.generalized > 0,
+            "the generated cases must produce every kind of row: {self:?}"
+        );
+    }
+}
+
+fn all_questions() -> impl Iterator<Item = &'static str> {
+    QUESTIONS.into_iter().chain(JOINED_GROUP_QUESTIONS)
 }
 
 /// Generates a small memory: single relations, relations observed together,
@@ -321,12 +350,11 @@ fn partitioned_engines(experiences: &[(String, usize)], partitions: usize) -> (P
     (full, shards)
 }
 
+// Routes as a partitioned engine does, by the experience's canonical spelling.
 fn route(experience: &str, partitions: usize) -> usize {
     let mut canonical = Pangine::new();
     let concept = must_ref(&mut canonical, experience);
-    let spelling = canonical.format_concept(&concept, false);
-    let hash = spelling.bytes().fold(0xCBF2_9CE4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01B3));
-    (hash % partitions as u64) as usize
+    crate::engine::partition::route(&canonical.format_concept(&concept, false), partitions)
 }
 
 fn record_experiences(pangine: &mut Pangine, experiences: &[(String, usize)]) {
@@ -352,57 +380,55 @@ fn memory_spelling(pangine: &mut Pangine) -> String {
     format!("{} {entries:?}", value.map_or_else(|| "[]".to_owned(), |value| pangine.format_concept(&value, false)))
 }
 
-fn transported_answer(from: &mut Pangine, question: &str, to: &mut Pangine) -> ConceptAnswer {
-    let encoded = complete_answer(from, &["memory"], question);
-    let spelling = from.format_concept(&encoded, false);
-    let transported = must_ref(to, &spelling);
+/// Answers a question over one engine's whole memory and carries the answer
+/// into the reducer.
+fn transported_answer(from: &mut Pangine, question: &str, graded: bool, to: &mut Pangine) -> ConceptAnswer {
+    let memory = from.reference_percept("memory");
+    let question = must_ref(from, question);
+    let result = if graded { from.complete_graded(&memory, &question) } else { from.complete(&memory, &question) }.expect("valid question");
+    let encoded = ConceptAnswer::from_result(from, &result).encode(from);
+    let transported = transport(from, &encoded, to);
     ConceptAnswer::decode(to, &transported).expect("transported answer")
 }
 
-fn merge_all<'a>(parts: impl Iterator<Item = &'a ConceptAnswer>) -> ConceptAnswer {
-    parts.cloned().reduce(|merged, part| merged.merge_partitions(&part).expect("partitions of one question")).expect("at least one partition")
+/// Answers a question as one partition and carries the partial answer into
+/// the reducer.
+fn transported_part(from: &mut Pangine, question: &str, graded: bool, to: &mut Pangine) -> PartialAnswer {
+    let memory = from.reference_percept("memory");
+    let question = must_ref(from, question);
+    let encoded = from.partial_answer(&[memory], &question, graded).expect("valid question").encode(from);
+    let transported = transport(from, &encoded, to);
+    PartialAnswer::decode(to, &transported).expect("transported partial answer")
 }
 
-fn merge_tree(parts: &[ConceptAnswer]) -> ConceptAnswer {
+fn transport(from: &Pangine, concept: &ConceptId, to: &mut Pangine) -> ConceptId {
+    to.import_graph(&from.export_graph(concept).expect("owned Concept")).expect("well-formed graph")
+}
+
+/// Reduces partial answers in the reducer, through the codec so rows compare
+/// in canonical order.
+fn reduce(reducer: &mut Pangine, question: &str, parts: impl IntoIterator<Item = PartialAnswer>, graded: bool) -> ConceptAnswer {
+    let question = must_ref(reducer, question);
+    let result = reducer.reduce_partial_answers(&question, parts, graded).expect("owned question");
+    let encoded = ConceptAnswer::from_result(reducer, &result).encode(reducer);
+    ConceptAnswer::decode(reducer, &encoded).expect("reduced answer")
+}
+
+fn merge_tree(parts: &[PartialAnswer]) -> PartialAnswer {
     match parts {
+        [] => PartialAnswer::default(),
         [part] => part.clone(),
         _ => {
             let (left, right) = parts.split_at(parts.len() / 2);
-            merge_tree(left).merge_partitions(&merge_tree(right)).expect("partitions of one question")
+            merge_tree(left).merge(merge_tree(right))
         }
     }
 }
 
-fn readings(pangine: &mut Pangine, answer: &ConceptAnswer, template: &ConceptId) -> Vec<(String, i64)> {
-    let result = answer.to_result(pangine).expect("answer result");
-    let support = pangine.completion_projection_support(&result, template).expect("projection support");
-    support.iter().map(|(value, derivations)| (pangine.format_concept(value, false), projection_strength(derivations).expect("strength").count())).collect()
-}
-
-fn row_assignments(pangine: &Pangine, answer: &ConceptAnswer) -> Vec<String> {
-    let mut rows = answer
-        .rows
-        .iter()
-        .map(|row| {
-            row.bindings()
-                .map(|(percept, value)| format!("{}={}", pangine.format_concept(percept, false), pangine.format_concept(value, false)))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>();
-    rows.sort();
-    rows
-}
-
-fn complete_answer(pangine: &mut Pangine, sources: &[&str], question: &str) -> ConceptId {
-    let sources = sources.iter().map(|source| pangine.reference_percept(source)).collect::<Vec<_>>();
-    let question = must_ref(pangine, question);
-    let result = pangine.complete_question(&sources, &question).expect("valid question");
-    ConceptAnswer::from_result(pangine, &result).encode(pangine)
-}
-
+// An experience and its inversion can cancel in a memory's value, so
+// remembering may return no Concept.
 fn remember(pangine: &mut Pangine, source: &str, concept: &str) {
-    must_ref(pangine, &format!("{{{source}}} ~= {concept}"));
+    pangine.reference_concept(&format!("{{{source}}} ~= {concept}")).unwrap_or_else(|error| panic!("failed to parse {concept:?}: {error}"));
 }
 
 fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {

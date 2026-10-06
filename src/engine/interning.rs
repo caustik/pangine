@@ -162,6 +162,16 @@ impl Pangine {
     }
 
     pub(super) fn set_percept_subconcepts(&mut self, percept: &ConceptId, subconcepts: ConceptMap) -> Option<ConceptId> {
+        self.replace_percept_subconcepts(percept, subconcepts, true)
+    }
+
+    /// Rewrites this engine's copy of a partitioned memory, which stays in the
+    /// partitions.
+    pub(super) fn write_memory_copy(&mut self, percept: &ConceptId, subconcepts: ConceptMap) -> Option<ConceptId> {
+        self.replace_percept_subconcepts(percept, subconcepts, false)
+    }
+
+    fn replace_percept_subconcepts(&mut self, percept: &ConceptId, subconcepts: ConceptMap, leaves_partitions: bool) -> Option<ConceptId> {
         if !self.is_mutable_percept(percept) || subconcepts.iter().any(|(concept, relevance)| !self.owns(concept) || relevance.is_empty()) {
             return None;
         }
@@ -169,6 +179,11 @@ impl Pangine {
         let index = percept.index();
         let value_map = self.materialized_percept_map(&subconcepts)?;
         let value = Self::sole_default_concept(&subconcepts).cloned().or_else(|| self.reference_map(&value_map));
+        if leaves_partitions {
+            // A replaced memory leaves the partitions, and this engine holds
+            // its new value.
+            self.forget_partitioned_memory(percept);
+        }
         // The next question over this Percept rebuilds its index.
         self.percept_question_indexes.remove(&index);
         if subconcepts.is_empty() {
@@ -258,22 +273,27 @@ impl Pangine {
     }
 
     pub(super) fn record_experience(&mut self, percept: &ConceptId, experience: &ConceptId) -> Option<()> {
-        if !self.accepts_percept_input(percept, Some(experience)) {
+        self.add_experience(percept, experience, Relevance::DEFAULT)
+    }
+
+    /// Adds a positive count of one experience to a Percept's memory.
+    pub(super) fn add_experience(&mut self, percept: &ConceptId, experience: &ConceptId, count: Relevance) -> Option<()> {
+        if !self.accepts_percept_input(percept, Some(experience)) || count.count() <= 0 {
             return None;
         }
 
         let index = percept.index();
         let current_relevance = self.percept_subconcepts.get(&index).and_then(|subconcepts| subconcepts.get(experience)).copied().unwrap_or(Relevance::EMPTY);
-        let next_relevance = current_relevance.checked_add(Relevance::DEFAULT)?;
-        // The materialized value adds the experience once more, whether it is
-        // new or repeated, so recording never rebuilds the whole value.
+        let next_relevance = current_relevance.checked_add(count)?;
+        // The materialized value adds the experience again, whether it is new
+        // or repeated, so recording never rebuilds the whole value.
         let mut value_map = if let Some(value_map) = self.percept_value_maps.remove(&index) {
             value_map
         } else {
             let subconcepts = self.percept_subconcepts.get(&index).cloned().unwrap_or_default();
             self.materialized_percept_map(&subconcepts)?
         };
-        self.add_union_concept(&mut value_map, experience.clone(), false, Relevance::DEFAULT)?;
+        self.add_union_concept(&mut value_map, experience.clone(), false, count)?;
         self.percept_subconcepts.entry(index).or_default().insert(experience.clone(), next_relevance);
         // An index that a question already built stays current; otherwise the
         // next question builds one from every source.

@@ -18,10 +18,12 @@ mod generalization;
 mod interning;
 mod interpolation;
 mod parser;
+mod partition;
 mod question;
 mod question_index;
 #[cfg(test)]
 mod test_rng;
+mod transport;
 
 pub use answer::{Answer, AnswerChoice, AnswerPossibility, AnswerSource, AnswerSupport, AnswerView};
 use choice::SampleGenerator;
@@ -294,6 +296,8 @@ pub struct Pangine {
     next_index_prune_size: usize,
     // The seeded generator that `^~` draws from.
     sampler: SampleGenerator,
+    // The partition engines that hold remembered experience, when divided.
+    partitions: Option<Box<partition::Partitions>>,
     #[cfg(test)]
     question_source_visits: usize,
 }
@@ -317,6 +321,7 @@ impl Default for Pangine {
             composite_lookup: CompositeLookup::new(),
             next_index_prune_size: 2,
             sampler: SampleGenerator::default(),
+            partitions: None,
             #[cfg(test)]
             question_source_visits: 0,
         }
@@ -454,6 +459,7 @@ impl Pangine {
         }
         self.record_experience(percept, &experience)?;
         self.current_value_percepts.remove(&percept.index());
+        self.remember_in_partitions(percept, &experience);
         self.materialize_percept_value(percept)
     }
 

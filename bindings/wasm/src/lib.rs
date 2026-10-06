@@ -112,6 +112,11 @@ impl SessionCore {
         Ok(self.engine.reference_concept(command).map_err(|error| error.to_string())?.is_some())
     }
 
+    fn partition_of(&mut self, experience: &str) -> Result<Option<usize>, String> {
+        let concept = self.engine.reference_concept(experience).map_err(|error| error.to_string())?;
+        Ok(concept.and_then(|concept| self.engine.partition_of(&concept)))
+    }
+
     fn inspect(&mut self, operand: &str) -> Result<String, String> {
         let projection =
             self.engine.reference_concept(operand).map_err(|error| error.to_string())?.ok_or_else(|| "inspect expects one linked Answer operand".to_owned())?;
@@ -262,9 +267,9 @@ impl PangineSession {
     }
 
     /// Executes Pangine syntax, or a console command such as `help`,
-    /// `inspect operand`, or `seed n`, and returns its console output and
-    /// graph view as JSON. A console command keeps the current result and
-    /// replaces only the console output.
+    /// `inspect operand`, `seed n`, or `partitions n`, and returns its console
+    /// output and graph view as JSON. A console command keeps the current
+    /// result and replaces only the console output.
     pub fn execute(&mut self, command: &str) -> Result<String, JsValue> {
         self.core.execute(command).map_err(|error| JsValue::from_str(&error))
     }
@@ -306,6 +311,30 @@ impl PangineSession {
     /// a BigInt. A new or reset session starts from seed 0.
     pub fn set_sample_seed(&mut self, seed: u64) {
         self.core.engine.set_sample_seed(seed);
+    }
+
+    /// Divides the session's remembered experience among `count` partition
+    /// engines, which take turns in the browser. Answers do not change, and
+    /// one partition brings everything back together. Returns false for zero.
+    pub fn set_partitions(&mut self, count: usize) -> bool {
+        self.core.engine.set_partitions(count)
+    }
+
+    /// Returns how many partitions hold the session's remembered experience.
+    pub fn partition_count(&self) -> usize {
+        self.core.engine.partition_count()
+    }
+
+    /// Loses one partition and the experience it holds. Returns false when
+    /// there is no partition engine at `index`.
+    pub fn drop_partition(&mut self, index: usize) -> bool {
+        self.core.engine.drop_partition(index)
+    }
+
+    /// Returns the partition that a Concept, written in Pangine syntax, routes
+    /// to as an experience, or undefined when the text is no Concept.
+    pub fn partition_of(&mut self, experience: &str) -> Result<Option<usize>, JsValue> {
+        self.core.partition_of(experience).map_err(|error| JsValue::from_str(&error))
     }
 }
 
@@ -530,6 +559,37 @@ mod tests {
         assert_eq!(session.run("${sound}"), Ok("[purrs]".to_owned()));
         assert!(session.perform("[cat]->").is_err());
         assert!(session.current.is_none(), "perform leaves the workbench's current result alone");
+    }
+
+    #[test]
+    fn partitions_divide_the_session_memory_without_changing_answers() {
+        let mut whole = PangineSession::new();
+        let mut divided = PangineSession::new();
+        assert!(divided.set_partitions(3));
+        assert!(!divided.set_partitions(0));
+        assert_eq!(divided.partition_count(), 3);
+        for session in [&mut whole, &mut divided] {
+            for statement in [
+                "{world} ~= [morning]->[birds]",
+                "{world} ~= [morning]->[birds]",
+                "{world} ~= [morning]->[traffic]",
+                "{world} ~= [evening]->[crickets]",
+                "{world} @ {time}->{sound}",
+            ] {
+                session.core.run(statement).unwrap();
+            }
+        }
+        assert_eq!(divided.core.inspect("{time}->{sound}"), whole.core.inspect("{time}->{sound}"));
+
+        let morning = divided.partition_of("[morning]->[birds]").unwrap().expect("a Concept routes to a partition");
+        assert_eq!(divided.partition_of("[morning]->[traffic]").unwrap(), Some(morning));
+        assert_ne!(divided.partition_of("[evening]->[crickets]").unwrap(), Some(morning));
+        assert_eq!(divided.partition_of("[]").unwrap(), None);
+        assert!(divided.drop_partition(morning));
+        assert!(!divided.drop_partition(3));
+        assert_eq!(divided.core.run("{world} @ {time}->{sound}"), Ok("[evening]->[crickets]".to_owned()));
+        let view: serde_json::Value = serde_json::from_str(&divided.core.execute("partitions").unwrap()).unwrap();
+        assert_eq!(view["consoleLines"][0], "  3 partitions");
     }
 
     #[test]

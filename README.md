@@ -267,6 +267,44 @@ When `~=` runs, Pangine captures assigned Percepts at that moment. Later changes
 
 A Percept populated through `~=` remains a reference when another experience mentions it. Use `$` when you want to follow every Percept in an expression. Rust callers can update a complete input group with `set_percept_values`, remember a Percept-bearing Concept with `perform_experience`, and read the resulting output Percepts.
 
+## Partitions
+
+Remembered experience can be divided among partition engines, which is how I first thought about scaling Pangine. Each experience lives in the partition chosen by a hash of its canonical spelling, so repeated experience adds up where it lives. A question over a memory goes to every partition, each partition matches its own experience, and the engine reduces their partial answers. How the experience is divided does not change the answer:
+
+```text
+command> {world} ~= [morning]->[birds]
+  [morning]->[birds]
+command> {world} ~= [morning]->[birds]
+  x2([morning]->[birds])
+command> {world} ~= [morning]->[traffic]
+  x2([morning]->[birds])
+  [morning]->[traffic]
+command> {world} ~= [evening]->[crickets]
+  x2([morning]->[birds])
+  [evening]->[crickets]
+  [morning]->[traffic]
+command> partitions 3
+  3 partitions
+  partition 0: no remembered experience
+  partition 1: {world} 1 experience
+  partition 2: {world} 2 experiences
+command> {world} @ {time}->{sound}
+  [evening]->[crickets]
+  [morning]->[birds]
+  [morning]->[traffic]
+command> drop partition 2
+  3 partitions
+  partition 0: no remembered experience
+  partition 1: {world} 1 experience
+  partition 2: no remembered experience
+command> {world} @ {time}->{sound}
+  [evening]->[crickets]
+```
+
+`partitions n` divides the experience among `n` partitions, `partitions` lists what each one holds, and `partitions 1` brings everything back together. `drop partition k` loses one partition as if its machine were replaced. Answers already given stay, and later questions answer from the experience that remains, here the one experience in partition 1. The engine itself keeps current values, answers, and a copy of each memory for reading, and it rebuilds that copy from the remaining partitions after a loss.
+
+In Rust, `set_partitions`, `partition_count`, `drop_partition`, and `partition_of` do the same. Native builds run each partition on its own thread, and the browser runtime runs them in turn. Dividing pays off when matching dominates. On a 16-core machine, a graded question over 8,000 remembered families took 717 ms in one engine and 375 ms across 8 partitions. A small exact question took 0.09 ms in one engine and 0.13 to 0.24 ms divided, because every question crosses to each partition and back. The partitions share one process; Pangine has no network protocol.
+
 ## Grammar
 
 | Form | Meaning |
@@ -299,17 +337,17 @@ A Percept populated through `~=` remains a reference when another experience men
 | `^~operand` | Draw one result by probability and update every linked output |
 | `${*}` | Inspect the ordinary Concepts currently live in the engine |
 
-At the interactive CLI prompt and in the pangine.com workbench, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. `seed n` restarts the generator that `^~` draws from, and `help` prints the console reference. They are console commands, not `.pae` syntax.
+At the interactive CLI prompt and in the pangine.com workbench, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. `seed n` restarts the generator that `^~` draws from, `partitions n` and `drop partition k` divide remembered experience and lose a partition, and `help` prints the console reference. They are console commands, not `.pae` syntax.
 
 See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference, [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts, and [pangine.com/demos.html](https://pangine.com/demos.html) for graded questions you can change in the browser.
 
 ## Current scope
 
-The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
+The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience that can be divided among partition engines, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
 
 Questions preserve complete rows and their source contributions. In Rust, `complete` and `complete_graded` return the rows `@` and `@~` produce, and the Answer API can branch, choose, sample, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 
-Relevance is a signed evidence count read as probabilities. `^` chooses the most probable value, and `^~` draws one by probability from a seeded generator. Persistence, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
+Relevance is a signed evidence count read as probabilities. `^` chooses the most probable value, and `^~` draws one by probability from a seeded generator. Persistence, partitions on other machines, automatic callbacks, broad language bindings, and a general LLM adapter are not implemented.
 
 ## Run Pangine
 
