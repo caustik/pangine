@@ -1,9 +1,9 @@
 [package]
 name = "pangine"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Aaron Robinson"]
-description = "A deterministic compositional grammar and semantic state engine"
+description = "An experimental language for asking questions of remembered experience, with exact and graded answers that keep their sources"
 readme = "README.md"
 repository = "https://github.com/caustik/pangine"
 homepage = "https://pangine.com"

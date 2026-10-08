@@ -350,7 +350,7 @@ More on pangine.com:
 
 ## Current scope
 
-The Rust prototype includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience that can be divided among partition engines, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
+Pangine 1.0 includes the parser, canonical Concept graph, mutable Percepts, a read-only global view, remembered experience that can be divided among partition engines, structural questions, correlated answer rows, visible shared answers, immutable Rust Answer values, collapse, grouped input updates, a console that can run commands interactively or from a file, and a browser-local WebAssembly workbench.
 
 Questions preserve complete rows and their source contributions. In Rust, `complete` and `complete_graded` return the rows `@` and `@~` produce, and the Answer API can branch, choose, sample, adjust, and inspect those answers, while the console exposes answer adjustment through `@+=` and `@-=` and source inspection through `inspect`.
 

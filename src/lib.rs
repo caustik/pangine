@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Deterministic compositional grammar and semantic state engine.
+//! An experimental language for writing experience as simple shapes and
+//! asking questions of it. Pangine answers exactly from what it remembers, or
+//! with graded answers composed from parts and generalized from similar cases,
+//! and every answer keeps its sources.
 
 mod engine;
 mod relevance;

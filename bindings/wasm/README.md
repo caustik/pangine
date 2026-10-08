@@ -1,6 +1,6 @@
 # Pangine WebAssembly binding
 
-This crate is the thin browser host used by the interactive pangine.com experiment. Pangine still owns parsing, state, canonical formatting, and operations. The binding executes Pangine syntax and exposes a disposable JSON graph view for presentation.
+This crate is the thin browser host behind the pangine.com workbench and demos. Pangine still owns parsing, state, canonical formatting, and operations. The binding runs Pangine syntax and console commands, returns answer inspections as JSON, seeds sampling, divides memory among partitions, and exposes a disposable JSON graph view for presentation.
 
 From the `pangine.com` sibling repository, regenerate the browser runtime with:
 
