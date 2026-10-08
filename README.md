@@ -339,7 +339,13 @@ In Rust, `set_partitions`, `partition_count`, `drop_partition`, and `partition_o
 
 At the interactive CLI prompt and in the pangine.com workbench, `inspect operand` lists each linked possibility from most to least probable, with its evidence count, probability, and complete-row count, the sources behind that evidence with their signed weights and any composed or generalized rows marked, and all current top ties. `seed n` restarts the generator that `^~` draws from, `partitions n` and `drop partition k` divide remembered experience and lose a partition, and `help` prints the console reference. They are console commands, not `.pae` syntax.
 
-See [pangine.com/grammar.html](https://pangine.com/grammar.html) for the compact reference, [pangine.com/examples.html](https://pangine.com/examples.html) for literal console transcripts, and [pangine.com/demos.html](https://pangine.com/demos.html) for graded questions you can change in the browser.
+More on pangine.com:
+
+- [grammar](https://pangine.com/grammar.html), the compact reference;
+- [examples](https://pangine.com/examples.html), literal console transcripts;
+- [demos](https://pangine.com/demos.html), graded questions you can change in the browser and memory you can divide among partitions;
+- [how it works](https://pangine.com/how-it-works.html), how the engine stores experience and computes its answers;
+- [related work](https://pangine.com/related-work.html), where Pangine sits among the systems it borrows from or resembles.
 
 ## Current scope
 
