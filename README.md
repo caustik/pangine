@@ -345,7 +345,8 @@ More on pangine.com:
 - [examples](https://pangine.com/examples.html), literal console transcripts;
 - [demos](https://pangine.com/demos.html), graded questions you can change in the browser and memory you can divide among partitions;
 - [how it works](https://pangine.com/how-it-works.html), how the engine stores experience and computes its answers;
-- [related work](https://pangine.com/related-work.html), where Pangine sits among the systems it borrows from or resembles.
+- [related work](https://pangine.com/related-work.html), where Pangine sits among the systems it borrows from or resembles;
+- [history](https://pangine.com/history.html), from the first C++ version in 2007 to 1.0.
 
 ## Current scope
 
