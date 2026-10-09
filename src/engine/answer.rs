@@ -2,7 +2,7 @@ use super::{
     choice::Choice,
     completion::projection_strength,
     concept_answer::{ConceptAnswer, LiveConceptAnswer},
-    interpolation::{interpolated_probabilities, Probability},
+    interpolation::Probability,
     CompletionGrade, CompletionResult, ConceptId, Pangine,
 };
 use crate::Relevance;
@@ -102,8 +102,9 @@ impl AnswerView {
     /// evidence count, probability, and the support behind that count.
     ///
     /// A possibility's probability is its share of the positive evidence among
-    /// these possibilities. In a graded answer, the shares are interpolated
-    /// from the exact grade toward the more general ones. A possibility whose
+    /// these possibilities. A graded answer interpolates its complete rows from
+    /// the exact grade toward the more general ones, and each possibility adds
+    /// the rows that give it, so every view of one answer agrees. A possibility whose
     /// evidence is zero or negative stays in the list with probability zero,
     /// and equal probabilities keep the larger count first, then canonical
     /// spelling order. `is_top_tie` identifies every most probable possibility;
@@ -115,7 +116,7 @@ impl AnswerView {
         }
 
         let support = pangine.completion_projection_support(&self.answer.result, &self.projection)?;
-        let probabilities = interpolated_probabilities(&support)?;
+        let probabilities = pangine.projection_probabilities(&self.answer.result, &self.projection)?;
         let mut complete_rows = BTreeMap::new();
         for completion in &self.answer.result.completions {
             let value = pangine.instantiate_completion(&self.projection, completion)?;

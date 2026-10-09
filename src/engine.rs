@@ -39,8 +39,10 @@ type CompositeLookup = BTreeMap<u64, Vec<Weak<Concept>>>;
 type ProjectionAssignment = BTreeMap<ConceptId, ConceptId>;
 /// The grade, signed factor, and distinct sources that identify one weighed derivation.
 type DerivationKey = (CompletionGrade, Relevance, BTreeSet<QuestionSource>);
+/// Each value's derivations and their weights summed across the rows that give it.
+type CompletionSupport<K> = BTreeMap<K, BTreeMap<DerivationKey, Relevance>>;
 /// Each projected value's derivations and their weights summed across rows.
-type CompletionProjectionSupport = BTreeMap<ConceptId, BTreeMap<DerivationKey, Relevance>>;
+type CompletionProjectionSupport = CompletionSupport<ConceptId>;
 type QuestionSourceViewKey = (QuestionSource, ConceptId, BTreeMap<ConceptId, ConceptId>);
 type QuestionSourceViews = BTreeMap<QuestionSourceViewKey, BTreeSet<CompletionRoute>>;
 

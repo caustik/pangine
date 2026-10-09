@@ -1,8 +1,8 @@
 use super::concept_answer::PartialAnswer;
-use super::interpolation::{displayed_shares, interpolated_probabilities};
+use super::interpolation::{displayed_shares, interpolated_probabilities, summed_probabilities, Probability};
 use super::{
-    choice::Choice, CompletionProjectionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment, QuestionSelector,
-    QuestionSource, QuestionSourceView,
+    choice::Choice, CompletionProjectionSupport, CompletionSupport, ConceptId, ConceptKind, ConceptMap, DerivationKey, Pangine, ProjectionAssignment,
+    QuestionSelector, QuestionSource, QuestionSourceView,
 };
 use crate::Relevance;
 use std::cmp::Ordering;
@@ -833,10 +833,19 @@ impl Pangine {
     /// value's derivations are grouped by grade, factor, and sources, and
     /// their weights add across rows.
     pub(super) fn completion_projection_support(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<CompletionProjectionSupport> {
-        let mut support = CompletionProjectionSupport::new();
+        self.completion_support_by(result, |pangine, completion| pangine.instantiate_completion_inner(template, &completion.assignment))
+    }
+
+    // Weighs the derivations of every complete row under the value it gives.
+    fn completion_support_by<K: Ord>(
+        &mut self,
+        result: &CompletionResult,
+        mut value: impl FnMut(&mut Self, &Completion) -> Option<K>,
+    ) -> Option<CompletionSupport<K>> {
+        let mut support = CompletionSupport::new();
         let mut weighed = BTreeSet::new();
         for completion in &result.completions {
-            let candidate = self.instantiate_completion_inner(template, &completion.assignment)?;
+            let candidate = value(self, completion)?;
             let candidate_support = support.entry(candidate).or_default();
             for (grade, factor, evidence) in completion.derivations() {
                 let sources = evidence.iter().map(|fragment| fragment.question_source().clone()).collect::<BTreeSet<_>>();
@@ -849,6 +858,24 @@ impl Pangine {
             }
         }
         Some(support)
+    }
+
+    /// Reads each projected value's probability. An exact answer reads plain
+    /// shares of the projected evidence. A graded answer is interpolated once
+    /// over its complete rows, and each projected value adds the probabilities
+    /// of the rows that give it, so reading one output agrees with reading
+    /// them all.
+    pub(super) fn projection_probabilities(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<BTreeMap<ConceptId, Probability>> {
+        if result.completions.iter().all(Completion::is_exact) {
+            return interpolated_probabilities(&self.completion_projection_support(result, template)?);
+        }
+        let rows = self.completion_support_by(result, |_, completion| Some(completion.assignment.clone()))?;
+        let mut projected = BTreeMap::<ConceptId, Vec<Probability>>::new();
+        for (assignment, probability) in interpolated_probabilities(&rows)? {
+            let value = self.instantiate_completion_inner(template, &assignment)?;
+            projected.entry(value).or_default().push(probability);
+        }
+        summed_probabilities(&projected)
     }
 
     pub(super) fn materialize_completion_rows(&mut self, result: &CompletionResult) -> Option<ConceptId> {
@@ -869,10 +896,9 @@ impl Pangine {
     }
 
     pub(super) fn try_materialize_completion_projection(&mut self, result: &CompletionResult, template: &ConceptId) -> Option<Option<ConceptId>> {
-        let support = self.completion_projection_support(result, template)?;
         let mut candidates = ConceptMap::new();
         if result.completions.iter().all(Completion::is_exact) {
-            for (candidate, derivations) in support {
+            for (candidate, derivations) in self.completion_projection_support(result, template)? {
                 let strength = projection_strength(&derivations)?;
                 self.add_union_concept(&mut candidates, candidate, false, strength)?;
             }
@@ -881,7 +907,7 @@ impl Pangine {
             // whole-number shares over their common denominator, so reading the
             // shares gives the probabilities back. Shares too large for 64-bit
             // evidence counts become millionths.
-            for (candidate, share) in displayed_shares(&interpolated_probabilities(&support)?) {
+            for (candidate, share) in displayed_shares(&self.projection_probabilities(result, template)?) {
                 self.add_union_concept(&mut candidates, candidate, false, Relevance::new(share))?;
             }
         }
@@ -894,8 +920,8 @@ impl Pangine {
         template: &ConceptId,
         choice: Choice,
     ) -> Option<(ConceptId, CompletionResult)> {
-        let support = self.completion_projection_support(result, template)?;
-        let selected = self.select_projection_candidate(&support, choice)?;
+        let probabilities = self.projection_probabilities(result, template)?;
+        let selected = self.select_projection_candidate(probabilities, choice)?;
         let mut result = result.clone();
         result.completions.retain(|completion| self.instantiate_completion_inner(template, &completion.assignment).as_ref() == Some(&selected));
         (!result.completions.is_empty()).then_some((selected, result))

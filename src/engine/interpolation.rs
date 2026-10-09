@@ -6,7 +6,7 @@
 //! fractional bits and integer rounding, so every platform computes the same
 //! values.
 
-use super::{CompletionProjectionSupport, ConceptId};
+use super::CompletionSupport;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -124,7 +124,7 @@ impl std::fmt::Display for Probability {
     }
 }
 
-/// Reads each projected value's probability from its graded evidence.
+/// Reads each value's probability from its graded evidence.
 ///
 /// Every grade present forms one cumulative level that holds the positive
 /// evidence of that grade and every more exact one. The most general level
@@ -137,9 +137,9 @@ impl std::fmt::Display for Probability {
 /// The probabilities are exact fractions while every step fits in 128 bits.
 /// Otherwise every value is computed in fixed point instead, rounding down at
 /// each step.
-pub(super) fn interpolated_probabilities(support: &CompletionProjectionSupport) -> Option<BTreeMap<ConceptId, Probability>> {
+pub(super) fn interpolated_probabilities<K: Ord + Clone>(support: &CompletionSupport<K>) -> Option<BTreeMap<K, Probability>> {
     let grades = support.values().flat_map(|derivations| derivations.keys().map(|(grade, _, _)| *grade)).collect::<BTreeSet<_>>();
-    let mut levels: Vec<BTreeMap<&ConceptId, i128>> = Vec::new();
+    let mut levels: Vec<BTreeMap<&K, i128>> = Vec::new();
     for grade in grades {
         let mut level = BTreeMap::new();
         for (value, derivations) in support {
@@ -163,7 +163,7 @@ pub(super) fn interpolated_probabilities(support: &CompletionProjectionSupport) 
     Some(probabilities.into_iter().map(|(value, probability)| (value.clone(), probability)).collect())
 }
 
-fn exact_interpolation<'a>(levels: &[BTreeMap<&'a ConceptId, i128>]) -> Option<BTreeMap<&'a ConceptId, Probability>> {
+fn exact_interpolation<'a, K: Ord>(levels: &[BTreeMap<&'a K, i128>]) -> Option<BTreeMap<&'a K, Probability>> {
     let (most_general, specific) = levels.split_last()?;
     let total = level_total(most_general)?;
     let mut probabilities =
@@ -186,7 +186,7 @@ fn exact_interpolation<'a>(levels: &[BTreeMap<&'a ConceptId, i128>]) -> Option<B
     Some(probabilities)
 }
 
-fn fixed_interpolation<'a>(levels: &[BTreeMap<&'a ConceptId, i128>]) -> Option<BTreeMap<&'a ConceptId, Probability>> {
+fn fixed_interpolation<'a, K: Ord>(levels: &[BTreeMap<&'a K, i128>]) -> Option<BTreeMap<&'a K, Probability>> {
     let (most_general, specific) = levels.split_last()?;
     let total = u128::try_from(level_total(most_general)?).ok()?;
     let mut probabilities =
@@ -207,6 +207,37 @@ fn fixed_interpolation<'a>(levels: &[BTreeMap<&'a ConceptId, i128>]) -> Option<B
             .collect::<Option<_>>()?;
     }
     Some(probabilities.into_iter().map(|(value, fixed)| (value, Probability::fixed_point(fixed))).collect())
+}
+
+/// Adds the probabilities in each group, as a projection adds the complete
+/// rows that give each of its values. The sums stay exact fractions while
+/// every one fits in 128 bits. Otherwise every sum is taken in fixed point
+/// from values rounded down, as the interpolation rounds.
+pub(super) fn summed_probabilities<K: Ord + Clone>(groups: &BTreeMap<K, Vec<Probability>>) -> Option<BTreeMap<K, Probability>> {
+    let exact = groups.iter().map(|(key, probabilities)| Some((key.clone(), exact_sum(probabilities)?))).collect::<Option<BTreeMap<_, _>>>();
+    if exact.is_some() {
+        return exact;
+    }
+    groups
+        .iter()
+        .map(|(key, probabilities)| {
+            let fixed = probabilities.iter().try_fold(0_u128, |total, probability| total.checked_add(probability.fixed()))?;
+            Some((key.clone(), Probability::fixed_point(fixed.min(FIXED_ONE))))
+        })
+        .collect()
+}
+
+// Adds exact fractions over their least common denominator, or returns none
+// for a fixed-point value or a sum that would not fit in 128 bits.
+fn exact_sum(probabilities: &[Probability]) -> Option<Probability> {
+    let (numerator, denominator) = probabilities.iter().try_fold((0_i128, 1_i128), |(numerator, denominator), probability| {
+        let (other_numerator, other_denominator) = probability.fraction()?;
+        let common = (denominator / greatest_common_divisor(denominator, other_denominator)).checked_mul(other_denominator)?;
+        let total = numerator.checked_mul(common / denominator)?.checked_add(other_numerator.checked_mul(common / other_denominator)?)?;
+        let divisor = greatest_common_divisor(total, common);
+        Some((total / divisor, common / divisor))
+    })?;
+    Probability::new(numerator, denominator)
 }
 
 /// Restates the probabilities as whole-number shares to draw from: exact
@@ -305,7 +336,7 @@ fn compare_fractions(mut a: u128, mut b: u128, mut c: u128, mut d: u128) -> Orde
     }
 }
 
-fn level_total(level: &BTreeMap<&ConceptId, i128>) -> Option<i128> {
+fn level_total<K>(level: &BTreeMap<&K, i128>) -> Option<i128> {
     level.values().try_fold(0_i128, |total, evidence| total.checked_add(*evidence))
 }
 
@@ -318,7 +349,7 @@ fn greatest_common_divisor(mut left: i128, mut right: i128) -> i128 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CompletionGrade, Pangine, QuestionSource};
+    use super::super::{CompletionGrade, CompletionProjectionSupport, Pangine, QuestionSource};
     use super::*;
     use crate::Relevance;
 

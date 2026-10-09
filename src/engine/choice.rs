@@ -3,8 +3,8 @@
 //! Sampled choice (`^~`) draws a value with probability equal to its share instead, from a seeded generator that each engine owns.
 
 use super::{
-    interpolation::{draw_shares, interpolated_probabilities, Probability},
-    CompletionProjectionSupport, ConceptId, ConceptKind, LiveConceptAnswer, Pangine,
+    interpolation::{draw_shares, Probability},
+    ConceptId, ConceptKind, LiveConceptAnswer, Pangine,
 };
 use std::collections::BTreeMap;
 
@@ -122,11 +122,10 @@ impl Pangine {
         Some(selected)
     }
 
-    // A linked answer reads its values' probabilities: plain shares of the
-    // positive counts for an exact answer, or the interpolated probabilities
-    // of a graded one.
-    pub(super) fn select_projection_candidate(&mut self, support: &CompletionProjectionSupport, choice: Choice) -> Option<ConceptId> {
-        let probabilities = interpolated_probabilities(support)?;
+    // A linked answer's values are chosen by the probabilities it reads: plain
+    // shares of the positive counts for an exact answer, or the probabilities
+    // a graded one reads from its complete rows.
+    pub(super) fn select_projection_candidate(&mut self, probabilities: BTreeMap<ConceptId, Probability>, choice: Choice) -> Option<ConceptId> {
         match choice {
             Choice::MostProbable => self.select_most_probable(probabilities),
             Choice::Sampled => self.draw_weighted(draw_shares(&probabilities)),

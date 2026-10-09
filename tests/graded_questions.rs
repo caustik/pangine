@@ -31,14 +31,16 @@ fn a_graded_question_composes_parts_seen_separately_and_interpolates_their_proba
             ("[H]->[G]".to_owned(), 1.0 / 60.0),
         ]
     );
-    assert_eq!(readings(&mut pangine, "{x}"), vec![("[C]".to_owned(), 1.0 / 2.0), ("[E]".to_owned(), 4.0 / 9.0), ("[H]".to_owned(), 1.0 / 18.0)]);
+    // Reading one output adds the pairs that give each value, so it agrees
+    // with reading both.
+    assert_eq!(readings(&mut pangine, "{x}"), vec![("[C]".to_owned(), 1.0 / 2.0), ("[E]".to_owned(), 5.0 / 12.0), ("[H]".to_owned(), 1.0 / 12.0)]);
 
     // `$` shows the probabilities as shares of their common denominator.
     assert_eq!(
         must_ref(&mut pangine, "$({x}->{y})"),
         must_ref(&mut pangine, "x27([C]->[D])x27([C]->[F])x23([E]->[D])x23([E]->[F])x6([C]->[G])x4([E]->[G])x4([H]->[D])x4([H]->[F])x2([H]->[G])")
     );
-    assert_eq!(must_ref(&mut pangine, "${x}"), must_ref(&mut pangine, "x9[C]x8[E][H]"));
+    assert_eq!(must_ref(&mut pangine, "${x}"), must_ref(&mut pangine, "x6[C]x5[E][H]"));
     assert_eq!(must_ref(&mut pangine, "^({x}->{y})"), must_ref(&mut pangine, "[C]->[D]"));
 }
 
@@ -300,6 +302,84 @@ fn a_graded_answer_crosses_an_engine_boundary_with_its_grades() {
     assert_eq!(must_ref(&mut restored, "${who}"), must_ref(&mut restored, "[Kim]"));
 }
 
+#[test]
+fn reading_one_output_of_a_graded_answer_agrees_with_reading_them_all() {
+    let mut pangine = Pangine::new();
+    for experience in ["[here]->[role]->[a]->[one]", "[here]->[role]->[a]->[two]", "[there]->[role]->[b]->[one]", "[there]->[role]->[b]->[two]"] {
+        must_ref(&mut pangine, &format!("{{m}} ~= {experience}"));
+    }
+    must_ref(&mut pangine, "{m} @~ [here]->[role]->{x}->{y}");
+    assert_eq!(
+        readings(&mut pangine, "{x}->{y}"),
+        vec![
+            ("[a]->[one]".to_owned(), 3.0 / 8.0),
+            ("[a]->[two]".to_owned(), 3.0 / 8.0),
+            ("[b]->[one]".to_owned(), 1.0 / 8.0),
+            ("[b]->[two]".to_owned(), 1.0 / 8.0),
+        ]
+    );
+
+    // Interpolating `{x}` on its own would give `[a]` 5/6, because the exact
+    // level holds one value of `{x}` but two pairs. Each value instead adds
+    // the pairs that give it.
+    assert_eq!(readings(&mut pangine, "{x}"), vec![("[a]".to_owned(), 3.0 / 4.0), ("[b]".to_owned(), 1.0 / 4.0)]);
+    assert_eq!(readings(&mut pangine, "{y}"), vec![("[one]".to_owned(), 1.0 / 2.0), ("[two]".to_owned(), 1.0 / 2.0)]);
+    assert_eq!(must_ref(&mut pangine, "${x}"), must_ref(&mut pangine, "x3[a][b]"));
+
+    // A choice keeps the compatible rows, and the remaining rows are read again.
+    assert_eq!(must_ref(&mut pangine, "^{x}"), must_ref(&mut pangine, "[a]"));
+    assert_eq!(readings(&mut pangine, "{x}->{y}"), vec![("[a]->[one]".to_owned(), 1.0 / 2.0), ("[a]->[two]".to_owned(), 1.0 / 2.0)]);
+}
+
+#[test]
+fn every_view_of_a_graded_answer_reads_one_distribution() {
+    let mut state = 0x0D15_7B17_u64;
+    let mut mixed_grades = 0;
+    for _ in 0..64 {
+        let mut pangine = Pangine::new();
+        for _ in 0..3 + next(&mut state) % 6 {
+            let place = ["here", "there"][next(&mut state) % 2];
+            let relation = ["role", "kind"][next(&mut state) % 2];
+            let (x, y) = (["a", "b", "c"][next(&mut state) % 3], ["one", "two", "three"][next(&mut state) % 3]);
+            must_ref(&mut pangine, &format!("{{m}} ~= [{place}]->[{relation}]->[{x}]->[{y}]"));
+        }
+        for _ in 0..next(&mut state) % 5 {
+            let (x, y) = (["a", "b", "c"][next(&mut state) % 3], ["one", "two", "three"][next(&mut state) % 3]);
+            let experience = match next(&mut state) % 3 {
+                0 => format!("([top]->[{x}])([bottom]->[{y}])"),
+                1 => format!("[top]->[{x}]"),
+                _ => format!("[bottom]->[{y}]"),
+            };
+            must_ref(&mut pangine, &format!("{{m}} ~= {experience}"));
+        }
+
+        for question in ["{m} @~ [here]->[role]->{x}->{y}", "{m} @~ ([top]->{x})([bottom]->{y})"] {
+            if pangine.reference_concept(question).expect("a valid question").is_none() {
+                continue;
+            }
+            let grades = support_grades(&mut pangine, "{x}->{y}").concat();
+            if grades.contains(&CompletionGrade::Exact) && grades.iter().any(|grade| *grade != CompletionGrade::Exact) {
+                mixed_grades += 1;
+            }
+
+            // Every output's reading adds the pairs that give each of its values.
+            let pairs = fractions(&mut pangine, "{x}->{y}");
+            assert_eq!(pairs.values().fold((0, 1), |total, fraction| add(total, *fraction)), (1, 1), "{question}: {pairs:?}");
+            for (output, side) in [("{x}", 0), ("{y}", 1)] {
+                let mut marginal = std::collections::BTreeMap::new();
+                for (pair, fraction) in &pairs {
+                    let (x, y) = pair.split_once("->").expect("a pair");
+                    let value = [x, y][side].to_owned();
+                    let total = marginal.entry(value).or_insert((0, 1));
+                    *total = add(*total, *fraction);
+                }
+                assert_eq!(fractions(&mut pangine, output), marginal, "{question} read through {output}");
+            }
+        }
+    }
+    assert!(mixed_grades >= 16, "the generated answers must mix exact rows with composed or generalized ones: {mixed_grades}");
+}
+
 fn support_grades(pangine: &mut Pangine, projection: &str) -> Vec<Vec<CompletionGrade>> {
     let projection = must_ref(pangine, projection);
     let view = pangine.answer_view(&projection).expect("linked answer");
@@ -319,4 +399,37 @@ fn must_ref(pangine: &mut Pangine, input: &str) -> ConceptId {
         .reference_concept(input)
         .unwrap_or_else(|error| panic!("failed to parse {input:?}: {error}"))
         .unwrap_or_else(|| panic!("expected non-null Concept for {input:?}"))
+}
+
+// Reads each value's probability as an exact reduced fraction.
+fn fractions(pangine: &mut Pangine, projection: &str) -> std::collections::BTreeMap<String, (i128, i128)> {
+    let projection = must_ref(pangine, projection);
+    let view = pangine.answer_view(&projection).expect("linked answer");
+    let possibilities = view.possibilities(pangine).expect("inspectable answer");
+    possibilities
+        .iter()
+        .map(|possibility| (pangine.format_concept(possibility.value(), false), possibility.probability().fraction().expect("an exact probability")))
+        .collect()
+}
+
+fn add((a, b): (i128, i128), (c, d): (i128, i128)) -> (i128, i128) {
+    let (numerator, denominator) = (a * d + c * b, b * d);
+    let divisor = greatest_common_divisor(numerator, denominator);
+    (numerator / divisor, denominator / divisor)
+}
+
+fn greatest_common_divisor(mut left: i128, mut right: i128) -> i128 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
+}
+
+// A small seeded generator (splitmix64), so every generated case repeats.
+fn next(state: &mut u64) -> usize {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut value = *state;
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (value ^ (value >> 31)) as usize
 }
