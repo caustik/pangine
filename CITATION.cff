@@ -5,7 +5,9 @@ type: software
 version: 1.0.0
 authors:
   - name: "Aaron Robinson (caustik)"
-license: PolyForm-Noncommercial-1.0.0
+license:
+  - MIT
+  - Apache-2.0
 repository-code: "https://github.com/caustik/pangine"
 url: "https://pangine.com"
 abstract: "An experimental language, written in Rust, for writing experience as simple shapes and asking questions of it. It answers exactly from what it remembers, or with graded answers composed from parts and generalized from similar cases, and every answer keeps its sources."

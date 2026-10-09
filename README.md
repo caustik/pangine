@@ -388,6 +388,11 @@ Reproducible bug reports and focused design discussion are welcome. See [CONTRIB
 
 ## Licensing
 
-Pangine is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). Noncommercial use, modification, and distribution are permitted under its terms; commercial use requires separate permission from APU Software, LLC.
+Pangine is licensed under either of
 
-This is not an OSI-approved open-source license. See [NOTICE](NOTICE) for ownership and attribution.
+- the [Apache License, Version 2.0](LICENSE-APACHE), or
+- the [MIT license](LICENSE-MIT)
+
+at your option. Development versions before 1.0.0 were published under the PolyForm Noncommercial License 1.0.0. See [NOTICE](NOTICE) for ownership and attribution.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Pangine by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
